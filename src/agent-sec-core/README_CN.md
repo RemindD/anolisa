@@ -140,7 +140,7 @@ agent-sec-core/
 | **loongshield** | >= 1.1.1（Phase 1 系统加固核心依赖） |
 | **gpg / gnupg2** | >= 2.0（Phase 2 资产签名校验） |
 | **Python3** | >= 3.6 |
-| **Rust** | >= 1.70（用于构建 linux-sandbox） |
+| **Rust** | >= 1.91（用于构建 linux-sandbox） |
 
 ### 执行安全工作流
 

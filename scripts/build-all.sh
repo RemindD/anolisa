@@ -55,12 +55,13 @@ step()  { echo -e "\n${CYAN}${BOLD}==> $*${NC}"; }
 
 cmd_exists() { command -v "$1" &>/dev/null; }
 
-# Extract semver: "rustc 1.80.0 (abc 2024)" -> "1.80.0"
+# Extract first semver (X.Y.Z) from a string.
+# Examples: "rustc 1.91.0 (abc 2024)" -> "1.91.0", "v22.21.1" -> "22.21.1"
 extract_ver() {
-    echo "$1" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1
+    echo "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
-# ver_gte "1.80.0" "1.75.0" -> true (actual >= required)
+# ver_gte "1.91.0" "1.80.0" -> true (actual >= required)
 ver_gte() {
     printf '%s\n%s' "$2" "$1" | sort -V -C
 }
@@ -69,28 +70,34 @@ die() { err "$@"; exit 1; }
 
 # ─── distro detection ───
 
-PKG_BASE=""  # rpm | deb
+DISTRO_ID=""        # alinux, ubuntu, fedora, centos, anolis, etc.
+DISTRO_VER=""       # 4, 24.04, 9, etc.
+DISTRO_VER_MAJOR="" # 4, 24, 9, etc.
+PKG_BASE=""         # rpm | deb
 PKG_INSTALL=""
 
 detect_distro() {
     [[ -f /etc/os-release ]] || die "Cannot detect distro (no /etc/os-release). Linux only."
     # shellcheck source=/dev/null
     source /etc/os-release
-    local id="${ID:-}" id_like="${ID_LIKE:-}"
+    DISTRO_ID="${ID:-}"
+    DISTRO_VER="${VERSION_ID:-}"
+    DISTRO_VER_MAJOR="${DISTRO_VER%%.*}"
+    local id_like="${ID_LIKE:-}"
 
-    if [[ "$id" =~ ^(fedora|rhel|centos|anolis|alinux)$ ]] || [[ "$id_like" =~ (fedora|rhel) ]]; then
+    if [[ "$DISTRO_ID" =~ ^(fedora|rhel|centos|anolis|alinux)$ ]] || [[ "$id_like" =~ (fedora|rhel) ]]; then
         PKG_BASE="rpm"
         if cmd_exists dnf; then PKG_INSTALL="dnf install -y"
         elif cmd_exists yum; then PKG_INSTALL="yum install -y"
         else die "Neither dnf nor yum found"; fi
-    elif [[ "$id" =~ ^(debian|ubuntu)$ ]] || [[ "$id_like" =~ debian ]]; then
+    elif [[ "$DISTRO_ID" =~ ^(debian|ubuntu)$ ]] || [[ "$id_like" =~ debian ]]; then
         PKG_BASE="deb"
         PKG_INSTALL="apt-get install -y"
     else
-        die "Unsupported distro: ${PRETTY_NAME:-$id}. Supported: Fedora/RHEL/CentOS/Anolis/Alinux, Debian/Ubuntu."
+        die "Unsupported distro: ${PRETTY_NAME:-$DISTRO_ID}. Supported: Fedora/RHEL/CentOS/Anolis/Alinux, Debian/Ubuntu."
     fi
 
-    ok "Distro: ${PRETTY_NAME:-$id} (${PKG_BASE})"
+    ok "Distro: ${PRETTY_NAME:-$DISTRO_ID} (${PKG_BASE}, id=${DISTRO_ID}, ver=${DISTRO_VER})"
 }
 
 # ─── component helpers ───
@@ -118,19 +125,73 @@ want_component() {
 
 # ─── dependency installation ───
 
-install_nvm_and_node() {
-    step "Node.js (for copilot-shell)"
+# Query the highest version of a package available in the configured system repositories.
+# Prints semver string (e.g. "20.18.0") or nothing if the package is not found.
+query_repo_ver() {
+    local pkg="$1"
+    if [[ "$PKG_BASE" == "rpm" ]]; then
+        # dnf list output example: "nodejs.x86_64    1:20.18.0-1.alnx4    appstream"
+        local raw
+        raw=$(dnf list "$pkg" 2>/dev/null | grep -E "^${pkg}\." | tail -1)
+        [[ -z "$raw" ]] && raw=$(yum list "$pkg" 2>/dev/null | grep -E "^${pkg}\." | tail -1)
+        if [[ -n "$raw" ]]; then
+            local nvr
+            nvr=$(echo "$raw" | awk '{print $2}')
+            nvr="${nvr#*:}"   # strip epoch (e.g. "1:20.18.0-1" → "20.18.0-1")
+            extract_ver "$nvr"
+            return
+        fi
+    elif [[ "$PKG_BASE" == "deb" ]]; then
+        # apt-cache policy output: "  Candidate: 18.19.0+dfsg-6ubuntu5"
+        local candidate
+        candidate=$(apt-cache policy "$pkg" 2>/dev/null | sed -n 's/.*Candidate: *//p')
+        if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
+            extract_ver "$candidate"
+            return
+        fi
+    fi
+}
 
+install_node() {
+    step "Node.js (for copilot-shell)"
+    local REQUIRED="20.0.0"
+
+    # 1. Already installed and meets requirement?
     if cmd_exists node; then
         local ver
         ver=$(extract_ver "$(node -v 2>/dev/null)" || echo "")
-        if [[ -n "$ver" ]] && ver_gte "$ver" "20.0.0"; then
+        if [[ -n "$ver" ]] && ver_gte "$ver" "$REQUIRED"; then
             ok "Node.js $(node -v) already installed, skipping"
             return 0
         fi
-        warn "Node.js $ver is too old (need >= 20), upgrading via nvm"
+        warn "Node.js $ver is too old (need >= 20)"
     fi
 
+    # 2. Check if system repository provides a suitable version
+    local repo_ver
+    repo_ver=$(query_repo_ver nodejs)
+    if [[ -n "$repo_ver" ]] && ver_gte "$repo_ver" "$REQUIRED"; then
+        info "Repository provides nodejs $repo_ver (meets >= $REQUIRED), installing via package manager ..."
+        if [[ "$PKG_BASE" == "deb" ]]; then sudo apt-get update -y 2>/dev/null || true; fi
+        sudo $PKG_INSTALL nodejs npm || true
+        if cmd_exists node; then
+            local ver
+            ver=$(extract_ver "$(node -v 2>/dev/null)" || echo "")
+            if [[ -n "$ver" ]] && ver_gte "$ver" "$REQUIRED"; then
+                ok "Node.js $(node -v) installed via system package manager"
+                return 0
+            fi
+        fi
+        warn "Package install did not satisfy version requirement, falling back to nvm"
+    else
+        info "Repository nodejs${repo_ver:+ $repo_ver} does not meet >= $REQUIRED, using nvm"
+    fi
+
+    # 3. Fallback: install via nvm
+    _install_node_via_nvm
+}
+
+_install_node_via_nvm() {
     # Ensure shell rc file exists
     if [[ -f "$HOME/.zshrc" ]]; then
         touch "$HOME/.zshrc"
@@ -186,22 +247,91 @@ install_build_tools() {
 
 install_rust() {
     step "Rust (for agent-sec-core, agentsight)"
+    local REQUIRED="1.91.0"
 
+    # 1. Already installed and meets requirement?
     if cmd_exists rustc && cmd_exists cargo; then
         local ver
         ver=$(extract_ver "$(rustc --version 2>/dev/null)" || echo "")
-        if [[ -n "$ver" ]] && ver_gte "$ver" "1.80.0"; then
+        if [[ -n "$ver" ]] && ver_gte "$ver" "$REQUIRED"; then
             ok "Rust $ver already installed, skipping"
             return 0
         fi
-        warn "Rust $ver is too old (need >= 1.80), updating"
+        warn "Rust $ver is too old (need >= 1.91)"
         if cmd_exists rustup; then
+            info "Updating via rustup ..."
             rustup update stable
-            ok "Rust updated to $(extract_ver "$(rustc --version)")"
-            return 0
+            ver=$(extract_ver "$(rustc --version 2>/dev/null)" || echo "")
+            if [[ -n "$ver" ]] && ver_gte "$ver" "$REQUIRED"; then
+                ok "Rust updated to $ver via rustup"
+                return 0
+            fi
         fi
     fi
 
+    # 2. Check if system repository provides a suitable version
+    local rust_pkg="" cargo_pkg="" repo_ver=""
+
+    if [[ "$PKG_BASE" == "rpm" ]]; then
+        rust_pkg="rust"; cargo_pkg="cargo"
+        repo_ver=$(query_repo_ver rust)
+    elif [[ "$PKG_BASE" == "deb" ]]; then
+        rust_pkg="rustc"; cargo_pkg="cargo"
+        repo_ver=$(query_repo_ver rustc)
+
+        # DEB repos may ship versioned packages (rustc-1.XX) — pick the best one
+        if [[ -z "$repo_ver" ]] || ! ver_gte "$repo_ver" "$REQUIRED"; then
+            local best_pkg="" best_ver="" p pv
+            while IFS= read -r p; do
+                [[ -z "$p" ]] && continue
+                pv=$(query_repo_ver "$p")
+                [[ -z "$pv" ]] && continue
+                if ver_gte "$pv" "$REQUIRED"; then
+                    if [[ -z "$best_ver" ]] || ver_gte "$pv" "$best_ver"; then
+                        best_pkg="$p"; best_ver="$pv"
+                    fi
+                fi
+            done < <(apt-cache search '^rustc-[0-9]' 2>/dev/null | awk '{print $1}' | sort -V)
+            if [[ -n "$best_pkg" ]]; then
+                rust_pkg="$best_pkg"
+                cargo_pkg="${best_pkg/rustc/cargo}"
+                repo_ver="$best_ver"
+            fi
+        fi
+    fi
+
+    if [[ -n "$repo_ver" ]] && ver_gte "$repo_ver" "$REQUIRED"; then
+        info "Repository provides $rust_pkg $repo_ver (meets >= $REQUIRED), installing via package manager ..."
+        sudo $PKG_INSTALL "$rust_pkg" "$cargo_pkg" gcc make || true
+
+        # For versioned DEB packages (e.g. rustc-1.91), set up alternatives
+        if [[ "$PKG_BASE" == "deb" && "$rust_pkg" != "rustc" ]]; then
+            local suffix="${rust_pkg#rustc-}"   # "1.91"
+            if cmd_exists update-alternatives; then
+                sudo update-alternatives --install /usr/bin/rustc rustc "/usr/bin/rustc-${suffix}" 100 2>/dev/null || true
+                sudo update-alternatives --install /usr/bin/cargo cargo "/usr/bin/cargo-${suffix}" 100 2>/dev/null || true
+            fi
+        fi
+
+        if cmd_exists rustc && cmd_exists cargo; then
+            local ver
+            ver=$(extract_ver "$(rustc --version 2>/dev/null)" || echo "")
+            if [[ -n "$ver" ]] && ver_gte "$ver" "$REQUIRED"; then
+                ok "Rust $ver installed via system package manager"
+                info "Note: agent-sec-core pins Rust 1.93.0 via rust-toolchain.toml; rustup will auto-download if needed"
+                return 0
+            fi
+        fi
+        warn "Package install did not satisfy version requirement, falling back to rustup"
+    else
+        info "Repository rust${repo_ver:+ $repo_ver} does not meet >= $REQUIRED, using rustup"
+    fi
+
+    # 3. Fallback: install via rustup
+    _install_rust_via_rustup
+}
+
+_install_rust_via_rustup() {
     info "Installing rustup + stable toolchain ..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     source "$HOME/.cargo/env"
@@ -217,7 +347,38 @@ install_uv() {
         return 0
     fi
 
-    info "Installing uv ..."
+    # Try pip3 (commonly available on rpm-based systems)
+    if cmd_exists pip3; then
+        info "Trying: pip3 install uv ..."
+        pip3 install uv 2>/dev/null || true
+        if cmd_exists uv; then
+            ok "uv $(extract_ver "$(uv --version 2>/dev/null)") installed via pip3"
+            return 0
+        fi
+    fi
+
+    # Try pipx (install it first if not present)
+    if ! cmd_exists pipx; then
+        info "Trying to install pipx via package manager ..."
+        sudo $PKG_INSTALL pipx 2>/dev/null || true
+    fi
+    if cmd_exists pipx; then
+        info "Trying: pipx install uv ..."
+        pipx ensurepath 2>/dev/null || true
+        export PATH="$HOME/.local/bin:$PATH"
+        pipx install uv 2>/dev/null || true
+        if cmd_exists uv; then
+            ok "uv $(extract_ver "$(uv --version 2>/dev/null)") installed via pipx"
+            return 0
+        fi
+    fi
+
+    # Fallback: install via upstream installer
+    _install_uv_via_curl
+}
+
+_install_uv_via_curl() {
+    info "Installing uv via upstream installer ..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     # Source the env so uv is available in current session
     if [[ -f "$HOME/.local/bin/env" ]]; then
@@ -307,7 +468,7 @@ do_install_deps() {
     detect_distro
 
     if want_component cosh; then
-        install_nvm_and_node
+        install_node
         install_build_tools
     fi
 
@@ -526,12 +687,13 @@ $(echo -e "${BOLD}Components:${NC}")
   sight    agentsight         eBPF observability/audit agent (Linux only)        [optional]
 
 $(echo -e "${BOLD}What this script does:${NC}")
-  1. Detects which toolchains are already installed and skips them if present
-  2. Installs missing toolchains from upstream: nvm for Node.js, rustup for Rust, uv for Python
-  3. Builds default components in order: cosh -> skills -> sec-core
+  1. Detects installed toolchains and queries system repositories for available versions
+  2. Installs via system package manager (dnf/yum/apt) when repository versions meet requirements
+  3. Falls back to upstream installers (nvm, rustup, uv) when system packages don't suffice
+  4. Builds default components in order: cosh -> skills -> sec-core
      (sight is optional — add --component sight to include it)
-  4. Installs components to system paths (if --install is specified)
-  5. Reports artifact locations at the end
+  5. Installs components to system paths (if --install is specified)
+  6. Reports artifact locations at the end
 
 $(echo -e "${BOLD}Note:${NC}")
   For agentsight eBPF probes, clang and libbpf headers must be installed via your

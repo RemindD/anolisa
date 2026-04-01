@@ -140,7 +140,7 @@ agent-sec-core/
 | **loongshield** | >= 1.1.1 (Phase 1 system hardening) |
 | **gpg / gnupg2** | >= 2.0 (Phase 2 asset signature verification) |
 | **Python3** | >= 3.6 |
-| **Rust** | >= 1.70 (for building linux-sandbox) |
+| **Rust** | >= 1.91 (for building linux-sandbox) |
 
 ### Run the Security Workflow
 

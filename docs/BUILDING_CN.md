@@ -33,7 +33,7 @@ anolisa/
 |------|----------|
 | copilot-shell | Node.js >= 20、npm >= 10、make、g++ |
 | os-skills | Python >= 3.12（仅可选脚本需要） |
-| agent-sec-core | Rust == 1.93.0、Python >= 3.12、uv（仅 Linux） |
+| agent-sec-core | Rust >= 1.91.0、Python >= 3.12、uv（仅 Linux） |
 | agentsight *（可选）* | Rust >= 1.80、clang >= 14、libbpf 头文件、内核头文件（仅 Linux） |
 | RPM 打包 | rpmbuild（仅 Linux） |
 
@@ -120,7 +120,7 @@ npm -v    # 期望：10.x.x 或更高
 
 #### Rust（用于 agent-sec-core 和 agentsight）
 
-要求：agent-sec-core 需要 Rust == 1.93.0；agentsight 需要 Rust >= 1.80。
+要求：agent-sec-core 需要 Rust >= 1.91.0；agentsight 需要 Rust >= 1.80。
 
 **Alinux 4（已验证）**
 
@@ -135,7 +135,7 @@ sudo apt install -y rustc-1.91 cargo-1.91 gcc make
 sudo update-alternatives --install /usr/bin/cargo cargo /usr/bin/cargo-1.91 100
 ```
 
-> 系统 `rust` 包的版本可能低于 1.93.0。如果 agent-sec-core 构建因版本不匹配而失败，请改用下方的 rustup。
+> 系统 `rust` 包的版本可能低于 1.91.0。如果 agent-sec-core 构建因版本不匹配而失败，请改用下方的 rustup。
 
 **其他发行版：rustup**
 
@@ -149,8 +149,8 @@ else
 fi
 
 # 验证
-rustc --version   # 期望：rustc 1.80.0 或更高
-cargo --version   # 期望：cargo 1.80.0 或更高
+rustc --version   # 期望：rustc 1.91.0 或更高
+cargo --version   # 期望：cargo 1.91.0 或更高
 ```
 
 > 仓库为 agent-sec-core 固定了工具链版本（`rust-toolchain.toml`）。如果系统 Rust 版本不匹配，rustup 会在仓库内构建时自动下载正确版本。
@@ -231,8 +231,8 @@ AgentSight 要求 Linux 内核 >= 5.10 且启用 BTF（`CONFIG_DEBUG_INFO_BTF=y`
 ```bash
 node -v            # v20.x.x
 npm -v             # 10.x.x
-rustc --version    # rustc 1.80.0+
-cargo --version    # cargo 1.80.0+
+rustc --version    # rustc 1.91.0+
+cargo --version    # cargo 1.91.0+
 python3 --version  # Python 3.12.x
 uv --version       # uv 0.x.x
 clang --version    # clang version 14+

@@ -33,7 +33,7 @@ anolisa/
 |-----------|----------------|
 | copilot-shell | Node.js >= 20, npm >= 10, make, g++ |
 | os-skills | Python >= 3.12 (only for optional scripts) |
-| agent-sec-core | Rust == 1.93.0, Python >= 3.12, uv (Linux only) |
+| agent-sec-core | Rust >= 1.91.0, Python >= 3.12, uv (Linux only) |
 | agentsight *(optional)* | Rust >= 1.80, clang >= 14, libbpf headers, kernel headers (Linux only) |
 | RPM packaging | rpmbuild (Linux only) |
 
@@ -120,7 +120,7 @@ npm -v    # expected: 10.x.x or higher
 
 #### Rust (for agent-sec-core and agentsight)
 
-Required: agent-sec-core needs Rust == 1.93.0; agentsight needs Rust >= 1.80.
+Required: agent-sec-core needs Rust >= 1.91.0; agentsight needs Rust >= 1.80.
 
 **Alinux 4 (verified)**
 
@@ -149,8 +149,8 @@ else
 fi
 
 # Verify
-rustc --version   # expected: rustc 1.80.0 or higher
-cargo --version   # expected: cargo 1.80.0 or higher
+rustc --version   # expected: rustc 1.91.0 or higher
+cargo --version   # expected: cargo 1.91.0 or higher
 ```
 
 > The repository uses a pinned toolchain (`rust-toolchain.toml`) for agent-sec-core. If the system Rust version does not match, rustup will automatically download the correct version when building inside the repo.
@@ -231,8 +231,8 @@ AgentSight requires Linux kernel >= 5.10 and BTF enabled (`CONFIG_DEBUG_INFO_BTF
 ```bash
 node -v            # v20.x.x
 npm -v             # 10.x.x
-rustc --version    # rustc 1.80.0+
-cargo --version    # cargo 1.80.0+
+rustc --version    # rustc 1.91.0+
+cargo --version    # cargo 1.91.0+
 python3 --version  # Python 3.12.x
 uv --version       # uv 0.x.x
 clang --version    # clang version 14+
