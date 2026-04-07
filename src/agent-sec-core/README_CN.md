@@ -165,15 +165,15 @@ sudo loongshield seharden --reinforce --config agentos_baseline
 
 # ===== Phase 2: 关键资产保护 =====
 # 校验全部 skill 完整性
-python3 skill/scripts/asset-verify/verifier.py
+agent-sec-cli verify
 
 # 校验单个 skill（可选）
-python3 skill/scripts/asset-verify/verifier.py --skill /path/to/skill_name
+agent-sec-cli verify --skill /path/to/skill_name
 
 # ===== Phase 3: 最终安全确认 =====
 # 复检确认合规
 sudo loongshield seharden --scan --config agentos_baseline
-python3 skill/scripts/asset-verify/verifier.py
+agent-sec-cli verify
 ```
 
 ### 从源码构建沙箱
@@ -195,7 +195,7 @@ sudo yum install agent-sec-core
 对命令进行安全分类，生成 `linux-sandbox` 执行策略：
 
 ```bash
-python3 skill/scripts/sandbox/sandbox_policy.py --cwd "$PWD" "git status"
+python3 agent-sec-cli/sandbox/sandbox_policy.py --cwd "$PWD" "git status"
 ```
 
 输出示例：
@@ -212,7 +212,7 @@ python3 skill/scripts/sandbox/sandbox_policy.py --cwd "$PWD" "git status"
 
 ### 校验流程
 
-1. 加载受信公钥（`skill/scripts/asset-verify/trusted-keys/*.asc`）
+1. 加载受信公钥（`agent-sec-cli/asset-verify/trusted-keys/*.asc`）
 2. 验证 Skill 目录中 `.skill-meta/Manifest.json` 的 GPG 签名（`.skill-meta/.skill.sig`）
 3. 校验 Manifest 中所有文件的 SHA-256 哈希
 
@@ -238,7 +238,7 @@ tools/sign-skill.sh --init
 tools/sign-skill.sh --batch /usr/share/anolisa/skills --force
 
 # 3. 验证
-python3 skill/scripts/asset-verify/verifier.py
+python3 agent-sec-cli/asset-verify/verifier.py
 ```
 
 完整指南（手动密钥管理、自定义 skill、CI/CD、问题排查）请参见 **[Skill 签名指南](tools/SIGNING_GUIDE_CN.md)**。

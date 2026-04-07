@@ -165,15 +165,15 @@ sudo loongshield seharden --reinforce --config agentos_baseline
 
 # ===== Phase 2: Asset Protection =====
 # Verify all skills
-python3 skill/scripts/asset-verify/verifier.py
+agent-sec-cli verify
 
 # Verify a single skill (optional)
-python3 skill/scripts/asset-verify/verifier.py --skill /path/to/skill_name
+agent-sec-cli verify --skill /path/to/skill_name
 
 # ===== Phase 3: Final Confirmation =====
 # Re-scan to confirm compliance
 sudo loongshield seharden --scan --config agentos_baseline
-python3 skill/scripts/asset-verify/verifier.py
+agent-sec-cli verify
 ```
 
 ### Build Sandbox from Source
@@ -195,7 +195,7 @@ sudo yum install agent-sec-core
 Classify a command and generate a `linux-sandbox` execution policy:
 
 ```bash
-python3 skill/scripts/sandbox/sandbox_policy.py --cwd "$PWD" "git status"
+python3 agent-sec-cli/sandbox/sandbox_policy.py --cwd "$PWD" "git status"
 ```
 
 Output example:
@@ -212,7 +212,7 @@ Output example:
 
 ### Verification Flow
 
-1. Load trusted public keys from `skill/scripts/asset-verify/trusted-keys/*.asc`
+1. Load trusted public keys from `agent-sec-cli/asset-verify/trusted-keys/*.asc`
 2. Verify the GPG signature (`.skill-meta/.skill.sig`) of `.skill-meta/Manifest.json` in each skill directory
 3. Validate SHA-256 hashes of all files listed in the Manifest
 
@@ -238,7 +238,7 @@ tools/sign-skill.sh --init
 tools/sign-skill.sh --batch /usr/share/anolisa/skills --force
 
 # 3. Verify
-python3 skill/scripts/asset-verify/verifier.py
+python3 agent-sec-cli/asset-verify/verifier.py
 ```
 
 For the complete guide (manual key management, custom skills, CI/CD, troubleshooting), see **[Skill Signing Guide](tools/SIGNING_GUIDE.md)**.

@@ -32,7 +32,7 @@ tools/sign-skill.sh --init
 tools/sign-skill.sh --batch --force
 
 # 3. Verify
-python3 skill/scripts/asset-verify/verifier.py
+python3 agent-sec-cli/asset-verify/verifier.py
 ```
 
 `--init` automatically generates a dedicated signing key (`ANOLISA Local Deploy Key`) and
@@ -82,7 +82,7 @@ Or fully manually:
 
 ```bash
 gpg --armor --export me@example.com \
-    > skill/scripts/asset-verify/trusted-keys/me-example-com.asc
+    > agent-sec-cli/asset-verify/trusted-keys/me-example-com.asc
 ```
 
 ### 3. Sign Skills
@@ -112,7 +112,7 @@ Each signed skill directory will contain:
 
 ### 4. Configure the Verifier
 
-When using `--batch`, the script automatically registers the skills directory in `config.conf`. For manual setups, make sure the skills directory is listed in `skill/scripts/asset-verify/config.conf`:
+When using `--batch`, the script automatically registers the skills directory in `config.conf`. For manual setups, make sure the skills directory is listed in `agent-sec-cli/asset-verify/config.conf`:
 
 ```ini
 skills_dir = [
@@ -124,10 +124,10 @@ skills_dir = [
 
 ```bash
 # Verify all configured directories
-python3 skill/scripts/asset-verify/verifier.py
+python3 agent-sec-cli/asset-verify/verifier.py
 
 # Verify a single skill
-python3 skill/scripts/asset-verify/verifier.py --skill /usr/share/anolisa/skills/my-skill
+python3 agent-sec-cli/asset-verify/verifier.py --skill /usr/share/anolisa/skills/my-skill
 ```
 
 Expected output on success:
@@ -154,7 +154,7 @@ If you create your own skills and deploy them alongside the built-in ones:
 3. Ensure the skills root directory is in `config.conf` (see §4 above).
 4. Verify:
    ```bash
-   python3 skill/scripts/asset-verify/verifier.py --skill /usr/share/anolisa/skills/my-custom-skill
+   python3 agent-sec-cli/asset-verify/verifier.py --skill /usr/share/anolisa/skills/my-custom-skill
    ```
 
 ## CI/CD Signing
@@ -185,7 +185,7 @@ tools/sign-skill.sh --batch --force
 Then verify:
 
 ```bash
-python3 skill/scripts/asset-verify/verifier.py
+python3 agent-sec-cli/asset-verify/verifier.py
 ```
 
 ## Verification Error Codes
