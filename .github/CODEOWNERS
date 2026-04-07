@@ -13,12 +13,13 @@
 *                               @casparant
 
 # Sub-project owners
-/src/copilot-shell/             @kongche-jbw @samchu-zsl
-/src/agent-sec-core/            @1570005763
-/src/os-skills/                 @Ziqi002
-/src/agentsight/                @chengshuyi
+/src/copilot-shell/                 @kongche-jbw @samchu-zsl
+/src/agent-sec-core/                @edonyzpc @kid9
+/src/agent-sec-core/linux-sandbox   @yanrong-hsr
+/src/os-skills/                     @Ziqi002
+/src/agentsight/                    @chengshuyi
 
 # CI / project-wide config — always require lead review
-/.github/                       @kongche-jbw
-/cliff.toml                     @samchu-zsl
-/Makefile                       @samchu-zsl
+/.github/                           @kongche-jbw
+/cliff.toml                         @samchu-zsl
+/Makefile                           @samchu-zsl
