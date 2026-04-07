@@ -11,9 +11,32 @@ stdin: PreToolUse JSON (tool_name, tool_input, cwd, ...)
 stdout: HookOutput JSON (decision, systemMessage, hookSpecificOutput)
 """
 
+import os
 import sys
 import json
 import re
+
+
+def _setup_middleware_path():
+    """Add security_middleware to sys.path for import."""
+    # Installed environment
+    installed_path = "/usr/share/anolisa/skills/agent-sec-core/scripts/"
+    if os.path.isdir(os.path.join(installed_path, "security_middleware")):
+        if installed_path not in sys.path:
+            sys.path.insert(0, installed_path)
+        return
+    # Development environment: hooks/ → copilot-shell/ → src/ → agent-sec-core/skill/scripts/
+    dev_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),  # hooks/
+        "..",   # copilot-shell/
+        "..",   # src/
+        "agent-sec-core", "skill", "scripts"
+    )
+    dev_path = os.path.normpath(dev_path)
+    if os.path.isdir(os.path.join(dev_path, "security_middleware")):
+        if dev_path not in sys.path:
+            sys.path.insert(0, dev_path)
+
 
 LINUX_SANDBOX = "/usr/local/bin/linux-sandbox"
 
@@ -176,6 +199,15 @@ def main():
                 "执行完毕后可用 `/hooks enable sandbox-guard` 恢复。"
             ),
         }
+        # --- middleware prehook logging (additive) ---
+        try:
+            _setup_middleware_path()
+            from security_middleware import invoke as _mw_invoke
+            _mw_invoke("sandbox_prehook", decision="block", command=command,
+                       reasons=", ".join(block_reasons), cwd=cwd)
+        except Exception:
+            pass  # logging failure must not affect hook behavior
+
         print(json.dumps(result, ensure_ascii=False))
         return
 
@@ -212,6 +244,15 @@ def main():
         ),
         "hookSpecificOutput": {"tool_input": {"command": sandbox_cmd}},
     }
+
+    # --- middleware prehook logging (additive) ---
+    try:
+        _setup_middleware_path()
+        from security_middleware import invoke as _mw_invoke
+        _mw_invoke("sandbox_prehook", decision="sandbox", command=command,
+                   reasons=", ".join(all_reasons), network_policy=network_policy, cwd=cwd)
+    except Exception:
+        pass  # logging failure must not affect hook behavior
 
     print(json.dumps(result, ensure_ascii=False))
 

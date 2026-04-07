@@ -33,11 +33,12 @@ If `$ARGUMENTS` is anything else, stop and tell the user:
 
 ## Exact Commands
 
-- `scan`: `loongshield seharden --scan --config agentos_baseline`
-- `dry-run`: `loongshield seharden --reinforce --dry-run --config agentos_baseline`
-- `reinforce`: `loongshield seharden --reinforce --config agentos_baseline`
+- `scan`: `python3 scripts/agent-sec-cli.py harden --mode scan`
+- `dry-run`: `python3 scripts/agent-sec-cli.py harden --mode dry-run`
+- `reinforce`: `python3 scripts/agent-sec-cli.py harden --mode reinforce`
 
 Always keep `--config agentos_baseline` explicit.
+The `--config agentos_baseline` profile is the built-in default in `agent-sec-cli.py`.
 
 ## Execution Rules
 

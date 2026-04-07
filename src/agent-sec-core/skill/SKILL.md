@@ -163,7 +163,7 @@ Phase 为“安全检查工作流”的子步骤，必须严格顺序执行：
 
 #### Phase 1：系统安全加固
 
-通过调用子 skill 完成，直接执行 `loongshield seharden` 即可。
+通过 `agent-sec-cli.py` 统一入口调用，禁止直接执行 `loongshield seharden`。
 
 ##### 前置条件
 
@@ -186,10 +186,11 @@ Phase 为“安全检查工作流”的子步骤，必须严格顺序执行：
 
 LoongShield 基线规则：
 
-1. Phase 1 只允许执行 `loongshield seharden --config agentos_baseline`
-2. 禁止将 Phase 1 改写为 `cis`、`cis_*`、或任何其他 seharden profile
-3. 禁止使用其他加固工具替代 `loongshield seharden`
-4. 复检直接再次执行 `scan`
+1. Phase 1 只允许通过 `python3 scripts/agent-sec-cli.py harden --mode scan` 执行（CLI 内部调用 `loongshield seharden --config agentos_baseline`）
+2. **禁止直接执行** `loongshield seharden`，必须通过 `agent-sec-cli.py` 路由，以保证安全事件被记录
+3. 禁止将 Phase 1 改写为 `cis`、`cis_*`、或任何其他 seharden profile
+4. 禁止使用其他加固工具替代 `loongshield seharden`
+5. 复检直接再次执行 `scan`
 
 模式选择规则：
 
@@ -227,7 +228,7 @@ sudo apt-get install -y gnupg
 **执行校验**：
 
 ```bash
-python3 scripts/asset-verify/verifier.py
+python3 scripts/agent-sec-cli.py verify
 ```
 
 校验所有 `config.conf` 中配置的 skills 目录，输出示例：
@@ -257,15 +258,15 @@ VERIFICATION FAILED
 所有阶段通过后，输出安全就绪报告：
 
 ```bash
-sudo loongshield seharden --scan --config agentos_baseline
-python3 scripts/asset-verify/verifier.py
+sudo python3 scripts/agent-sec-cli.py harden --mode scan
+python3 scripts/agent-sec-cli.py verify
 echo "===== Agent Sec Core 安全基线检查报告 ====="
-echo "Phase 1 系统加固: 以上一条 loongshield seharden scan --config agentos_baseline 输出为准"
-echo "Phase 2 资产校验: 以上一条 verifier 输出为准"
+echo "Phase 1 系统加固: 以上一条 agent-sec-cli.py harden --mode scan 输出为准"
+echo "Phase 2 资产校验: 以上一条 agent-sec-cli.py verify 输出为准"
 echo "============================================"
 ```
 
-Phase 1 输出 `结果：合规`，且 Phase 2 输出 `VERIFICATION PASSED` 后，Phase 3 才视为通过，并打开 Gate B，允许进入“安全决策流程”。任一阶段失败都必须先修复并重新检查，未通过前不得进入“安全决策流程”或继续本次 Agent 执行。
+执行上述bash script重新检查，hardening 输出 `结果：合规`，且 asset verify 输出 `VERIFICATION PASSED` 后，Phase 3 才视为通过，并打开 Gate B，允许进入“安全决策流程”。任一阶段失败都必须先修复并重新检查，未通过前不得进入“安全决策流程”或继续本次 Agent 执行。
 
 ---
 
