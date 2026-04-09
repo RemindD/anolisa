@@ -1114,6 +1114,8 @@ export default {
   'User Agreement:': '用户同意率：',
   reviewed: '已审核',
   'Code Changes:': '代码变更：',
+  'Sandbox Runs:': '沙箱执行：',
+  'Sandbox Blocked:': '沙箱拦截：',
   Performance: '性能',
   'Wall Time:': '总耗时：',
   'Agent Active:': '代理活跃时间：',

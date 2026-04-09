@@ -1173,6 +1173,8 @@ export default {
   'User Agreement:': 'User Agreement:',
   reviewed: 'reviewed',
   'Code Changes:': 'Code Changes:',
+  'Sandbox Runs:': 'Sandbox Runs:',
+  'Sandbox Blocked:': 'Sandbox Blocked:',
   Performance: 'Performance',
   'Wall Time:': 'Wall Time:',
   'Agent Active:': 'Agent Active:',
