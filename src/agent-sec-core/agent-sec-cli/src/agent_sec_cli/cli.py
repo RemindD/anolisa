@@ -17,7 +17,7 @@ app = typer.Typer(
 )
 
 
-@app.command(hidden=True)
+@app.command(name="log-sandbox", hidden=True)
 def log_sandbox(
     decision: str = typer.Option(
         "",
@@ -96,34 +96,6 @@ def verify(
 ):
     """Skill integrity verification."""
     result = invoke("verify", skill=skill)
-    if result.stdout:
-        typer.echo(result.stdout)
-    if result.error:
-        typer.echo(result.error, err=True)
-    raise typer.Exit(code=result.exit_code)
-
-
-@app.command()
-def summary(
-    hours: int = typer.Option(
-        24,
-        "--hours",
-        help="Summary time range in hours (default: 24)",
-    ),
-    format: str = typer.Option(
-        "text",
-        "--format",
-        help="Output format (default: text)",
-        case_sensitive=False,
-    ),
-):
-    """Security event summary."""
-    # Validate format choices
-    if format not in ["text", "json"]:
-        typer.echo(f"Error: Invalid format '{format}'. Choose from: text, json", err=True)
-        raise typer.Exit(code=1)
-    
-    result = invoke("summary", hours=hours, format=format)
     if result.stdout:
         typer.echo(result.stdout)
     if result.error:

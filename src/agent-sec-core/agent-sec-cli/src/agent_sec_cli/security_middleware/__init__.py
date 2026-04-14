@@ -24,7 +24,7 @@ from .result import ActionResult
 # Basenames of known entry-point scripts → friendly caller names.
 _CALLER_MAP = {
     "sandbox-guard.py": "sandbox-guard",
-    "agent-sec-cli.py": "cli",
+    "cli.py": "cli",
 }
 
 

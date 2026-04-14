@@ -189,7 +189,7 @@ class SecurityEventWriter:
             backup_files = []
             for filename in os.listdir(dir_path):
                 # Match pattern: {base_name}.{timestamp}
-                if filename.startswith(f"{base_name}.") and not filename.endswith(".tmp"):
+                if filename.startswith(f"{base_name}.") and not filename.endswith((".tmp", ".lock")):
                     full_path = os.path.join(dir_path, filename)
                     if os.path.isfile(full_path):
                         # Use mtime to sort (more reliable than parsing timestamp)

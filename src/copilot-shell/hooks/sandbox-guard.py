@@ -21,7 +21,7 @@ import subprocess
 import shutil
 
 
-def _log_sandbox_event(action: str = "log_sandbox", **kwargs) -> None:
+def _log_sandbox_event(action: str = "log-sandbox", **kwargs) -> None:
     """Log security event via agent-sec-cli CLI (subprocess call).
     
     Falls back silently if agent-sec-cli is not installed.

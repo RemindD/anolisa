@@ -24,5 +24,11 @@ def get_log_path() -> str:
         pass
 
     fallback_dir = os.path.dirname(FALLBACK_LOG_PATH)
-    os.makedirs(fallback_dir, exist_ok=True)
-    return FALLBACK_LOG_PATH
+    try:
+        os.makedirs(fallback_dir, exist_ok=True)
+        return FALLBACK_LOG_PATH
+    except OSError:
+        pass
+
+    # Last resort: write to /tmp
+    return os.path.join("/tmp", "agent-sec-security-events.jsonl")
