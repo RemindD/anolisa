@@ -30,6 +30,9 @@ class SecurityEventWriter:
     * **Auto-rotation** — automatically rotates the log file when it exceeds
       ``max_bytes`` (default: 100 MB), keeping up to ``backup_count`` backup
       files (default: 10).
+    * **Cross-process safe** — a dedicated advisory lock file serialises
+      rotation *and* the subsequent reopen so that no two processes race on
+      ``_close()`` / ``_open()`` and trigger inode reuse.
     * **Fire-and-forget** — all internal errors are swallowed so that logging
       never disrupts the caller.
     """
@@ -105,15 +108,24 @@ class SecurityEventWriter:
         """Rotate the log file by renaming it with a timestamp suffix.
 
         Rotation scheme:
-            security-events.jsonl                       -> current (will be rotated)
-            security-events.jsonl.20260408-143022.123   -> rotated at 2026-04-08 14:30:22.123
-            security-events.jsonl.20260408-120515.456   -> rotated at 2026-04-08 12:05:15.456
+            security-events.jsonl                           -> current (will be rotated)
+            security-events.jsonl.20260408-143022.123       -> rotated at 2026-04-08 14:30:22.123
+            security-events.jsonl.20260408-120515.456       -> rotated at 2026-04-08 12:05:15.456
 
         After rotation, old backups exceeding ``backup_count`` are cleaned up.
         """
         # Generate timestamp-based backup filename with millisecond precision
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S.%f")[:-3]  # Truncate to milliseconds
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S.%f")[:-3]
         backup_path = self._path.parent / f"{self._path.name}.{timestamp}"
+
+        # Guard against timestamp collisions: if the backup already exists,
+        # append a counter to disambiguate.
+        if backup_path.exists():
+            for seq in range(1, 1000):
+                candidate = self._path.parent / f"{self._path.name}.{timestamp}.{seq}"
+                if not candidate.exists():
+                    backup_path = candidate
+                    break
 
         # Rotate current file to timestamp-named backup
         try:
@@ -132,41 +144,37 @@ class SecurityEventWriter:
         self._close()
         self._open()
 
-    def _rotate_under_flock(self) -> None:
-        """Acquire a cross-process advisory lock, re-check size, then rotate.
+    def _write_under_flock(self, line: str, line_bytes: int) -> None:
+        """Acquire a cross-process flock, then rotate-if-needed + write.
 
-        Normal writes (O_APPEND, < 4 KB) are already atomic across processes.
-        Only the rotation path needs cross-process synchronization because
-        ``_needs_rotation()`` + ``shutil.move()`` is a TOCTOU race when
-        multiple processes detect the size threshold simultaneously.
-
-        This method uses ``fcntl.flock(LOCK_EX | LOCK_NB)``:
-        - The **winner** re-checks size under the lock and rotates.
-        - **Losers** get ``BlockingIOError``, skip rotation, and reopen
-          the (now-new) log file.
+        Following the "dedicated lock file" pattern, the flock serialises the
+        **entire** write-with-potential-rotation sequence across OS processes.
+        Inside the critical section the log file is opened **fresh by path**
+        (not via a persistent fd), which eliminates inode-reuse races:
+        no stale fd can reference a recycled inode because the fd is created
+        and destroyed within a single lock acquisition.
         """
         lock_path = self._path.parent / (self._path.name + ".lock")
         lock_fd = None
         try:
             lock_fd = lock_path.open("w")
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            # Another process is rotating — just reopen and continue
-            self._close()
-            self._open()
-            return
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
         except OSError:
-            # Lock file creation failed — fall through without rotation
-            return
+            # Lock file creation failed — fall through without flock
+            # protection.  Best-effort: still write, accept small race.
+            pass
 
         try:
-            # Re-check under lock — the winner may have already rotated
-            if self._needs_rotation(0):
+            # Check rotation under the lock
+            if self._needs_rotation(line_bytes):
                 self._rotate()
-            else:
-                # Already rotated by another process — just reopen
-                self._close()
-                self._open()
+
+            # Open the file fresh by path, write, and close.
+            # This is the key to avoiding inode-reuse: we never hold a
+            # persistent fd across lock boundaries.
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.flush()
         finally:
             if lock_fd is not None:
                 try:
@@ -222,22 +230,9 @@ class SecurityEventWriter:
         """
         with self._lock:
             try:
-                self._ensure_file()
-                if self._fd is None:
-                    return
-
-                # Calculate the size of the line we're about to write
                 line = json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
-                line_bytes = len(line.encode('utf-8'))
-
-                # Check if rotation is needed before writing (accounting for the new line)
-                if self._needs_rotation(line_bytes):
-                    self._rotate_under_flock()
-                    if self._fd is None:
-                        return
-
-                self._fd.write(line)
-                self._fd.flush()
+                line_bytes = len(line.encode("utf-8"))
+                self._write_under_flock(line, line_bytes)
             except Exception as exc:  # noqa: BLE001
                 print(
                     f"[security_events] write error: {exc}",

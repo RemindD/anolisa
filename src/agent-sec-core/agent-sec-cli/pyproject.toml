@@ -11,6 +11,7 @@ license = {text = "Apache-2.0"}
 requires-python = "==3.11.6"
 authors = [
     {name = "YiZheng Yang", email = "YiZheng.Yang@linux.alibaba.com"},
+    {name = "Xingdong Li", email = "XingDong.Li@linux.alibaba.com"},
 ]
 keywords = ["security", "agent", "hardening", "sandbox", "integrity", "verification"]
 classifiers = [

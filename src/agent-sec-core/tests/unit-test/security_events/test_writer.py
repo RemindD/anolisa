@@ -219,9 +219,11 @@ class TestWriterAutoRotation(unittest.TestCase):
             if f.startswith(f"{base_name}.") and not f.endswith(".lock") and os.path.isfile(os.path.join(dir_path, f))
         ]
 
-        # Check that backup files have timestamp pattern (YYYYMMDD-HHMMSS.fff)
+        # Check that backup files have timestamp pattern:
+        #   YYYYMMDD-HHMMSS.fff            (millisecond precision)
+        #   YYYYMMDD-HHMMSS.fff.<counter>   (collision-guard suffix)
         import re
-        timestamp_pattern = re.compile(r"^\d{8}-\d{6}\.\d{3}$")
+        timestamp_pattern = re.compile(r"^\d{8}-\d{6}\.\d{3}(\.\d+)?$")
 
         for backup_file in backup_files:
             # Extract the timestamp suffix
@@ -229,7 +231,7 @@ class TestWriterAutoRotation(unittest.TestCase):
             self.assertTrue(
                 timestamp_pattern.match(suffix),
                 f"Backup file '{backup_file}' should have timestamp format "
-                f"YYYYMMDD-HHMMSS.fff, got suffix: {suffix}"
+                f"YYYYMMDD-HHMMSS.fff[.N], got suffix: {suffix}"
             )
 
     def test_oldest_backups_are_deleted(self):
@@ -427,12 +429,17 @@ class TestWriterAutoRotation(unittest.TestCase):
 # ------------------------------------------------------------------
 
 def _child_writer(path, proc_id, event_count, max_bytes, backup_count):
-    """Entry point executed inside each child process."""
+    """Entry point executed inside each child process.
+    
+    Returns a list of event_type strings that this process successfully
+    passed to write() — used for post-mortem analysis when events are lost.
+    """
     kwargs = {"path": path}
     if max_bytes:
         kwargs["max_bytes"] = max_bytes
         kwargs["backup_count"] = backup_count
     writer = SecurityEventWriter(**kwargs)
+    written_events = []
     for i in range(event_count):
         evt = SecurityEvent(
             event_type=f"p{proc_id}_e{i}",
@@ -440,6 +447,8 @@ def _child_writer(path, proc_id, event_count, max_bytes, backup_count):
             details={"proc": proc_id, "seq": i, "pad": "x" * 30},
         )
         writer.write(evt)
+        written_events.append(f"p{proc_id}_e{i}")
+    return written_events
 
 
 class TestWriterMultiProcessSafety(unittest.TestCase):
@@ -493,7 +502,7 @@ class TestWriterMultiProcessSafety(unittest.TestCase):
         base_name = os.path.basename(self.tmp.name)
         all_files = [self.tmp.name]
         for name in os.listdir(dir_path):
-            if name.startswith(f"{base_name}.") and not name.endswith(".lock"):
+            if name.startswith(f"{base_name}.") and not name.endswith((".lock", ".tmp")):
                 all_files.append(os.path.join(dir_path, name))
 
         events = []
