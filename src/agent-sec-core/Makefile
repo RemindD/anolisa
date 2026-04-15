@@ -5,8 +5,8 @@
 .PHONY: python-code-pretty
 python-code-pretty: ## Format Python code using black and isort
 	@echo "🎨 Formatting code with black and isort..."
-	@uv run --project agent-sec-cli isort --profile black .
-	@uv run --project agent-sec-cli black .
+	@uv run --project agent-sec-cli isort --profile black --skip-glob "*/backend-skill/templates/*" .
+	@uv run --project agent-sec-cli black --force-exclude "backend-skill/templates/" .
 
 # =============================================================================
 # TEST

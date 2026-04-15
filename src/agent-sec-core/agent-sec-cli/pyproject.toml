@@ -69,10 +69,12 @@ module-name = "agent_sec_cli._native"
 [tool.black]
 line-length = 100
 target-version = ["py311"]
+extend-exclude = "/backend-skill/templates/"
 
 [tool.isort]
 profile = "black"
 line_length = 100
+extend_skip_glob = ["dev-tools/backend-skill/templates/*"]
 
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
