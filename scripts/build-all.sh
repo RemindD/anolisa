@@ -373,7 +373,7 @@ install_rust() {
     curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
         https://sh.rustup.rs \
         -o "$_rustup_script" 2>/dev/null || true
-    [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+    [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -y 2>/dev/null || true
     rm -f "$_rustup_script"
     _source_cargo
     if ! cmd_exists rustc; then
@@ -382,7 +382,7 @@ install_rust() {
         curl -sSf --connect-timeout 15 --max-time 60 \
             http://mirrors.cloud.aliyuncs.com/repo/rust/rustup-init.sh \
             -o "$_rustup_script" 2>/dev/null || true
-        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -y 2>/dev/null || true
         rm -f "$_rustup_script"
         _source_cargo
     fi
@@ -391,7 +391,7 @@ install_rust() {
         curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
             https://mirrors.aliyun.com/repo/rust/rustup-init.sh \
             -o "$_rustup_script" 2>/dev/null || true
-        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -y 2>/dev/null || true
         rm -f "$_rustup_script"
         _source_cargo
     fi
@@ -400,7 +400,7 @@ install_rust() {
         curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
             https://rsproxy.cn/rustup-init.sh \
             -o "$_rustup_script" 2>/dev/null || true
-        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -y 2>/dev/null || true
         rm -f "$_rustup_script"
         _source_cargo
     fi
