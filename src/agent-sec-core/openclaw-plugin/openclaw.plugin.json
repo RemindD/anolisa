@@ -1,0 +1,14 @@
+{
+  "id": "agent-sec",
+  "name": "Agent Security",
+  "version": "0.3.0",
+  "description": "Security hooks powered by agent-sec-cli",
+  "extensions": ["./dist/index.js"],
+  "configSchema": {
+    "capabilities": {
+      "type": "object",
+      "description": "各能力的启用/禁用和配置",
+      "default": {}
+    }
+  }
+}
