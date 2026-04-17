@@ -42,12 +42,20 @@ build-cli: ## Build agent-sec-cli wheel with maturin (Rust + Python)
 setup: ## Install all dependencies (including dev), create .venv
 	cd agent-sec-cli && uv sync
 
+.PHONY: build-openclaw-plugin
+build-openclaw-plugin: ## Build openclaw-plugin TypeScript sources
+	cd openclaw-plugin && npm install && npm run build
+
+.PHONY: build-all
+build-all: build-sandbox build-cli build-openclaw-plugin ## Build all components
+
 # =============================================================================
 # INSTALL
 # =============================================================================
 
-PREFIX      ?= /usr/local
-SKILL_DIR   ?= /usr/share/anolisa/skills/agent-sec-core
+PREFIX             ?= /usr/local
+SKILL_DIR          ?= /usr/share/anolisa/skills/agent-sec-core
+OPENCLAW_PLUGIN_DIR ?= /opt/agent-sec/openclaw-plugin
 
 .PHONY: install-sandbox
 install-sandbox: ## Install linux-sandbox binary only
@@ -67,6 +75,20 @@ install: ## Install linux-sandbox binary, sign-skill.sh and skill files
 	cp skill/SKILL.md $(DESTDIR)$(SKILL_DIR)/
 	find $(DESTDIR)$(SKILL_DIR) -type f -name '*.sh' -exec chmod 0755 {} +
 	find $(DESTDIR)$(SKILL_DIR) -type f -name '*.py' -exec chmod 0755 {} +
+
+.PHONY: install-openclaw-plugin
+install-openclaw-plugin: ## Install openclaw-plugin to target directory
+	install -d -m 0755 $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)
+	install -d -m 0755 $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/dist
+	install -d -m 0755 $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/scripts
+	cp openclaw-plugin/openclaw.plugin.json $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/
+	cp openclaw-plugin/package.json $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/
+	cp -r openclaw-plugin/dist/* $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/dist/
+	cp -r openclaw-plugin/scripts/* $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/scripts/
+	chmod 0755 $(DESTDIR)$(OPENCLAW_PLUGIN_DIR)/scripts/*.sh
+
+.PHONY: install-all
+install-all: install install-openclaw-plugin ## Install all components
 
 .PHONY: help
 help: ## Show this help message
