@@ -3,7 +3,7 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,7 @@ class SecurityEvent(BaseModel):
         details     — backend-specific structured data
 
     Auto-filled fields:
+        result      — succeeded (default) | failed
         trace_id    — injected by middleware (empty string until then)
         timestamp   — ISO-8601
         event_id    — UUID
@@ -35,6 +36,7 @@ class SecurityEvent(BaseModel):
     event_type: str
     category: str
     details: Dict[str, Any]
+    result: Literal["succeeded", "failed"] = "succeeded"
     trace_id: str = ""
     timestamp: str = Field(default_factory=_now_iso)
     event_id: str = Field(default_factory=_new_uuid)
@@ -50,6 +52,7 @@ class SecurityEvent(BaseModel):
             "event_id": d["event_id"],
             "event_type": d["event_type"],
             "category": d["category"],
+            "result": d["result"],
             "timestamp": d["timestamp"],
             "trace_id": d["trace_id"],
             "pid": d["pid"],

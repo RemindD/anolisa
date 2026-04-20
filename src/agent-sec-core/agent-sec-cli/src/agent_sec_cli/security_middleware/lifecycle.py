@@ -78,8 +78,9 @@ def on_error(ctx: RequestContext, exception: Exception, kwargs: Dict[str, Any]) 
             "error_type": type(exception).__name__,
         }
         event = SecurityEvent(
-            event_type=f"{ctx.action}_error",
+            event_type=ctx.action,
             category=_category_for(ctx.action),
+            result="failed",
             details=details,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
