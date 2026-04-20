@@ -1,8 +1,0 @@
-{
-  "name": "agent-sec-core/code-scanner",
-  "version": "1.0.0",
-  "type": "commonjs",
-  "openclaw": {
-    "extensions": ["./index.js"]
-  }
-}
