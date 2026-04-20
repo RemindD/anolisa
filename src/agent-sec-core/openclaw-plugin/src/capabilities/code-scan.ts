@@ -35,7 +35,7 @@ export const codeScan: SecurityCapability = {
 
         // 构建提示信息（与 cosh hook 的 msg 格式一致）
         const descs = findings.map((f: any) => `- ${f.desc_zh}`);
-        const msg = `[code-scanner] Detected ${findings.length} issue(s):\n${descs.join("\n")}`;
+        const msg = `[code-scanner] Detected ${findings.length} issue(s):\n${descs.join("\n")}\n\nCommand: ${command}`;
 
         if (verdict === "deny") {
           api.logger.info(`[code-scan] 🚫 DENY — blocking command`);
