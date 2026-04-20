@@ -17,11 +17,6 @@ export async function callAgentSecCli(
   args: string[],
   opts: { timeout?: number } = {},
 ): Promise<CliResult> {
-  // Mock mode — return a safe stub without spawning the real CLI process.
-  // Active whenever AGENT_SEC_LIVE is not set (e.g. during smoke tests in CI).
-  if (!process.env.AGENT_SEC_LIVE) {
-    return { stdout: '{"risk":"low","reason":"mock (AGENT_SEC_LIVE not set)"}', stderr: "", exitCode: 0 };
-  }
 
   const timeout = opts.timeout ?? 5000;
 
