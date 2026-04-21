@@ -1531,4 +1531,22 @@ export default {
   'Session exported to JSONL: {{filename}}':
     'Session exported to JSONL: {{filename}}',
   'Failed to export session: {{error}}': 'Failed to export session: {{error}}',
+
+  // ============================================================================
+  // Security Events Summary Command
+  // ============================================================================
+  'Show security posture summary from agent-sec-cli events':
+    'Show security posture summary from agent-sec-cli events',
+  'agent-sec-cli not found on PATH. Install agent-sec-core first.':
+    'agent-sec-cli not found on PATH. Install agent-sec-core first.',
+  'agent-sec-cli timed out after {{seconds}} seconds.':
+    'agent-sec-cli timed out after {{seconds}} seconds.',
+  'agent-sec-cli exited with code {{code}}. Ensure agent-sec-core is properly installed and the SQLite store is accessible.':
+    'agent-sec-cli exited with code {{code}}. Ensure agent-sec-core is properly installed and the SQLite store is accessible.',
+  'agent-sec-cli output exceeded the maximum buffer size. Try a shorter --last-hours window.':
+    'agent-sec-cli output exceeded the maximum buffer size. Try a shorter --last-hours window.',
+  'No security events in the last {{hours}} hours.':
+    'No security events in the last {{hours}} hours.',
+  'Invalid --last-hours value. Must be a number. Using default (24).':
+    'Invalid --last-hours value. Must be a number. Using default (24).',
 };

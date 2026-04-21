@@ -1358,4 +1358,22 @@ export default {
   'Session exported to JSON: {{filename}}': '会话已导出为 JSON：{{filename}}',
   'Session exported to JSONL: {{filename}}': '会话已导出为 JSONL：{{filename}}',
   'Failed to export session: {{error}}': '导出会话失败：{{error}}',
+
+  // ============================================================================
+  // Security Events Summary Command
+  // ============================================================================
+  'Show security posture summary from agent-sec-cli events':
+    '展示 agent-sec-cli 安全态势摘要',
+  'agent-sec-cli not found on PATH. Install agent-sec-core first.':
+    '未在 PATH 中找到 agent-sec-cli，请先安装 agent-sec-core。',
+  'agent-sec-cli timed out after {{seconds}} seconds.':
+    'agent-sec-cli 超时（{{seconds}} 秒）。',
+  'agent-sec-cli exited with code {{code}}. Ensure agent-sec-core is properly installed and the SQLite store is accessible.':
+    'agent-sec-cli 退出码 {{code}}，请确保 agent-sec-core 已正确安装且 SQLite 存储可访问。',
+  'agent-sec-cli output exceeded the maximum buffer size. Try a shorter --last-hours window.':
+    'agent-sec-cli 输出超出最大缓冲区大小，请尝试缩短 --last-hours 窗口。',
+  'No security events in the last {{hours}} hours.':
+    '过去 {{hours}} 小时内没有安全事件。',
+  'Invalid --last-hours value. Must be a number. Using default (24).':
+    '--last-hours 值无效，必须为数字。使用默认值 (24)。',
 };
