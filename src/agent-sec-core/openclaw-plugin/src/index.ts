@@ -6,6 +6,7 @@ import { codeScan } from "./capabilities/code-scan.js";
 import { inboundFilter } from "./capabilities/inbound-filter.js";
 import { promptScan } from "./capabilities/prompt-scan.js";
 import { llmAudit } from "./capabilities/llm-audit.js";
+import { skillLedger } from "./capabilities/skill-ledger.js";
 
 const capabilities: SecurityCapability[] = [
   toolGate,
@@ -13,6 +14,7 @@ const capabilities: SecurityCapability[] = [
   inboundFilter,
   promptScan,
   llmAudit,
+  skillLedger,
 ];
 
 export default definePluginEntry({
