@@ -1,76 +1,54 @@
-"""Router — action name to backend module registry with lazy imports."""
+"""Router — action name to backend instance registry with explicit imports."""
 
-import importlib
-from typing import Any, Dict
+from typing import Any
+
+from agent_sec_cli.security_middleware.backends.asset_verify import (
+    AssetVerifyBackend,
+)
+from agent_sec_cli.security_middleware.backends.code_scan import CodeScanBackend
+from agent_sec_cli.security_middleware.backends.hardening import (
+    HardeningBackend,
+)
+from agent_sec_cli.security_middleware.backends.sandbox import SandboxBackend
+from agent_sec_cli.security_middleware.backends.skill_ledger import (
+    SkillLedgerBackend,
+)
+from agent_sec_cli.security_middleware.backends.summary import SummaryBackend
 
 # ---------------------------------------------------------------------------
-# Action → backend module mapping
+# Action → backend class mapping (static, no hot-swapping allowed)
 # ---------------------------------------------------------------------------
 
-_REGISTRY: Dict[str, str] = {
-    "sandbox_prehook": "agent_sec_cli.security_middleware.backends.sandbox",
-    "harden": "agent_sec_cli.security_middleware.backends.hardening",
-    "verify": "agent_sec_cli.security_middleware.backends.asset_verify",
-    "summary": "agent_sec_cli.security_middleware.backends.summary",
-    "code_scan": "agent_sec_cli.security_middleware.backends.code_scan",
-    "skill_ledger": "agent_sec_cli.security_middleware.backends.skill_ledger",
+_BACKEND_CLASSES: dict[str, type] = {
+    "sandbox_prehook": SandboxBackend,
+    "harden": HardeningBackend,
+    "verify": AssetVerifyBackend,
+    "summary": SummaryBackend,
+    "code_scan": CodeScanBackend,
+    "skill_ledger": SkillLedgerBackend,
 }
 
-# Module base name → expected class name convention.
-_CLASS_SUFFIX = "Backend"
-
 # Cache of already-instantiated backends keyed by action.
-_backend_cache: Dict[str, Any] = {}
-
-
-def _module_to_class_name(module_path: str) -> str:
-    """Derive the class name from the last segment of the module path.
-
-    Convention:  ``security_middleware.backends.sandbox``
-                 → module name ``sandbox``
-                 → class ``SandboxBackend``
-    """
-    base = module_path.rsplit(".", 1)[-1]
-    # Convert snake_case to PascalCase and append "Backend"
-    parts = base.split("_")
-    pascal = "".join(p.capitalize() for p in parts)
-    return f"{pascal}{_CLASS_SUFFIX}"
+_backend_cache: dict[str, Any] = {}
 
 
 def get_backend(action: str) -> Any:
     """Return the backend instance responsible for *action*.
 
-    The backend module is imported lazily on first access and the instance is
-    cached for subsequent calls.
+    The backend instance is created on first access and cached for subsequent calls.
 
     Raises:
         ValueError:  If *action* is not found in the registry.
-        ImportError:  If the backend module cannot be imported.
-        AttributeError:  If the expected class is missing from the module.
     """
-    if action not in _REGISTRY:
-        registered = ", ".join(sorted(_REGISTRY))
+    if action not in _BACKEND_CLASSES:
+        registered = ", ".join(sorted(_BACKEND_CLASSES))
         raise ValueError(f"Unknown action {action!r}. Registered actions: {registered}")
 
     if action in _backend_cache:
         return _backend_cache[action]
 
-    module_path = _REGISTRY[action]
-    module = importlib.import_module(module_path)
-
-    class_name = _module_to_class_name(module_path)
-    backend_cls = getattr(module, class_name)
+    backend_cls = _BACKEND_CLASSES[action]
     instance = backend_cls()
 
     _backend_cache[action] = instance
     return instance
-
-
-def register_action(action: str, module_path: str) -> None:
-    """Dynamically register a new action → module mapping.
-
-    This is primarily useful for plugins or tests.
-    """
-    _REGISTRY[action] = module_path
-    # Invalidate any cached instance for this action.
-    _backend_cache.pop(action, None)
