@@ -1,4 +1,4 @@
-"""Unit tests for cosh_hooks/skill_ledger_hook.py.
+"""Unit tests for cosh-extension/hooks/skill_ledger_hook.py.
 
 The hook is self-contained (no agent_sec_cli imports), so we test it
 by piping JSON via subprocess — identical to the code_scanner_hook tests.
@@ -28,7 +28,11 @@ import pytest
 
 # Path to the standalone cosh hook script
 _COSH_HOOK = str(
-    Path(__file__).resolve().parents[2] / ".." / "cosh_hooks" / "skill_ledger_hook.py"
+    Path(__file__).resolve().parents[2]
+    / ".."
+    / "cosh-extension"
+    / "hooks"
+    / "skill_ledger_hook.py"
 )
 
 

@@ -156,7 +156,7 @@ Skill Ledger 提供**两层防护**协同工作：
 
 - **第一层——自动 Hook（实时守卫）**：
   - **OpenClaw**：插件拦截所有对 `SKILL.md` 的 `read` 调用，在 Skill 加载前自动运行 `check`。
-  - **copilot-shell**：Python hook 脚本（`cosh_hooks/skill_ledger_hook.py`）通过 `PreToolUse` 事件在 Skill 调用前自动运行 `check`。
+  - **copilot-shell**：Python hook 脚本（`cosh-extension/hooks/skill_ledger_hook.py`）通过 `PreToolUse` 事件在 Skill 调用前自动运行 `check`。
   - 两者均对非 `pass` 状态输出警告。**零配置、始终启用。**
 - **第二层——Agent 驱动扫描（深度审计）**：`skill-ledger` Skill 驱动完整的四阶段安全扫描并生成签名认证。**按需触发**，由用户请求发起。
 

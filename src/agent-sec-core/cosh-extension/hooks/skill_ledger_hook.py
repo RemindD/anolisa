@@ -31,7 +31,7 @@ Copilot-shell settings.json configuration::
           "hooks": [{
             "type": "command",
             "name": "skill-ledger",
-            "command": "python3 cosh_hooks/skill_ledger_hook.py",
+            "command": "python3 cosh-extension/hooks/skill_ledger_hook.py",
             "timeout": 10000
           }]
         }]

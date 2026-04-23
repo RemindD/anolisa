@@ -92,8 +92,8 @@ The linux-sandbox binary provides secure sandboxed execution environments.
 %files -n agent-sec-cosh-hook
 %defattr(0644,root,root,0755)
 %attr(0755,root,root) /usr/local/bin/linux-sandbox
-%attr(0755,root,root) /usr/share/anolisa/extensions/*.py
-/usr/share/anolisa/extensions/
+%attr(0755,root,root) /usr/share/anolisa/extensions/agent-sec-core/hooks/*.py
+/usr/share/anolisa/extensions/agent-sec-core/
 %license LICENSE
 
 # =============================================================================

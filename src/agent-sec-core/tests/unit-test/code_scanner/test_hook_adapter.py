@@ -11,7 +11,11 @@ from agent_sec_cli.code_scanner.models import Language
 
 # Path to the standalone cosh hook script
 _COSH_HOOK = str(
-    Path(__file__).resolve().parents[2] / ".." / "cosh_hooks" / "code_scanner_hook.py"
+    Path(__file__).resolve().parents[2]
+    / ".."
+    / "cosh-extension"
+    / "hooks"
+    / "code_scanner_hook.py"
 )
 
 # ---------------------------------------------------------------------------

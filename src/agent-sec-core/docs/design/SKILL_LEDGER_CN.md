@@ -590,7 +590,7 @@ skill-ledger 需适配两个宿主系统，两者 Skill 模型和 Hook 机制存
 
 ### 6.2 copilot-shell（Command Hook）
 
-独立 Python 脚本 `cosh_hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。
+独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。
 
 配置：
 ```jsonc
@@ -602,7 +602,7 @@ skill-ledger 需适配两个宿主系统，两者 Skill 模型和 Hook 机制存
       "hooks": [{
         "type": "command",
         "name": "skill-ledger",
-        "command": "python3 cosh_hooks/skill_ledger_hook.py",
+        "command": "python3 cosh-extension/hooks/skill_ledger_hook.py",
         "timeout": 10000
       }]
     }]
