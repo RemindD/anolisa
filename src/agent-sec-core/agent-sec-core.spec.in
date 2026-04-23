@@ -26,7 +26,7 @@
 %global __provides_exclude_from %{_libdir}/python3\.11/site-packages/.*
 
 Name:           agent-sec-core
-Version:        0.3.0
+Version:        @VERSION@
 Release:        %{anolis_release}%{?dist}
 Summary:        Agent Security Core Package (metapackage)
 

@@ -174,20 +174,30 @@ build_agent_sec_core() {
     log "Building RPM: agent-sec-core"
     log "=========================================="
 
-    local spec_file="${SEC_DIR}/agent-sec-core.spec"
-    if [ ! -f "$spec_file" ]; then
-        err "Spec file not found: $spec_file"
+    local spec_in="${SEC_DIR}/agent-sec-core.spec.in"
+    if [ ! -f "$spec_in" ]; then
+        err "Spec template not found: $spec_in"
         return 1
     fi
 
-    local pkg_name pkg_version
-    pkg_name=$(parse_spec_name "$spec_file")
-    pkg_version=$(parse_spec_version "$spec_file")
-    local tarball_name="${pkg_name}-${pkg_version}.tar.gz"
+    # Version: prefer $VERSION env (set by nightly CI), fallback to pyproject.toml
+    local version="${VERSION:-}"
+    if [ -z "$version" ]; then
+        version=$(grep -m1 '^version' "${SEC_DIR}/agent-sec-cli/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')
+    fi
+    if [ -z "$version" ]; then
+        err "Cannot determine agent-sec-core version. Set VERSION env or ensure pyproject.toml exists."
+        return 1
+    fi
 
-    # Step 1: Copy spec to SPECS
+    local pkg_name
+    pkg_name=$(parse_spec_name "$spec_in")
+    local tarball_name="${pkg_name}-${version}.tar.gz"
+
+    # Step 1: Process spec template (@VERSION@ -> actual version)
     log "Step 1/3: Preparing spec file..."
-    cp "$spec_file" "${BUILD_DIR}/SPECS/"
+    local spec_file
+    spec_file=$(process_spec_template "$spec_in" "$version")
 
     # Step 2: Create source tarball
     # Note: rust-toolchain.toml is intentionally excluded from the tarball.
@@ -197,7 +207,7 @@ build_agent_sec_core() {
     log "Step 2/3: Creating source tarball ${tarball_name}..."
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    local pkg_dir="${tmp_dir}/${pkg_name}-${pkg_version}"
+    local pkg_dir="${tmp_dir}/${pkg_name}-${version}"
     mkdir -p "$pkg_dir"/{skills,linux-sandbox,agent-sec-cli,cosh_hooks,openclaw-plugin}
 
     # skills: use cp -rp dir/. to include hidden files/directories
@@ -225,14 +235,14 @@ build_agent_sec_core() {
         --exclude='.pytest_cache' \
         agent-sec-cli/ | tar -xf - -C "$pkg_dir/"
 
-    tar -czf "${BUILD_DIR}/SOURCES/${tarball_name}" -C "$tmp_dir" "${pkg_name}-${pkg_version}"
+    tar -czf "${BUILD_DIR}/SOURCES/${tarball_name}" -C "$tmp_dir" "${pkg_name}-${version}"
     rm -rf "$tmp_dir"
 
     # Step 3: rpmbuild (--nodeps: BuildRequires are handled by yum-builddep in CI)
     log "Step 3/3: Running rpmbuild..."
     "$RPMBUILD" -ba --nodeps \
         --define "_topdir ${BUILD_DIR}" \
-        "${BUILD_DIR}/SPECS/agent-sec-core.spec"
+        "$spec_file"
 
     ok "agent-sec-core RPM built successfully"
 }
