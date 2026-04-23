@@ -10,6 +10,9 @@ from typing import Any
 
 from agent_sec_cli.security_events.schema import SecurityEvent
 
+# Constants
+MAX_LATEST_THREATS = 3
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -56,7 +59,13 @@ def format_summary(events: list[SecurityEvent], time_label: str) -> str:
     header = _compute_posture(
         harden_events, asset_events, prompt_scan_events, time_label
     )
-    footer = _build_footer(events, harden_events)
+    footer = _build_footer(
+        harden_events,
+        asset_events,
+        code_scan_events,
+        sandbox_events,
+        prompt_scan_events,
+    )
     return "\n\n".join([header, *sections, footer])
 
 
@@ -128,6 +137,41 @@ def _format_timestamp(ts: str) -> str:
         return ts
 
 
+def _count_success_failure(events: list[SecurityEvent]) -> tuple[int, int]:
+    """Count succeeded and failed events in a single pass.
+
+    Returns:
+        Tuple of (succeeded_count, failed_count)
+    """
+    ok_count = sum(1 for e in events if e.result == "succeeded")
+    return ok_count, len(events) - ok_count
+
+
+def _format_counts_dict(counts: dict[str, int], label: str = "") -> str:
+    """Format a counts dictionary into a sorted 'key: value' string.
+
+    Args:
+        counts: Dictionary of category -> count mappings
+        label: Optional prefix label (e.g., "Verdict", "Threat types")
+
+    Returns:
+        Formatted string like "Verdict: pass: 2, warn: 1"
+    """
+    if not counts:
+        return ""
+    parts = [f"{k}: {v}" for k, v in sorted(counts.items())]
+    joined = ", ".join(parts)
+    return f"{label}: {joined}" if label else joined
+
+
+def _find_latest_succeeded(events: list[SecurityEvent]) -> SecurityEvent | None:
+    """Find the first succeeded event (assumes events are sorted newest-first)."""
+    for e in events:
+        if e.result == "succeeded":
+            return e
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Per-category formatters
 # ---------------------------------------------------------------------------
@@ -137,34 +181,36 @@ def _summarize_hardening(events: list[SecurityEvent]) -> str:
     """Summarize hardening category events."""
     lines = ["--- Hardening ---"]
 
-    # Classify by mode in a single pass (mode lives in details.result)
+    # Single pass: classify by mode and track latest succeeded scan
     scans: list[SecurityEvent] = []
     reinforcements: list[SecurityEvent] = []
+    latest_succeeded_scan: SecurityEvent | None = None
+
     for e in events:
         mode = _get_mode(e)
         if mode == "scan":
             scans.append(e)
+            if e.result == "succeeded" and latest_succeeded_scan is None:
+                latest_succeeded_scan = e
         elif mode == "reinforce":
             reinforcements.append(e)
 
-    scans_ok = sum(1 for e in scans if e.result == "succeeded")
-    scans_fail = len(scans) - scans_ok
+    # Use helper for counting
+    scans_ok, scans_fail = _count_success_failure(scans)
     lines.append(
-        f"  Scans performed:  {len(scans)} (succeeded: {scans_ok}, failed: {scans_fail})"
+        f"  Scans performed: {len(scans)} (succeeded: {scans_ok}, failed: {scans_fail})"
     )
 
     if reinforcements:
-        reinf_ok = sum(1 for e in reinforcements if e.result == "succeeded")
-        reinf_fail = len(reinforcements) - reinf_ok
+        reinf_ok, reinf_fail = _count_success_failure(reinforcements)
         lines.append(
-            f"  Reinforcements:   {len(reinforcements)} "
+            f"  Reinforcements: {len(reinforcements)} "
             f"(succeeded: {reinf_ok}, failed: {reinf_fail})"
         )
 
     # Latest scan result details (prefer succeeded, fall back to latest failed)
-    latest_scan = next((e for e in scans if e.result == "succeeded"), None)
-    if latest_scan:
-        result = _get_result(latest_scan)
+    if latest_succeeded_scan:
+        result = _get_result(latest_succeeded_scan)
         passed = result.get("passed", 0)
         total = result.get("total", 0)
         failures = result.get("failures", [])
@@ -193,26 +239,20 @@ def _summarize_asset_verify(events: list[SecurityEvent]) -> str:
     """Summarize asset_verify category events."""
     lines = ["--- Asset Verification ---"]
 
-    ok_count = 0
-    latest: SecurityEvent | None = None
-    for e in events:
-        if e.result == "succeeded":
-            ok_count += 1
-            if latest is None:
-                latest = e
-    fail_count = len(events) - ok_count
+    ok_count, fail_count = _count_success_failure(events)
     lines.append(
         f"  Verifications performed: {len(events)} "
         f"(succeeded: {ok_count}, failed: {fail_count})"
     )
 
-    # Latest successful result
+    # Latest successful result (events are sorted newest-first)
+    latest = _find_latest_succeeded(events)
     if latest:
         result = _get_result(latest)
         passed = result.get("passed", 0)
         failed = result.get("failed", 0)
         lines.append("")
-        lines.append("  Latest result:")
+        lines.append("  Latest verification:")
         lines.append(f"    {passed} passed, {failed} failed")
         if failed == 0:
             lines.append("    Integrity status: ALL CLEAR")
@@ -227,22 +267,21 @@ def _summarize_code_scan(events: list[SecurityEvent]) -> str:
     """Summarize code_scan category events."""
     lines = ["--- Code Scanning ---"]
 
-    ok_count = 0
-    verdict_counts: dict[str, int] = defaultdict(int)
-    for e in events:
-        if e.result == "succeeded":
-            ok_count += 1
-            result = _get_result(e)
-            verdict = result.get("verdict", "unknown")
-            verdict_counts[verdict] += 1
-    fail_count = len(events) - ok_count
+    ok_count, fail_count = _count_success_failure(events)
     lines.append(
         f"  Scans performed: {len(events)} (succeeded: {ok_count}, failed: {fail_count})"
     )
 
+    # Count verdicts in single pass
+    verdict_counts: dict[str, int] = defaultdict(int)
+    for e in events:
+        if e.result == "succeeded":
+            result = _get_result(e)
+            verdict = result.get("verdict", "unknown")
+            verdict_counts[verdict] += 1
+
     if verdict_counts:
-        parts = [f"{v}: {c}" for v, c in sorted(verdict_counts.items())]
-        lines.append(f"  Verdict: {', '.join(parts)}")
+        lines.append(f"  {_format_counts_dict(verdict_counts, 'Verdict')}")
 
     return "\n".join(lines)
 
@@ -260,41 +299,38 @@ def _summarize_prompt_scan(events: list[SecurityEvent]) -> str:
     """Summarize prompt_scan category events."""
     lines = ["--- Prompt Scan ---"]
 
-    ok_count = 0
+    ok_count, fail_count = _count_success_failure(events)
     verdict_counts: dict[str, int] = defaultdict(int)
     threat_type_counts: dict[str, int] = defaultdict(int)
-    latest_threats: list[SecurityEvent] = []
+    latest_threats: list[tuple[SecurityEvent, dict[str, Any]]] = []
 
+    # Single pass: count verdicts, track threats, cache result dict
     for e in events:
         if e.result == "succeeded":
-            ok_count += 1
             result = _get_result(e)
             verdict = result.get("verdict", "unknown")
             verdict_counts[verdict] += 1
-            if result.get("verdict") in ("warn", "deny"):
+
+            if verdict in ("warn", "deny"):
                 threat_type = result.get("threat_type", "unknown")
                 threat_type_counts[threat_type] += 1
-                if len(latest_threats) < 3:
-                    latest_threats.append(e)
-    fail_count = len(events) - ok_count
+                if len(latest_threats) < MAX_LATEST_THREATS:
+                    latest_threats.append((e, result))
 
     lines.append(
         f"  Scans performed: {len(events)} (succeeded: {ok_count}, failed: {fail_count})"
     )
 
     if verdict_counts:
-        parts = [f"{v}: {c}" for v, c in sorted(verdict_counts.items())]
-        lines.append(f"  Verdict breakdown: {', '.join(parts)}")
+        lines.append(f"  {_format_counts_dict(verdict_counts, 'Verdict')}")
 
     if threat_type_counts:
-        threat_parts = [f"{t}: {c}" for t, c in sorted(threat_type_counts.items())]
-        lines.append(f"  Threat types: {', '.join(threat_parts)}")
+        lines.append(f"  {_format_counts_dict(threat_type_counts, 'Threat types')}")
 
     if latest_threats:
         lines.append("")
-        lines.append(f"  Latest threat{'s' if len(latest_threats) > 1 else ''}:")
-        for e in latest_threats:
-            result = _get_result(e)
+        lines.append("  Latest threats:")
+        for e, result in latest_threats:
             verdict = result.get("verdict", "?").upper()
             threat_type = result.get("threat_type", "unknown")
             summary = result.get("summary", "")
@@ -366,17 +402,56 @@ def _compute_posture(
     return "\n".join(lines)
 
 
+def _get_hardening_failures(hardening_events: list[SecurityEvent]) -> list[Any]:
+    """Extract failures list from latest hardening event (avoids duplicate work)."""
+    if not hardening_events:
+        return []
+
+    latest = hardening_events[0]
+    if latest.result != "succeeded":
+        return []
+
+    result = _get_result(latest)
+    return result.get("failures", [])
+
+
 def _build_footer(
-    events: list[SecurityEvent],
     hardening_events: list[SecurityEvent],
+    asset_events: list[SecurityEvent],
+    code_scan_events: list[SecurityEvent],
+    sandbox_events: list[SecurityEvent],
+    prompt_scan_events: list[SecurityEvent],
 ) -> str:
     """Build footer with stats and suggested actions."""
-    total = len(events)
-    failed = sum(1 for e in events if e.result == "failed")
+    # Only count events from the five summary categories
+    all_summary_events = (
+        hardening_events
+        + asset_events
+        + code_scan_events
+        + sandbox_events
+        + prompt_scan_events
+    )
+    total = len(all_summary_events)
+    failed = sum(1 for e in all_summary_events if e.result == "failed")
 
-    # Find the newest event in O(n) instead of sorting
-    newest = max(events, key=lambda e: e.timestamp) if events else None
-    last_event_str = _time_since_last_event(newest) if newest else "N/A"
+    # Find the newest event: since each category list is sorted newest-first,
+    # we only need to compare the first element of each non-empty list
+    candidate_events = []
+    for cat_events in [
+        hardening_events,
+        asset_events,
+        code_scan_events,
+        sandbox_events,
+        prompt_scan_events,
+    ]:
+        if cat_events:
+            candidate_events.append(cat_events[0])  # First is newest in each category
+
+    if candidate_events:
+        newest = max(candidate_events, key=lambda e: e.timestamp)
+        last_event_str = _time_since_last_event(newest)
+    else:
+        last_event_str = "N/A"
 
     lines = [
         "---",
@@ -418,13 +493,9 @@ def _compute_suggestions(hardening_events: list[SecurityEvent]) -> list[str]:
     """Generate actionable suggestions based on latest hardening event."""
     suggestions: list[str] = []
 
-    if not hardening_events:
-        return suggestions
-
-    latest = hardening_events[0]  # newest-first after _group_by_category sort
-    if latest.result == "succeeded":
-        result = _get_result(latest)
-        if result.get("failures"):
-            suggestions.append("agent-sec-cli harden --reinforce    Fix failed rules")
+    # Reuse the helper to avoid duplicate extraction
+    failures = _get_hardening_failures(hardening_events)
+    if failures:
+        suggestions.append("agent-sec-cli harden --reinforce    Fix failed rules")
 
     return suggestions

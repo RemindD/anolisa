@@ -115,7 +115,7 @@ class TestHardeningSummary:
         output = format_summary(events, "last 24 hours")
 
         assert "--- Hardening ---" in output
-        assert "Scans performed:  2 (succeeded: 2, failed: 0)" in output
+        assert "Scans performed: 2 (succeeded: 2, failed: 0)" in output
         assert "45/48 rules passed (93.8%)" in output
         assert "agent-sec-cli harden --scan" in output
 
@@ -146,7 +146,7 @@ class TestHardeningSummary:
             ),
         ]
         output = format_summary(events, "last 24 hours")
-        assert "Reinforcements:   1 (succeeded: 1, failed: 0)" in output
+        assert "Reinforcements: 1 (succeeded: 1, failed: 0)" in output
 
     def test_failed_scan(self):
         events = [
@@ -163,7 +163,7 @@ class TestHardeningSummary:
             ),
         ]
         output = format_summary(events, "last 24 hours")
-        assert "Scans performed:  1 (succeeded: 0, failed: 1)" in output
+        assert "Scans performed: 1 (succeeded: 0, failed: 1)" in output
         assert "Latest scan failed: loongshield not found" in output
         # Latest harden failed -> needs_attention (not critical)
         assert "Needs attention" in output
@@ -519,7 +519,7 @@ class TestPromptScanSummary:
             ),
         ]
         output = format_summary(events, "last 24 hours")
-        assert "Latest threat:" in output
+        assert "Latest threats:" in output
         assert "DENY" in output
         assert "direct_injection" in output
         assert "Direct Injection detected" in output
@@ -982,6 +982,56 @@ class TestMixedCategories:
 
 
 class TestFooter:
+    def test_footer_excludes_non_summary_categories(self):
+        """Footer total should only count the five summary categories, not all events."""
+        events = [
+            # Summary categories (should be counted)
+            _make_event(
+                event_type="harden",
+                category="hardening",
+                result="succeeded",
+                details={
+                    "request": {"args": ["--scan"]},
+                    "result": {
+                        "mode": "scan",
+                        "passed": 48,
+                        "failed": 0,
+                        "total": 48,
+                        "failures": [],
+                    },
+                },
+                timestamp=_ts_minutes_ago(10),
+            ),
+            _make_event(
+                event_type="verify",
+                category="asset_verify",
+                result="succeeded",
+                details={"request": {}, "result": {"passed": 5, "failed": 0}},
+                timestamp=_ts_minutes_ago(15),
+            ),
+            # Non-summary category (should NOT be counted)
+            _make_event(
+                event_type="some_other_event",
+                category="other_category",
+                result="succeeded",
+                details={},
+                timestamp=_ts_minutes_ago(5),
+            ),
+            _make_event(
+                event_type="another_event",
+                category="yet_another",
+                result="failed",
+                details={},
+                timestamp=_ts_minutes_ago(20),
+            ),
+        ]
+        output = format_summary(events, "last 24 hours")
+        # Only the 2 summary category events should be counted, not the 2 non-summary events
+        assert "Total events: 2" in output
+        assert (
+            "Failed: 0" in output
+        )  # The non-summary failed event should not be counted
+
     def test_footer_stats(self):
         """Latest harden succeeded so posture not critical; footer shows stats."""
         events = [
