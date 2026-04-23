@@ -15,16 +15,34 @@ separate INJECTION label; the model flags any malicious prompt
 
 import logging
 import threading
+from typing import TYPE_CHECKING
 
-import torch
 from agent_sec_cli.prompt_scanner.models.model_manager import (
     ClassifierResult,
     ModelManager,
 )
 from agent_sec_cli.prompt_scanner.result import ThreatType
-from torch.nn.functional import softmax
+
+# Lazy imports to avoid torch loading at CLI startup
+if TYPE_CHECKING:
+    import torch
+    from torch.nn.functional import softmax
 
 log = logging.getLogger(__name__)
+
+# Cache for softmax function
+_softmax_func = None
+
+
+def _get_softmax():
+    """Import softmax on first use."""
+    global _softmax_func
+    if _softmax_func is None:
+        from torch.nn.functional import softmax
+
+        _softmax_func = softmax
+    return _softmax_func
+
 
 # ModelScope mirror model IDs
 _MODEL_22M = "LLM-Research/Llama-Prompt-Guard-2-22M"
@@ -176,6 +194,9 @@ class PromptGuardClassifier:
             return []
         model, tokenizer = self._manager.load_model(self._model_name)
 
+        torch = _import_torch()
+        softmax = _get_softmax()
+
         with self._inference_lock:
             preprocessed = [self._preprocess(t, tokenizer) for t in texts]
             inputs = tokenizer(
@@ -228,6 +249,9 @@ class PromptGuardClassifier:
 
     def _get_probabilities(self, text: str, model: object, tokenizer: object) -> object:
         """Run a single forward pass and return the softmax probability tensor."""
+        torch = _import_torch()
+        softmax = _get_softmax()
+
         preprocessed = self._preprocess(text, tokenizer)
         inputs = tokenizer(  # type: ignore[operator]
             preprocessed,

@@ -190,11 +190,13 @@ class TestModelManagerDeviceDetect(unittest.TestCase):
     def test_returns_cpu_without_torch(self) -> None:
         from agent_sec_cli.prompt_scanner.models.model_manager import (
             ModelManager,
+            _import_torch,
         )
 
         fake_torch = _make_fake_torch(cuda=False, mps=False)
         with patch(
-            "agent_sec_cli.prompt_scanner.models.model_manager.torch", fake_torch
+            "agent_sec_cli.prompt_scanner.models.model_manager._import_torch",
+            return_value=fake_torch,
         ):
             self.assertEqual(ModelManager.detect_device(), "cpu")
 
@@ -205,7 +207,8 @@ class TestModelManagerDeviceDetect(unittest.TestCase):
 
         fake_torch = _make_fake_torch(cuda=True, mps=False)
         with patch(
-            "agent_sec_cli.prompt_scanner.models.model_manager.torch", fake_torch
+            "agent_sec_cli.prompt_scanner.models.model_manager._import_torch",
+            return_value=fake_torch,
         ):
             self.assertEqual(ModelManager.detect_device(), "cuda")
 
@@ -216,7 +219,8 @@ class TestModelManagerDeviceDetect(unittest.TestCase):
 
         fake_torch = _make_fake_torch(cuda=False, mps=True)
         with patch(
-            "agent_sec_cli.prompt_scanner.models.model_manager.torch", fake_torch
+            "agent_sec_cli.prompt_scanner.models.model_manager._import_torch",
+            return_value=fake_torch,
         ):
             self.assertEqual(ModelManager.detect_device(), "mps")
 
@@ -227,7 +231,8 @@ class TestModelManagerDeviceDetect(unittest.TestCase):
 
         fake_torch = _make_fake_torch(cuda=False, mps=False)
         with patch(
-            "agent_sec_cli.prompt_scanner.models.model_manager.torch", fake_torch
+            "agent_sec_cli.prompt_scanner.models.model_manager._import_torch",
+            return_value=fake_torch,
         ):
             self.assertEqual(ModelManager.detect_device(), "cpu")
 

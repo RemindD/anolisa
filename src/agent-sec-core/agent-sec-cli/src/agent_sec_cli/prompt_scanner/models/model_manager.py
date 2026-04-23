@@ -16,15 +16,55 @@ ModelScope mirror IDs for Llama Prompt Guard 2:
 import logging
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import torch
 from agent_sec_cli.prompt_scanner.exceptions import ModelLoadError
 from agent_sec_cli.prompt_scanner.result import ThreatType
-from modelscope import snapshot_download
 from pydantic import BaseModel
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+# Lazy imports to avoid 2+ second startup penalty for unrelated CLI commands
+# These are only loaded when model inference is actually performed
+if TYPE_CHECKING:
+    import torch
+    from modelscope import snapshot_download
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 log = logging.getLogger(__name__)
+
+
+def _import_torch():
+    """Import torch on first use."""
+    import torch
+
+    global _torch_module
+    _torch_module = torch
+    return torch
+
+
+def _import_transformers():
+    """Import transformers components on first use."""
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    global _AutoModel, _Tokenizer
+    _AutoModel = AutoModelForSequenceClassification
+    _Tokenizer = AutoTokenizer
+    return AutoModelForSequenceClassification, AutoTokenizer
+
+
+def _import_modelscope():
+    """Import modelscope on first use."""
+    from modelscope import snapshot_download
+
+    global _snapshot_download
+    _snapshot_download = snapshot_download
+    return snapshot_download
+
+
+# Module-level caches (populated on first import)
+_torch_module = None
+_AutoModel = None
+_Tokenizer = None
+_snapshot_download = None
 
 
 class ClassifierResult(BaseModel):
@@ -120,6 +160,7 @@ class ModelManager:
 
         Priority: CUDA > MPS (Apple Silicon) > CPU.
         """
+        torch = _import_torch()
         if torch.cuda.is_available():
             return "cuda"
         if torch.backends.mps.is_available():
@@ -160,6 +201,7 @@ class ModelManager:
         _orig_level = _ms_logger.level
         _ms_logger.setLevel(logging.ERROR)
         try:
+            snapshot_download = _import_modelscope()
             local_model_path = snapshot_download(model_name, cache_dir=str(cache_dir))
         except Exception as exc:
             raise ModelLoadError(
@@ -173,8 +215,10 @@ class ModelManager:
             "Loading model from '%s' onto device '%s'.", local_model_path, self._device
         )
         try:
-            tokenizer = AutoTokenizer.from_pretrained(local_model_path)
-            model = AutoModelForSequenceClassification.from_pretrained(local_model_path)
+            AutoModel, Tokenizer = _import_transformers()
+            torch = _import_torch()
+            tokenizer = Tokenizer.from_pretrained(local_model_path)
+            model = AutoModel.from_pretrained(local_model_path)
             model.to(torch.device(self._device))
             model.eval()
         except Exception as exc:
