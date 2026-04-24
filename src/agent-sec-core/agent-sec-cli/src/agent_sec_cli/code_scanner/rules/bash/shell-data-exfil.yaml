@@ -6,7 +6,7 @@ desc_en: >-
 desc_zh: >-
   命令将本地文件内容上传到远程目标，可能导致敏感数据外泄。
 regex: |-
-  \bcurl\b[^;\n&]*(\s-d\s*@|--data(-binary)?\s+@|\s-F\s+[^;\n&]*=@|--upload-file\s|\s-T\s)
+  \bcurl\b[^;\n&]*(\s-d\s*@|--data(-binary)?\s+@|(\s-F\s|--form\s+)[^;\n&]*=@|--upload-file\s|\s-T\s)
   |\bwget\b[^;\n&]*--post-file[= ]
   |\b(nc|ncat|netcat)\b[^;\n&]*<
   |\bscp\b[^;\n&]*\s\w+@\S+:\S*\s*(?=[;\n&]|$)

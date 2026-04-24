@@ -14,7 +14,7 @@ _INLINE_RE = re.compile(
     r"""(?:uv\s+run\s+(?:--\w[\w-]*(?:\s+\S+)?\s+)*)?"""  # optional uv run prefix
     r"""(bash|sh|zsh|python3?)\s+"""  # interpreter
     r"""-c\s+"""  # -c flag
-    r"""(["'])(.*?)\2""",  # quoted code
+    r"""(["'])((?:\\.|(?!\2).)*)\2""",  # quoted code (escape-aware)
     re.DOTALL,
 )
 

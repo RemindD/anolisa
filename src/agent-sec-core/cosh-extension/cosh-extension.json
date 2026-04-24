@@ -13,6 +13,18 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${extensionPath}/hooks/code_scanner_hook.py",
+            "name": "code-scanner",
+            "description": "Scans tool code for security vulnerabilities",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

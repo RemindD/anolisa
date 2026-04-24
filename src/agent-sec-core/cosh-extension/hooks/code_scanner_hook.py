@@ -84,7 +84,7 @@ def main() -> None:
         proc = subprocess.run(
             [
                 "agent-sec-cli",
-                "code-scan",
+                "scan-code",
                 "--code",
                 command,
                 "--language",

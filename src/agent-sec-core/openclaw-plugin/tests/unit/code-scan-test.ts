@@ -34,11 +34,11 @@ function createMockApi() {
   return { api: api as any, hooks, logs };
 }
 
-/** Register code-scan and return the single captured handler. */
+/** Register scan-code and return the single captured handler. */
 function registerAndGetHandler() {
   const { api, hooks, logs } = createMockApi();
   codeScan.register(api);
-  assert.equal(hooks.length, 1, "code-scan should register exactly 1 hook");
+  assert.equal(hooks.length, 1, "scan-code should register exactly 1 hook");
   return { handler: hooks[0].handler, hooks, logs };
 }
 
@@ -69,7 +69,7 @@ function mockCliNoCall() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("code-scan", () => {
+describe("scan-code", () => {
   beforeEach(() => {
     lastCliArgs = undefined;
     lastCliOpts = undefined;
@@ -109,7 +109,7 @@ describe("code-scan", () => {
 
       await handler(execEvent("rm -rf /"), {});
 
-      assert.deepEqual(lastCliArgs, ["code-scan", "--code", "rm -rf /", "--language", "bash"]);
+      assert.deepEqual(lastCliArgs, ["scan-code", "--code", "rm -rf /", "--language", "bash"]);
       assert.equal(lastCliOpts?.timeout, 10000);
     });
 
@@ -159,7 +159,7 @@ describe("code-scan", () => {
 
       await handler(execEvent('echo "hello world"'), {});
 
-      assert.deepEqual(lastCliArgs, ["code-scan", "--code", 'echo "hello world"', "--language", "bash"]);
+      assert.deepEqual(lastCliArgs, ["scan-code", "--code", 'echo "hello world"', "--language", "bash"]);
     });
   });
 

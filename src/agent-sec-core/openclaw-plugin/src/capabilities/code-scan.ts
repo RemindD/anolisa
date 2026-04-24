@@ -2,7 +2,7 @@ import type { SecurityCapability } from "../types.js";
 import { callAgentSecCli } from "../utils.js";
 
 export const codeScan: SecurityCapability = {
-  id: "code-scan",
+  id: "scan-code",
   name: "Code Scanner",
   hooks: ["before_tool_call"],
   register(api) {
@@ -16,7 +16,7 @@ export const codeScan: SecurityCapability = {
         }
 
         const result = await callAgentSecCli(
-          ["code-scan", "--code", command, "--language", "bash"],
+          ["scan-code", "--code", command, "--language", "bash"],
           { timeout: 10000 },
         );
 
@@ -29,7 +29,7 @@ export const codeScan: SecurityCapability = {
         const findings = scanResult.findings ?? [];
 
         if (verdict === "pass" || findings.length === 0) {
-          api.logger.info(`[code-scan] ✅ pass — allowing command`);
+          api.logger.info(`[scan-code] ✅ pass — allowing command`);
           return undefined;
         }
 
@@ -38,12 +38,12 @@ export const codeScan: SecurityCapability = {
         const msg = `[code-scanner] Detected ${findings.length} issue(s):\n${descs.join("\n")}\n\nCommand: ${command}`;
 
         if (verdict === "deny") {
-          api.logger.info(`[code-scan] 🚫 DENY — blocking command`);
+          api.logger.info(`[scan-code] 🚫 DENY — blocking command`);
           return { block: true, blockReason: msg };
         }
 
         if (verdict === "warn") {
-          api.logger.info(`[code-scan] ⚠️ WARN — requiring user approval`);
+          api.logger.info(`[scan-code] ⚠️ WARN — requiring user approval`);
           return {
             requireApproval: {
               title: "Code Scanner Security Warning",

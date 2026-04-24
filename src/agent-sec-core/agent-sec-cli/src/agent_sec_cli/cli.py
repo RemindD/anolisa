@@ -206,9 +206,9 @@ def verify(
 
 
 # ---------------------------------------------------------------------------
-# Command: code-scan
+# Command: scan-code
 # ---------------------------------------------------------------------------
-@app.command(name="code-scan")
+@app.command(name="scan-code")
 def code_scan(
     code: str = typer.Option("", "--code", help="Source code to scan"),
     language: str = typer.Option("bash", "--language", help="Language: bash or python"),

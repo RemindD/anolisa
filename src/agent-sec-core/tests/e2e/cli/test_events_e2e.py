@@ -610,8 +610,8 @@ class TestEventsTimeRange:
         t1 = iso_now()
         time.sleep(0.1)  # Small delay to ensure timestamp ordering
 
-        # Step 2: Create an event (code-scan)
-        run_cli("code-scan", "--code", "print('hello')", "--language", "python")
+        # Step 2: Create an event (scan-code)
+        run_cli("scan-code", "--code", "print('hello')", "--language", "python")
         time.sleep(0.1)  # Allow SQLite to flush
 
         # Step 3: Record time t2 (after event creation)
@@ -902,9 +902,9 @@ class TestEventsSummaryCalculation:
     def test_code_scan_verdict_statistics(self):
         """TC-023: Code scan summary shows verdict statistics."""
         # Run scans with different verdicts
-        run_cli("code-scan", "--code", "rm -f a.txt", "--language", "bash")  # pass
+        run_cli("scan-code", "--code", "rm -f a.txt", "--language", "bash")  # pass
         time.sleep(0.05)
-        run_cli("code-scan", "--code", "rm -rf a.txt", "--language", "bash")  # warn
+        run_cli("scan-code", "--code", "rm -rf a.txt", "--language", "bash")  # warn
         time.sleep(0.1)
 
         result = run_cli("events", "--category", "code_scan", "--summary")
@@ -1048,7 +1048,7 @@ class TestEventsHelpAndVersion:
         """TC-001: Main help message shows all commands with aligned descriptions.
 
         Optimization items (not failures):
-        - code-scan description missing period at end
+        - scan-code description missing period at end
         - scan-prompt description missing period at end
         """
         result = run_cli("--help")
@@ -1057,7 +1057,7 @@ class TestEventsHelpAndVersion:
         # Verify all expected commands are listed
         assert "harden" in result.stdout
         assert "verify" in result.stdout
-        assert "code-scan" in result.stdout
+        assert "scan-code" in result.stdout
         assert "events" in result.stdout
         assert "skill-ledger" in result.stdout
         assert "scan-prompt" in result.stdout
