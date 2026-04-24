@@ -51,6 +51,80 @@ class TestEmptyEvents:
 
 
 class TestHardeningSummary:
+    def test_compliance_includes_fixed_count(self):
+        """Compliance calculation should include fixed items: (passed + fixed) / total.
+
+        After reinforce without rescan, the compliance should reflect both
+        passed items from scan and fixed items from reinforce.
+
+        Example: 15 passed from scan + 8 fixed from reinforce = 23/23 (100%)
+        """
+        events = [
+            # Initial scan with failures
+            _make_event(
+                event_type="harden",
+                category="hardening",
+                result="succeeded",
+                details={
+                    "request": {"args": ["--scan", "--config", "agentos_baseline"]},
+                    "result": {
+                        "mode": "scan",
+                        "config": "agentos_baseline",
+                        "passed": 15,
+                        "failed": 8,
+                        "total": 23,
+                        "failures": [
+                            {
+                                "rule_id": "SEC-001",
+                                "status": "FAIL",
+                                "message": "SSH config",
+                            },
+                            {
+                                "rule_id": "SEC-002",
+                                "status": "FAIL",
+                                "message": "Firewall",
+                            },
+                        ],
+                        "fixed": 0,
+                        "manual": 0,
+                        "dry_run_pending": 0,
+                        "fixed_items": [],
+                    },
+                },
+                timestamp=_ts_minutes_ago(10),
+            ),
+            # Reinforce operation that fixes the failures
+            _make_event(
+                event_type="harden",
+                category="hardening",
+                result="succeeded",
+                details={
+                    "request": {
+                        "args": ["--reinforce", "--config", "agentos_baseline"]
+                    },
+                    "result": {
+                        "mode": "reinforce",
+                        "config": "agentos_baseline",
+                        "passed": 15,
+                        "failed": 0,
+                        "total": 23,
+                        "failures": [],
+                        "fixed": 8,
+                        "manual": 0,
+                        "dry_run_pending": 0,
+                        "fixed_items": ["SEC-001", "SEC-002"],
+                    },
+                },
+                timestamp=_ts_minutes_ago(5),
+            ),
+        ]
+        output = format_summary(events, "last 24 hours")
+
+        # Should show 100% compliance: (15 passed + 8 fixed) / 23 total
+        assert "Compliance:" in output
+        # The compliance should reflect the fixed count
+        assert "100.0%" in output or "23/23" in output
+
     def test_scan_count_and_compliance(self):
         events = [
             _make_event(
@@ -221,6 +295,52 @@ class TestAssetVerifySummary:
         output = format_summary(events, "last 24 hours")
         assert "FAILURES DETECTED" in output
         assert "3 passed, 2 failed" in output
+
+    def test_single_skill_verify_after_full_verify(self):
+        """After full verify + single skill verify, summary shows latest result.
+
+        When a single skill is verified after a full verify, the summary
+        currently shows only the latest single-skill result.
+
+        This test documents the current behavior: the summary formatter
+        reads only the latest verify event and doesn't aggregate across
+        multiple verify invocations.
+        """
+        events = [
+            # Full verify of all skills
+            _make_event(
+                event_type="verify",
+                category="asset_verify",
+                result="succeeded",
+                details={
+                    "request": {"skill": None},
+                    "result": {"passed": 0, "failed": 5},
+                },
+                timestamp=_ts_minutes_ago(10),
+            ),
+            # Single skill verify
+            _make_event(
+                event_type="verify",
+                category="asset_verify",
+                result="succeeded",
+                details={
+                    "request": {"skill": "regex-mastery"},
+                    "result": {"passed": 1, "failed": 0},
+                },
+                timestamp=_ts_minutes_ago(5),
+            ),
+        ]
+        output = format_summary(events, "last 24 hours")
+
+        # Should show verification section
+        # System status should be "Needs attention" because full verify had 5 failures
+        # (single-skill verify should not affect posture)
+        assert "Needs attention" in output
+        assert "--- Asset Verification ---" in output
+        assert "Verifications performed: 2 (succeeded: 2, failed: 0)" in output
+        # Latest result shows single skill result (1 passed, 0 failed)
+        assert "Latest result:" in output
+        assert "1 passed, 0 failed" in output
 
 
 # ---------------------------------------------------------------------------

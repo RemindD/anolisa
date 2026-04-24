@@ -5,7 +5,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -57,10 +57,18 @@ class SqliteEventReader:
             params.append(trace_id)
         if since is not None:
             conditions.append("timestamp_epoch >= ?")
-            params.append(datetime.fromisoformat(since).timestamp())
+            dt = datetime.fromisoformat(since)
+            # If naive (no timezone), assume UTC to match event storage
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            params.append(dt.timestamp())
         if until is not None:
             conditions.append("timestamp_epoch < ?")
-            params.append(datetime.fromisoformat(until).timestamp())
+            dt = datetime.fromisoformat(until)
+            # If naive (no timezone), assume UTC to match event storage
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            params.append(dt.timestamp())
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         return where, params
 
@@ -159,6 +167,7 @@ class SqliteEventReader:
         category: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        offset: int = 0,
     ) -> int:
         """Count events matching the given filters.
 
@@ -172,11 +181,13 @@ class SqliteEventReader:
             Inclusive lower bound (ISO-8601 timestamp).
         until : str, optional
             Exclusive upper bound (ISO-8601 timestamp).
+        offset : int
+            Number of results to skip (default 0).
 
         Returns
         -------
         int
-            Number of matching events.
+            Number of matching events after applying offset.
         """
         try:
             conn = self._connect()
@@ -187,7 +198,14 @@ class SqliteEventReader:
                     since=since,
                     until=until,
                 )
-                sql = f"SELECT COUNT(*) FROM security_events{where}"
+                # Use subquery to apply OFFSET before counting
+                # COUNT(*) on the full set returns 1 row, which OFFSET would skip
+                sql = (
+                    f"SELECT COUNT(*) FROM ("
+                    f"SELECT 1 FROM security_events{where} "
+                    f"LIMIT -1 OFFSET ?)"
+                )
+                params.append(offset)
                 cursor = conn.execute(sql, params)
                 result = cursor.fetchone()
                 return result[0] if result else 0
@@ -201,6 +219,7 @@ class SqliteEventReader:
         group_field: str,
         since: str | None = None,
         until: str | None = None,
+        offset: int = 0,
     ) -> dict[str, int]:
         """Count events grouped by a specific field.
 
@@ -212,11 +231,13 @@ class SqliteEventReader:
             Inclusive lower bound (ISO-8601 timestamp).
         until : str, optional
             Exclusive upper bound (ISO-8601 timestamp).
+        offset : int
+            Number of results to skip (default 0).
 
         Returns
         -------
         dict[str, int]
-            Mapping of field value to event count.
+            Mapping of field value to event count after applying offset.
 
         Raises
         ------
@@ -245,11 +266,25 @@ class SqliteEventReader:
             conn = self._connect()
             try:
                 where, params = self._build_where(since=since, until=until)
-                sql = (
-                    f"SELECT {group_field}, COUNT(*) "
-                    f"FROM security_events{where} "
-                    f"GROUP BY {group_field}"
-                )
+
+                if offset == 0:
+                    # No offset: use simple GROUP BY
+                    sql = (
+                        f"SELECT {group_field}, COUNT(*) "
+                        f"FROM security_events{where} "
+                        f"GROUP BY {group_field}"
+                    )
+                else:
+                    # With offset: apply offset to individual events before grouping
+                    # Use subquery to skip 'offset' events, then group the remainder
+                    sql = (
+                        f"SELECT {group_field}, COUNT(*) FROM ("
+                        f"SELECT {group_field} FROM security_events{where} "
+                        f"LIMIT -1 OFFSET ?) "
+                        f"GROUP BY {group_field}"
+                    )
+                    params.append(offset)
+
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
                 return {row[0]: row[1] for row in rows}

@@ -95,6 +95,17 @@ def _get_request(event: SecurityEvent) -> dict[str, Any]:
     return request if isinstance(request, dict) else {}
 
 
+def _is_full_verify(event: SecurityEvent) -> bool:
+    """Check if a verify event is a full-skill verification.
+
+    Full verify events have skill=None in the request.
+    Single-skill verify events have a specific skill path or name.
+    """
+    request = _get_request(event)
+    # Full verify when skill key is absent or explicitly None
+    return request.get("skill") is None
+
+
 def _get_mode(event: SecurityEvent) -> str:
     """Extract hardening mode from details.result, fallback to parsing request.args.
 
@@ -169,13 +180,31 @@ def _summarize_hardening(events: list[SecurityEvent]) -> str:
         total = result.get("total", 0)
         failures = result.get("failures", [])
 
+        # Include fixed count from reinforce operations in compliance calculation
+        fixed_count = 0
+        for e in reinforcements:
+            if e.result == "succeeded":
+                reinf_result = _get_result(e)
+                fixed_count += reinf_result.get("fixed", 0)
+
+        # Compliance includes both passed and fixed items
+        effective_passed = passed + fixed_count
+
         if total > 0:
-            pct = passed / total * 100
+            pct = effective_passed / total * 100
             lines.append("")
             lines.append("  Latest scan result:")
-            lines.append(f"    Compliance: {passed}/{total} rules passed ({pct:.1f}%)")
+            if fixed_count > 0:
+                lines.append(
+                    f"    Compliance: {effective_passed}/{total} rules passed "
+                    f"({passed} passed + {fixed_count} fixed, {pct:.1f}%)"
+                )
+            else:
+                lines.append(
+                    f"    Compliance: {passed}/{total} rules passed ({pct:.1f}%)"
+                )
 
-            if failures:
+            if failures and fixed_count == 0:
                 lines.append(
                     "    Check system status using `agent-sec-cli harden --scan`"
                 )
@@ -334,15 +363,21 @@ def _compute_posture(
             if failures:
                 needs_attention = True
 
-    # --- Asset Verification (latest event) ---
+    # --- Asset Verification (latest FULL verify event) ---
+    # Only consider full-skill verifications (skill=None) for posture calculation
+    # Single-skill verifications should not affect overall system status
     if verify_events:
-        latest_verify = verify_events[0]
-        if latest_verify.result == "failed":
-            needs_attention = True
-        elif latest_verify.result == "succeeded":
-            result = _get_result(latest_verify)
-            if result.get("failed", 0) > 0:
+        # Find the latest full verify event
+        latest_full_verify = next(
+            (e for e in verify_events if _is_full_verify(e)), None
+        )
+        if latest_full_verify:
+            if latest_full_verify.result == "failed":
                 needs_attention = True
+            elif latest_full_verify.result == "succeeded":
+                result = _get_result(latest_full_verify)
+                if result.get("failed", 0) > 0:
+                    needs_attention = True
 
     # --- Prompt Scan (any DENY verdict) ---
     for e in prompt_scan_events:
