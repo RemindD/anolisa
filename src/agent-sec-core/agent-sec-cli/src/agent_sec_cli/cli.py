@@ -16,11 +16,37 @@ from agent_sec_cli.security_middleware.backends.hardening import (
 from agent_sec_cli.security_middleware.lifecycle import _ACTION_CATEGORY
 from agent_sec_cli.skill_ledger.cli import app as skill_ledger_app
 
+# Get version from package metadata
+try:
+    from importlib.metadata import version as get_version
+
+    __version__ = get_version("agent-sec-cli")
+except Exception:
+    __version__ = "0.3.0"  # Fallback version
+
 app = typer.Typer(
     name="agent-sec-cli",
     help="AgentSecCore unified CLI entry point",
     add_completion=True,
+    rich_markup_mode="rich",
 )
+
+
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-v",
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Main callback for version option."""
+    if version:
+        typer.echo(f"agent-sec-cli {__version__}")
+        raise typer.Exit()
 
 
 # Mount skill-ledger as a subcommand group: agent-sec-cli skill-ledger <cmd>
@@ -244,7 +270,32 @@ def _resolve_time_range(
     """Resolve since/until from either explicit values or last_hours.
 
     Ensures consistent time range handling across all query modes.
+
+    Raises
+    ------
+    ValueError
+        If since or until parameters are not valid ISO-8601 format.
     """
+    # Validate since parameter if provided
+    if since is not None:
+        try:
+            datetime.fromisoformat(since)
+        except ValueError:
+            raise ValueError(
+                f"Invalid time format for --since: {since!r}. "
+                "Expected ISO 8601 format (e.g., 2024-01-01 or 2024-01-01T12:00:00)"
+            )
+
+    # Validate until parameter if provided
+    if until is not None:
+        try:
+            datetime.fromisoformat(until)
+        except ValueError:
+            raise ValueError(
+                f"Invalid time format for --until: {until!r}. "
+                "Expected ISO 8601 format (e.g., 2024-01-01 or 2024-01-01T12:00:00)"
+            )
+
     if last_hours is not None:
         now = time.time()
         since_epoch = now - last_hours * 3600
@@ -344,8 +395,8 @@ def events(
         "--count-by",
         help="Output grouped counts as JSON object. Allowed: category, event_type, trace_id.",
     ),
-    output: str = typer.Option(
-        "table",
+    output: str | None = typer.Option(
+        None,
         "--output",
         "-o",
         help="Output format: table (default, human-readable), json, jsonl.",
@@ -370,12 +421,17 @@ def events(
         )
         raise typer.Exit(code=1)
 
-    if summary and output != "table":
+    # --summary is incompatible with ANY explicit --output format
+    if summary and output is not None:
         typer.echo(
             "Error: --summary is incompatible with --output (summary has its own format).",
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # Apply default output format if not specified
+    if output is None:
+        output = "table"
 
     if output not in _OUTPUT_FORMATS:
         typer.echo(
@@ -427,9 +483,14 @@ def events(
         if summary_hours is None and since is None and until is None:
             summary_hours = 24.0
 
-        resolved_since, resolved_until = _resolve_time_range(
-            summary_hours, since, until
-        )
+        try:
+            resolved_since, resolved_until = _resolve_time_range(
+                summary_hours, since, until
+            )
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1)
+
         events_list = reader.query(
             event_type=event_type,
             category=category,
@@ -450,25 +511,47 @@ def events(
 
     # --- count mode ---
     if count:
-        resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
+        try:
+            resolved_since, resolved_until = _resolve_time_range(
+                last_hours, since, until
+            )
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1)
+
         result = reader.count(
             event_type=event_type,
             category=category,
             since=resolved_since,
             until=resolved_until,
+            offset=offset,
         )
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
         raise typer.Exit(code=0)
 
     # --- count-by mode ---
     if count_by is not None:
-        resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
-        result = reader.count_by(count_by, since=resolved_since, until=resolved_until)
+        try:
+            resolved_since, resolved_until = _resolve_time_range(
+                last_hours, since, until
+            )
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1)
+
+        result = reader.count_by(
+            count_by, since=resolved_since, until=resolved_until, offset=offset
+        )
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
         raise typer.Exit(code=0)
 
     # --- list mode ---
-    resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
+    try:
+        resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
     events_list = reader.query(
         event_type=event_type,
         category=category,
