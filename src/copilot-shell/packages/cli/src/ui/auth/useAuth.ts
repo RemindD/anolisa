@@ -422,9 +422,9 @@ export const useAuthCommand = (
   );
 
   const openAuthDialog = useCallback(() => {
-    setShowBashOptionInAuthDialog(false);
+    setShowBashOptionInAuthDialog(showBashOptionOnStartup);
     setIsAuthDialogOpen(true);
-  }, []);
+  }, [showBashOptionOnStartup]);
 
   const handleContinueToBash = useCallback(() => {
     setAuthError(null);
@@ -450,10 +450,16 @@ export const useAuthCommand = (
 
     // Do not reset pendingAuthType here, persist the previously selected type.
     setIsAuthenticating(false);
-    setShowBashOptionInAuthDialog(false);
+    setShowBashOptionInAuthDialog(showBashOptionOnStartup);
     setIsAuthDialogOpen(true);
     setAuthError(null);
-  }, [isAuthenticating, pendingAuthType, cancelQwenAuth, config]);
+  }, [
+    isAuthenticating,
+    pendingAuthType,
+    cancelQwenAuth,
+    config,
+    showBashOptionOnStartup,
+  ]);
 
   /**
    /**
