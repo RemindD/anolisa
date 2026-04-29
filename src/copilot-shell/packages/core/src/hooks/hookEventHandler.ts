@@ -155,6 +155,7 @@ export class HookEventHandler {
     toolResponse: Record<string, unknown>,
     mcpContext?: McpToolContext,
     originalRequestName?: string,
+    toolUseId?: string,
   ): Promise<AggregatedHookResult> {
     debugLogger.info(
       `[Hook Debug] hookEventHandler.firePostToolUseEvent: tool=${toolName}`,
@@ -168,6 +169,7 @@ export class HookEventHandler {
       ...(originalRequestName && {
         original_request_name: originalRequestName,
       }),
+      ...(toolUseId && { tool_use_id: toolUseId }),
     };
 
     const context: HookEventContext = { toolName };

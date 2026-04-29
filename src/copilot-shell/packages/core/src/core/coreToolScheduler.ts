@@ -1461,6 +1461,9 @@ export class CoreToolScheduler {
                           ? toolResult.returnDisplay
                           : undefined,
                     },
+                    undefined,
+                    undefined,
+                    callId,
                   );
 
                   if (postToolOutput) {

@@ -173,6 +173,7 @@ export class HookSystem {
     toolResponse: Record<string, unknown>,
     mcpContext?: McpToolContext,
     originalRequestName?: string,
+    toolUseId?: string,
   ): Promise<PostToolUseHookOutput | undefined> {
     debugLogger.info(
       `[Hook Debug] hookSystem.firePostToolUseEvent: entering facade, tool=${toolName}`,
@@ -183,6 +184,7 @@ export class HookSystem {
       toolResponse,
       mcpContext,
       originalRequestName,
+      toolUseId,
     );
     const output = result.finalOutput
       ? (createHookOutput(

@@ -432,6 +432,7 @@ export interface PreToolUseOutput extends HookOutput {
  * PostToolUse hook input
  */
 export interface PostToolUseInput extends HookInput {
+  tool_use_id?: string; // Unique identifier for the tool use
   tool_name: string;
   tool_input: Record<string, unknown>;
   tool_response: Record<string, unknown>;

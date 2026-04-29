@@ -76,6 +76,7 @@ Fires after a tool executes. Used for result auditing, context injection, or
 hiding sensitive output from the agent.
 
 - **Input Fields**:
+  - `tool_use_id`: (`string`) Optional unique identifier for the tool use.
   - `tool_name`: (`string`)
   - `tool_input`: (`object`) The original arguments.
   - `tool_response`: (`object`) The result.
