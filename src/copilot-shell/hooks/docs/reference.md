@@ -38,15 +38,15 @@ All hooks receive these common fields via `stdin`:
 
 Most hooks support these fields in their `stdout` JSON:
 
-| Field                | Type      | Description                                                        |
-| :------------------- | :-------- | :----------------------------------------------------------------- |
-| `systemMessage`      | `string`  | Displayed immediately to the user in the terminal.                 |
-| `suppressOutput`     | `boolean` | If `true`, hides internal hook metadata from logs/telemetry.       |
-| `continue`           | `boolean` | If `false`, stops the entire agent loop immediately.               |
-| `stopReason`         | `string`  | Displayed to the user when `continue` is `false`.                  |
-| `decision`           | `string`  | `"allow"`, `"deny"` (alias `"block"`), `"ask"`, or `"approve"`.    |
-| `reason`             | `string`  | The feedback/error message provided when a `decision` is `"deny"`. |
-| `hookSpecificOutput` | `object`  | Event-specific output fields (see individual event sections).      |
+| Field                | Type      | Description                                                                                                                                              |
+| :------------------- | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `systemMessage`      | `string`  | Displayed immediately to the user in the terminal.                                                                                                       |
+| `suppressOutput`     | `boolean` | If `true`, hides internal hook metadata from logs/telemetry.                                                                                             |
+| `continue`           | `boolean` | If `false`, stops the entire agent loop immediately.                                                                                                     |
+| `stopReason`         | `string`  | Displayed to the user when `continue` is `false`.                                                                                                        |
+| `decision`           | `string`  | `"allow"`, `"deny"` (alias `"block"`), `"ask"`, or `"approve"`.                                                                                          |
+| `reason`             | `string`  | The feedback/error message used for `"deny"`/`"block"` decisions and stop-like flows. For user-visible allow/approve/ask messaging, use `systemMessage`. |
+| `hookSpecificOutput` | `object`  | Event-specific output fields (see individual event sections).                                                                                            |
 
 ---
 
@@ -64,10 +64,17 @@ and parameter rewriting.
   - `original_request_name`: (`string`) The original name if this is a tail call.
 - **Relevant Output Fields**:
   - `decision`: Set to `"deny"` (or `"block"`) to prevent tool execution.
-  - `reason`: Required if denied. Sent to the agent as a tool error.
+  - `systemMessage`: Use this for any informational or warning text that
+    should be shown to the user when execution continues, including
+    `"allow"`, `"approve"`, and `"ask"` flows.
+  - `reason`: Required if denied. Sent to the agent as a tool error. Do not
+    rely on `reason` alone for user-visible allow/ask messaging.
   - `hookSpecificOutput.tool_input`: An object that **merges with and
     overrides** the model's arguments before execution.
   - `continue`: Set to `false` to **kill the entire agent loop**.
+- **Allow/Approve/Ask note**: If you want the user to see a warning or prompt
+  while the tool is still allowed or awaiting confirmation, put that text in
+  `systemMessage`.
 - **Exit Code 2 (Block Tool)**: Prevents execution. Uses `stderr` as reason.
 
 ### `PostToolUse`

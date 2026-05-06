@@ -88,6 +88,10 @@ echo '{"decision": "allow"}'
 exit 0
 ```
 
+For `PreToolUse`, use `systemMessage` for any warning or informational text you
+want users to see on `allow`, `approve`, or `ask` paths. Reserve `reason` for
+deny or block outcomes.
+
 **Configuration:**
 
 ```json
