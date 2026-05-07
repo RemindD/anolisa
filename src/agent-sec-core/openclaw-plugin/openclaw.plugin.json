@@ -3,6 +3,9 @@
   "name": "Agent Security",
   "version": "0.3.0",
   "description": "Security hooks powered by agent-sec-cli",
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
   "extensions": ["./dist/index.js"],
   "configSchema": {
     "type": "object",

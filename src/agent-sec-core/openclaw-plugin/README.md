@@ -176,6 +176,14 @@ before_tool_call (priority 80)
 before_tool_call (priority 0)
 ```
 
+Also check the plugin is activated by gateway after openclaw **v2026.4.25**
+```
+openclaw gateway call health --params '{"probe":true}' --json | jq -e '(.plugins.loaded // []) | index("agent-sec") != null'
+```
+Expected output:
+```
+true
+```
 ---
 
 ## Testing
