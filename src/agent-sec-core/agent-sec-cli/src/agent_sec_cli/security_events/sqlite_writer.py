@@ -9,11 +9,13 @@ from pathlib import Path
 from agent_sec_cli.security_events.config import get_db_path
 from agent_sec_cli.security_events.orm_store import (
     SqliteStore,
+    is_sqlite_busy_error,
     is_sqlite_corruption_error,
     is_sqlite_schema_error,
 )
 from agent_sec_cli.security_events.repositories import SecurityEventRepository
 from agent_sec_cli.security_events.schema import SecurityEvent
+from agent_sec_cli.security_events.writer import JsonlEventWriter
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,10 +28,19 @@ class SqliteEventWriter:
         self,
         path: str | Path | None = None,
         max_age_days: int = 30,
+        busy_lost_path: str | Path | None = None,
     ) -> None:
         self._store = SqliteStore(path or get_db_path())
         self._repository = SecurityEventRepository(self._store)
         self._max_age_days = max_age_days
+        self._busy_lost_writer = (
+            JsonlEventWriter(
+                busy_lost_path,
+                error_prefix="[security_events]",
+            )
+            if busy_lost_path is not None
+            else None
+        )
 
     @property
     def _engine(self) -> Engine | None:
@@ -51,6 +62,9 @@ class SqliteEventWriter:
         try:
             self._repository.insert(event)
         except DatabaseError as exc:
+            if is_sqlite_busy_error(exc):
+                self._audit_busy_loss(event, exc, "insert")
+                return
             if not is_sqlite_corruption_error(exc):
                 if is_sqlite_schema_error(exc):
                     self._store.request_schema_repair()
@@ -60,10 +74,30 @@ class SqliteEventWriter:
                 return
             try:
                 self._repository.insert(event)
-            except Exception:  # noqa: BLE001
+            except Exception as retry_exc:  # noqa: BLE001
+                if is_sqlite_busy_error(retry_exc):
+                    self._audit_busy_loss(event, retry_exc, "corruption_retry")
                 pass
         except (SQLAlchemyError, OSError):
             self._store.dispose()
+
+    def _audit_busy_loss(
+        self,
+        event: SecurityEvent,
+        exc: Exception,
+        phase: str,
+    ) -> None:
+        """Best-effort JSONL audit for events lost after SQLite busy timeout."""
+        if self._busy_lost_writer is None:
+            return
+        self._busy_lost_writer.write(
+            {
+                "reason": "sqlite_busy",
+                "phase": phase,
+                "error": str(getattr(exc, "orig", exc)),
+                "event": event.to_dict(),
+            }
+        )
 
     def close(self) -> None:
         """Best-effort prune, WAL checkpoint, and dispose pooled connections."""

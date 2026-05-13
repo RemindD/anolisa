@@ -6,6 +6,7 @@ import sys
 import threading
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from agent_sec_cli.security_events.orm_base import Base
 from sqlalchemy import create_engine, event, inspect, text
@@ -20,11 +21,19 @@ _SQLITE_CORRUPTION_CODES = {
     sqlite3.SQLITE_CORRUPT,
     sqlite3.SQLITE_NOTADB,
 }
+_SQLITE_BUSY_CODES = {
+    sqlite3.SQLITE_BUSY,
+    sqlite3.SQLITE_LOCKED,
+}
 _SQLITE_SCHEMA_ERROR_MARKERS = (
     "database schema has changed",
     "has no column named",
     "no such column",
     "no such table",
+)
+_SQLITE_BUSY_ERROR_MARKERS = (
+    "database is locked",
+    "database table is locked",
 )
 _IDENTIFIER_RE = re.compile(r"^[a-z_]+$")
 
@@ -55,7 +64,10 @@ def create_sqlite_engine(path: Path, *, read_only: bool = False) -> Engine:
     )
 
     @event.listens_for(engine, "connect")
-    def _configure_connection(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+    def _configure_connection(
+        dbapi_connection: Any,
+        _connection_record: Any,
+    ) -> None:
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA busy_timeout=200")
@@ -217,6 +229,15 @@ def is_sqlite_corruption_error(exc: Exception) -> bool:
     return code in _SQLITE_CORRUPTION_CODES
 
 
+def is_sqlite_busy_error(exc: Exception) -> bool:
+    """Return True for SQLite busy/locked errors after the busy timeout expires."""
+    code = _sqlite_primary_error_code(exc)
+    if code in _SQLITE_BUSY_CODES:
+        return True
+    message = str(getattr(exc, "orig", exc)).lower()
+    return any(marker in message for marker in _SQLITE_BUSY_ERROR_MARKERS)
+
+
 def is_sqlite_schema_error(exc: Exception) -> bool:
     """Return True for errors that can be repaired by schema convergence."""
     code = _sqlite_primary_error_code(exc)
@@ -261,7 +282,11 @@ class SqliteStore:
         """Return True when corruption cleanup failed and writes are disabled."""
         return self._disabled
 
-    def session_factory(self) -> sessionmaker[Session] | None:
+    def session_factory(
+        self,
+        *,
+        raise_on_error: bool = False,
+    ) -> sessionmaker[Session] | None:
         """Return a lazily initialized session factory."""
         if self._disabled:
             return None
@@ -294,6 +319,8 @@ class SqliteStore:
             try:
                 self._open_session_factory(db_identity)
             except DatabaseError as exc:
+                if raise_on_error:
+                    raise
                 if self.read_only or not is_sqlite_corruption_error(exc):
                     print(
                         f"[security_events] schema init failure: {exc}",
@@ -306,12 +333,16 @@ class SqliteStore:
                 try:
                     self._open_session_factory(None)
                 except (SQLAlchemyError, OSError) as rebuild_exc:
+                    if raise_on_error:
+                        raise
                     print(
                         f"[security_events] corruption rebuild failed: {rebuild_exc}",
                         file=sys.stderr,
                     )
                     return None
             except (SQLAlchemyError, OSError) as exc:
+                if raise_on_error:
+                    raise
                 print(
                     f"[security_events] schema init failure: {exc}",
                     file=sys.stderr,
@@ -428,6 +459,7 @@ __all__ = [
     "create_sqlite_engine",
     "ensure_schema",
     "ensure_schema_if_needed",
+    "is_sqlite_busy_error",
     "is_sqlite_corruption_error",
     "is_sqlite_schema_error",
     "normalize_sqlite_path",

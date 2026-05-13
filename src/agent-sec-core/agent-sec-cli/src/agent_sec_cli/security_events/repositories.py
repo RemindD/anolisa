@@ -36,7 +36,7 @@ class SecurityEventRepository:
                 file=sys.stderr,
             )
             return False
-        session_factory = self._store.session_factory()
+        session_factory = self._store.session_factory(raise_on_error=True)
         if session_factory is None:
             return False
 

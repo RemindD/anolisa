@@ -30,6 +30,26 @@ def _make_event(
     )
 
 
+def _busy_database_error(message: str = "database is locked") -> DatabaseError:
+    class BusyError(Exception):
+        sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    return DatabaseError("INSERT", {}, BusyError(message))
+
+
+def _locked_database_error(message: str = "database table is locked") -> DatabaseError:
+    class LockedError(Exception):
+        sqlite_errorcode = sqlite3.SQLITE_LOCKED
+
+    return DatabaseError("INSERT", {}, LockedError(message))
+
+
+def _audit_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 @pytest.fixture()
 def db_path(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
@@ -242,9 +262,12 @@ class TestSqliteEventWriter:
         assert count == 100
         writer.close()
 
-    def test_concurrent_writes_from_independent_writers(self, db_path: str) -> None:
-        writer_count = 8
-        events_per_writer = 25
+    def test_concurrent_writes_from_independent_writers(
+        self, tmp_path: Path, db_path: str
+    ) -> None:
+        writer_count = 16
+        events_per_writer = 50
+        busy_lost_path = tmp_path / "test.db.busy-lost.jsonl"
         warmup_writer = SqliteEventWriter(path=db_path)
         warmup_writer.write(
             SecurityEvent(
@@ -255,7 +278,10 @@ class TestSqliteEventWriter:
             )
         )
         warmup_writer.close()
-        writers = [SqliteEventWriter(path=db_path) for _ in range(writer_count)]
+        writers = [
+            SqliteEventWriter(path=db_path, busy_lost_path=busy_lost_path)
+            for _ in range(writer_count)
+        ]
 
         def write_events(writer_id: int) -> None:
             writer = writers[writer_id]
@@ -290,8 +316,9 @@ class TestSqliteEventWriter:
         conn.close()
 
         expected = writer_count * events_per_writer
-        assert total == expected
-        assert distinct_ids == expected
+        busy_lost_count = len(_audit_records(busy_lost_path))
+        assert total + busy_lost_count == expected
+        assert distinct_ids == total
 
     def test_concurrent_cold_bootstrap_is_best_effort(
         self, db_path: str, capsys: pytest.CaptureFixture[str]
@@ -546,6 +573,77 @@ class TestSqliteEventWriter:
         writer.write(_make_event())
 
         assert calls == 2
+
+    def test_write_audits_busy_insert_loss(
+        self, tmp_path: Path, db_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        busy_lost_path = tmp_path / "test.db.busy-lost.jsonl"
+        event = _make_event(event_type="busy_insert")
+        writer = SqliteEventWriter(path=db_path, busy_lost_path=busy_lost_path)
+
+        def raise_busy(_event: SecurityEvent) -> bool:
+            raise _busy_database_error()
+
+        monkeypatch.setattr(writer._repository, "insert", raise_busy)
+
+        writer.write(event)
+
+        records = _audit_records(busy_lost_path)
+        assert len(records) == 1
+        assert records[0]["reason"] == "sqlite_busy"
+        assert records[0]["phase"] == "insert"
+        assert records[0]["event"]["event_id"] == event.event_id
+        assert "database is locked" in records[0]["error"]
+
+    def test_write_audits_busy_session_factory_loss(
+        self, tmp_path: Path, db_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        busy_lost_path = tmp_path / "test.db.busy-lost.jsonl"
+        event = _make_event(event_type="busy_session_factory")
+        writer = SqliteEventWriter(path=db_path, busy_lost_path=busy_lost_path)
+
+        def raise_locked(_db_identity: tuple[int, int] | None) -> None:
+            raise _locked_database_error()
+
+        monkeypatch.setattr(writer._store, "_open_session_factory", raise_locked)
+
+        writer.write(event)
+
+        records = _audit_records(busy_lost_path)
+        assert len(records) == 1
+        assert records[0]["reason"] == "sqlite_busy"
+        assert records[0]["phase"] == "insert"
+        assert records[0]["event"]["event_id"] == event.event_id
+        assert "database table is locked" in records[0]["error"]
+
+    def test_write_audits_busy_corruption_retry_loss(
+        self, tmp_path: Path, db_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class CorruptError(Exception):
+            sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+
+        busy_lost_path = tmp_path / "test.db.busy-lost.jsonl"
+        event = _make_event(event_type="busy_corruption_retry")
+        writer = SqliteEventWriter(path=db_path, busy_lost_path=busy_lost_path)
+        calls = 0
+
+        def corrupt_then_busy(_event: SecurityEvent) -> bool:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise DatabaseError("INSERT", {}, CorruptError())
+            raise _busy_database_error()
+
+        monkeypatch.setattr(writer._repository, "insert", corrupt_then_busy)
+        monkeypatch.setattr(writer._store, "handle_corruption", lambda _exc: None)
+
+        writer.write(event)
+
+        records = _audit_records(busy_lost_path)
+        assert len(records) == 1
+        assert records[0]["reason"] == "sqlite_busy"
+        assert records[0]["phase"] == "corruption_retry"
+        assert records[0]["event"]["event_id"] == event.event_id
 
     def test_write_disposes_on_sqlalchemy_error(
         self, db_path: str, monkeypatch: pytest.MonkeyPatch
