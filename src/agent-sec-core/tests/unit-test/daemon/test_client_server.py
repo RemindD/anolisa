@@ -7,7 +7,6 @@ import logging
 import os
 import socket
 import stat
-import sys
 import time
 from pathlib import Path
 
@@ -15,10 +14,6 @@ from agent_sec_cli.daemon.client import DaemonClient
 from agent_sec_cli.daemon.errors import (
     DaemonProtocolError,
     DaemonRuntimePathError,
-)
-from agent_sec_cli.daemon.health import (
-    build_health_snapshot,
-    create_default_registry,
 )
 from agent_sec_cli.daemon.protocol import (
     DaemonRequest,
@@ -117,8 +112,8 @@ def test_daemon_write_response_closes_writer_when_drain_is_cancelled(
 def test_daemon_server_uses_default_job_registration(monkeypatch, tmp_path: Path):
     registered_managers = []
 
-    def fake_register_default_jobs(job_manager):
-        registered_managers.append(job_manager)
+    def fake_register_default_jobs(job_manager, prompt_scan_state):
+        registered_managers.append((job_manager, prompt_scan_state))
 
     monkeypatch.setattr(
         "agent_sec_cli.daemon.server.register_default_jobs",
@@ -127,7 +122,9 @@ def test_daemon_server_uses_default_job_registration(monkeypatch, tmp_path: Path
 
     server = DaemonServer(socket_path=tmp_path / "runtime" / "daemon.sock")
 
-    assert registered_managers == [server.runtime.jobs]
+    assert registered_managers == [
+        (server.runtime.jobs, server.runtime.prompt_scan_state)
+    ]
 
 
 def test_daemon_client_calls_health_over_temp_socket(tmp_path: Path):
@@ -302,6 +299,42 @@ def test_daemon_server_rejects_oversized_handler_response(tmp_path: Path, caplog
     assert matching_logs
     assert matching_logs[-1]["ok"] is False
     assert matching_logs[-1]["error_code"] == "payload_too_large"
+
+
+def test_daemon_server_suppresses_method_access_log(tmp_path: Path, caplog):
+    caplog.set_level(logging.INFO, logger="agent-sec-core.daemon")
+
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+        registry = MethodRegistry()
+        registry.register(
+            MethodSpec(
+                method="quiet",
+                handler=lambda _request, _runtime: HandlerResult(data={"ok": True}),
+                lifecycle="test",
+                access_log=False,
+            )
+        )
+        server = DaemonServer(socket_path=socket_path, registry=registry)
+        await server.start()
+        try:
+            response = await _send_daemon_request(
+                socket_path, DaemonRequest(id="req-quiet", method="quiet")
+            )
+        finally:
+            await server.stop()
+
+        return response
+
+    response = asyncio.run(scenario())
+
+    assert response.ok is True
+    matching_logs = [
+        record
+        for record in caplog.records
+        if record.name == "agent-sec-core.daemon" and "req-quiet" in record.message
+    ]
+    assert matching_logs == []
 
 
 def test_idle_request_read_times_out_and_releases_connection(tmp_path: Path):
@@ -541,27 +574,6 @@ def test_prepare_socket_path_rejects_symlink_runtime_directory(tmp_path: Path):
         raise AssertionError("expected symlink runtime directory to fail")
 
 
-def test_health_does_not_import_heavy_modules(tmp_path: Path):
-    heavy_prefixes = (
-        "agent_sec_cli.code_scanner",
-        "agent_sec_cli.pii_checker",
-        "agent_sec_cli.prompt_scanner",
-        "agent_sec_cli.security_middleware",
-        "agent_sec_cli.skill_ledger",
-    )
-    before = _matching_modules(heavy_prefixes)
-
-    snapshot = build_health_snapshot(
-        DaemonRuntime(socket_path=tmp_path / "daemon.sock")
-    )
-    registry = create_default_registry()
-
-    assert snapshot["status"] == "ok"
-    assert snapshot["prompt_scan"]["status"] == "pending"
-    assert registry.methods() == ("daemon.health",)
-    assert _matching_modules(heavy_prefixes) == before
-
-
 def test_completion_log_is_emitted_when_inflight_request_is_cancelled(
     tmp_path: Path, caplog
 ):
@@ -668,14 +680,3 @@ async def _send_daemon_request(
     writer.close()
     await writer.wait_closed()
     return parse_response_line(line)
-
-
-def _matching_modules(prefixes: tuple[str, ...]) -> set[str]:
-    return {
-        module_name
-        for module_name in sys.modules
-        if any(
-            module_name == prefix or module_name.startswith(f"{prefix}.")
-            for prefix in prefixes
-        )
-    }

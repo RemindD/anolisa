@@ -74,7 +74,7 @@ def test_daemon_health_over_unix_socket(
 
     assert not socket_path.exists()
     assert output.returncode == 0
-    assert _has_request_log(output, "e2e-health", "daemon.health")
+    assert not _has_request_log(output, "e2e-health", "daemon.health")
 
 
 def test_daemon_uses_xdg_runtime_dir_by_default(
@@ -128,6 +128,38 @@ def test_daemon_unknown_method_returns_structured_error(
     }
     assert output.returncode == 0
     assert _has_request_log(output, "e2e-unknown", "unknown.method")
+
+
+def test_daemon_scan_prompt_returns_unavailable_until_model_ready(
+    daemon_command: list[str], tmp_path: Path
+) -> None:
+    socket_path = tmp_path / "runtime" / "daemon.sock"
+    process = _start_daemon(daemon_command, socket_path, tmp_path)
+
+    try:
+        response = _call_daemon(
+            socket_path,
+            {
+                "id": "e2e-scan-prompt-not-ready",
+                "method": "scan-prompt",
+                "params": {
+                    "text": "hello",
+                    "mode": "standard",
+                    "source": "e2e",
+                },
+            },
+        )
+    finally:
+        output = _stop_daemon(process)
+
+    assert response["id"] == "e2e-scan-prompt-not-ready"
+    assert response["ok"] is False
+    assert response["exit_code"] == 1
+    assert response["error"]["code"] == "unavailable"
+    assert "prompt scanner is not ready" in response["stderr"]
+    assert "status=pending" in response["stderr"]
+    assert output.returncode == 0
+    assert _has_request_log(output, "e2e-scan-prompt-not-ready", "scan-prompt")
 
 
 def test_daemon_returns_busy_when_connection_limit_is_exhausted(
@@ -213,6 +245,7 @@ def _start_daemon(
     env = os.environ.copy()
     env.pop("AGENT_SEC_DAEMON_SOCKET", None)
     env["AGENT_SEC_DATA_DIR"] = str(tmp_path / "data")
+    env["AGENT_SEC_DAEMON_PROMPT_PRELOAD"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
     if xdg_runtime_dir is not None:
         env["XDG_RUNTIME_DIR"] = str(xdg_runtime_dir)
@@ -355,3 +388,39 @@ def _has_request_log(output: DaemonOutput, request_id: str, method: str | None) 
         ):
             return True
     return False
+
+
+def _has_request_event(
+    tmp_path: Path,
+    event: str,
+    request_id: str,
+    method: str | None,
+) -> bool:
+    return any(
+        payload.get("event") == event
+        and payload.get("request_id") == request_id
+        and payload.get("method") == method
+        for payload in _read_daemon_log_payloads(tmp_path)
+    )
+
+
+def _has_daemon_event(tmp_path: Path, event: str) -> bool:
+    return any(
+        payload.get("event") == event for payload in _read_daemon_log_payloads(tmp_path)
+    )
+
+
+def _read_daemon_log_payloads(tmp_path: Path) -> list[dict[str, Any]]:
+    log_path = tmp_path / "data" / "daemon.jsonl"
+    if not log_path.exists():
+        return []
+
+    payloads: list[dict[str, Any]] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            payloads.append(payload)
+    return payloads

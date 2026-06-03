@@ -307,6 +307,32 @@ class TestPromptScanBackendErrorVerdict(unittest.TestCase):
         self.assertEqual(parsed["verdict"], "error")
 
 
+class TestPromptScanBackendScannerException(unittest.TestCase):
+    """execute() must convert scanner exceptions to structured error verdicts."""
+
+    def setUp(self):
+        self.backend = PromptScanBackend()
+        self.ctx = RequestContext(action="prompt_scan")
+
+    @patch("agent_sec_cli.security_middleware.backends.prompt_scan.PromptScanner")
+    def test_scan_exception_returns_error_verdict(self, MockScanner):
+        mock_scanner = MagicMock()
+        mock_scanner.scan.side_effect = RuntimeError("model exploded")
+        MockScanner.return_value = mock_scanner
+
+        result = self.backend.execute(self.ctx, text="Some text")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.error, "Scanner error: model exploded")
+        self.assertEqual(result.data["verdict"], "error")
+        self.assertEqual(result.data["summary"], "Scanner error: model exploded")
+
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["verdict"], "error")
+        self.assertEqual(parsed["summary"], "Scanner error: model exploded")
+
+
 class TestPromptScanBackendModeHandling(unittest.TestCase):
     """execute() must correctly map mode strings to ScanMode enum values."""
 

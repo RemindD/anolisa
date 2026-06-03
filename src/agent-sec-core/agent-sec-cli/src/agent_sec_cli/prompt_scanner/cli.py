@@ -1,19 +1,22 @@
 """CLI entry point for the prompt scanner (scan-prompt command)."""
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import typer
+from agent_sec_cli.correlation_context import get_current_trace_context
+from agent_sec_cli.daemon.client import DaemonClient
+from agent_sec_cli.daemon.errors import DaemonClientError
+from agent_sec_cli.daemon.protocol import DaemonResponse
 from agent_sec_cli.prompt_scanner.config import ScanMode
 from agent_sec_cli.prompt_scanner.result import Verdict
 from agent_sec_cli.prompt_scanner.scanner import PromptScanner
-from agent_sec_cli.security_middleware import invoke
 
 scanner_app = typer.Typer(
     name="scan-prompt", help="Prompt injection / jailbreak scanner"
 )
+DAEMON_REQUEST_TIMEOUT_MS = 30_000
 
 
 @scanner_app.command("warmup")
@@ -161,9 +164,9 @@ def scan_prompt(
             raise typer.Exit(code=1)
         texts = [raw]
 
-    # --- Scan (via security_middleware for unified lifecycle/audit) ---
+    # --- Scan through daemon (daemon owns prompt model runtime and audit writes) ---
     # Each text is scanned individually so that every invocation gets its own
-    # trace_id and SecurityEvent record.  This ensures precise per-input
+    # daemon request and SecurityEvent record.  This ensures precise per-input
     # auditability: when a threat is detected, the audit log pinpoints exactly
     # which input triggered it.  Batching would collapse multiple inputs into a
     # single trace_id, losing that granularity without any performance benefit:
@@ -172,32 +175,84 @@ def scan_prompt(
     # thread-safe — all inference is serialised behind _inference_lock.
     for t in texts:
         try:
-            mw_result = invoke(
-                "prompt_scan",
-                text=t,
-                mode=scan_mode,
-                source=source,
-            )
-        except Exception as exc:
-            typer.echo(
-                json.dumps(
-                    _build_error_output(f"Scanner error: {exc}"),
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            )
-            raise typer.Exit(code=0)  # exit 0: scanner ran, verdict in JSON
+            response = _call_scan_prompt_daemon(t, scan_mode.value, source)
+        except DaemonClientError as exc:
+            typer.echo(_daemon_unavailable_message(str(exc)), err=True)
+            raise typer.Exit(code=1)
+
+        if not response.ok:
+            typer.echo(response.stderr or _daemon_error_message(response), err=True)
+            raise typer.Exit(code=response.exit_code or 1)
 
         # --- Output ---
+        output_rendered = False
         if output_format == "text":
-            if not mw_result.data:
-                typer.echo(f"Error: {mw_result.error}", err=True)
-                raise typer.Exit(code=mw_result.exit_code)
-            _print_text(mw_result.data)
+            if response.data:
+                _print_text(response.data)
+                output_rendered = True
+            elif response.exit_code == 0:
+                typer.echo(f"Error: {response.stderr}", err=True)
+                raise typer.Exit(code=response.exit_code)
         else:
-            typer.echo(mw_result.stdout)
+            if response.stdout:
+                typer.echo(response.stdout)
+                output_rendered = True
+
+        if response.exit_code != 0:
+            if not output_rendered:
+                typer.echo(
+                    response.stderr
+                    or f"scan-prompt failed with exit code {response.exit_code}",
+                    err=True,
+                )
+            raise typer.Exit(code=response.exit_code)
 
     raise typer.Exit(code=0)
+
+
+def _call_scan_prompt_daemon(
+    text: str,
+    mode: str,
+    source: str,
+) -> DaemonResponse:
+    """Call the daemon scan-prompt method with CLI-resolved params."""
+    return DaemonClient(timeout_ms=DAEMON_REQUEST_TIMEOUT_MS).call(
+        "scan-prompt",
+        params={"text": text, "mode": mode, "source": source},
+        trace_context=_current_trace_context_payload(),
+        timeout_ms=DAEMON_REQUEST_TIMEOUT_MS,
+    )
+
+
+def _current_trace_context_payload() -> dict[str, str]:
+    ctx = get_current_trace_context()
+    if ctx is None:
+        return {}
+
+    payload: dict[str, str] = {}
+    for field_name in (
+        "trace_id",
+        "session_id",
+        "run_id",
+        "call_id",
+        "tool_call_id",
+    ):
+        value = getattr(ctx, field_name)
+        if value is not None:
+            payload[field_name] = value
+    return payload
+
+
+def _daemon_unavailable_message(detail: str) -> str:
+    return (
+        "Error: agent-sec daemon is unavailable for scan-prompt. " f"Detail: {detail}"
+    )
+
+
+def _daemon_error_message(response: DaemonResponse) -> str:
+    if response.error:
+        return response.error.get("message", "daemon request failed")
+    return "daemon request failed"
 
 
 def _print_text(d: dict[str, Any]) -> None:

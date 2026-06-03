@@ -19,7 +19,7 @@ def build_health_snapshot(runtime: DaemonRuntime) -> dict[str, Any]:
         "pid": os.getpid(),
         "uptime_seconds": runtime.uptime_seconds(),
         "socket": str(runtime.socket_path),
-        "prompt_scan": runtime.prompt_scan.to_dict(),
+        "prompt_scan": runtime.prompt_scan_state.to_dict(),
         "jobs": runtime.jobs.status(),
         "queues": runtime.queues.to_dict(),
     }
@@ -30,9 +30,8 @@ def health_handler(_request: DaemonRequest, runtime: DaemonRuntime) -> HandlerRe
     return HandlerResult(data=build_health_snapshot(runtime))
 
 
-def create_default_registry() -> MethodRegistry:
-    """Create the C02 daemon registry with only daemon.health registered."""
-    registry = MethodRegistry()
+def register_health_methods(registry: MethodRegistry) -> None:
+    """Register daemon health methods."""
     registry.register(
         MethodSpec(
             method="daemon.health",
@@ -40,7 +39,6 @@ def create_default_registry() -> MethodRegistry:
             lifecycle="admin",
             queue="admin",
             timeout_ms=1000,
-            access_log=True,
+            access_log=False,
         )
     )
-    return registry

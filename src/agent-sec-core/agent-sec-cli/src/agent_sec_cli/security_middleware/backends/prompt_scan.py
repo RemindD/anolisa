@@ -35,8 +35,11 @@ class PromptScanBackend(BaseBackend):
                 exit_code=1,
             )
 
-        scanner = PromptScanner(mode=scan_mode)
-        result = scanner.scan(text, source=source if source else None)
+        try:
+            scanner = PromptScanner(mode=scan_mode)
+            result = scanner.scan(text, source=source if source else None)
+        except Exception as exc:
+            return _scanner_error_result(f"Scanner error: {exc}")
 
         has_error = result.verdict == Verdict.ERROR
         d = result.to_dict()
@@ -47,3 +50,26 @@ class PromptScanBackend(BaseBackend):
             stdout=json.dumps(d, indent=2, ensure_ascii=False),
             exit_code=1 if has_error else 0,
         )
+
+
+def _scanner_error_result(message: str) -> ActionResult:
+    data = {
+        "schema_version": "1.0",
+        "ok": False,
+        "verdict": Verdict.ERROR.value,
+        "risk_level": "unknown",
+        "threat_type": "unknown",
+        "confidence": 0.0,
+        "summary": message,
+        "findings": [],
+        "layer_results": [],
+        "engine_version": "0.1.0",
+        "elapsed_ms": 0,
+    }
+    return ActionResult(
+        success=False,
+        data=data,
+        stdout=json.dumps(data, indent=2, ensure_ascii=False),
+        error=message,
+        exit_code=1,
+    )

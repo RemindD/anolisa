@@ -2,18 +2,27 @@
 
 Public API
 ----------
-- ``invoke(action, **kwargs)``  — the sole entry point
-- ``ActionResult``              — structured return type
-- ``RequestContext``             — per-call context (usually internal)
+- ``invoke(action, **kwargs)`` — CLI/local entry point with caller auto-detection
+- ``invoke_with_context(...)`` — explicit context entry point for daemon/plugin paths
+- ``ActionResult``             — structured return type
+- ``RequestContext``           — per-call context (usually internal)
 """
 
 import logging
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import PurePath
 from typing import Any
 
+from agent_sec_cli.correlation_context import (
+    TraceContext,
+    parse_trace_context_payload,
+    reset_current_trace_context,
+    set_current_trace_context,
+)
 from agent_sec_cli.security_middleware import lifecycle, router
+from agent_sec_cli.security_middleware.backends.base import BaseBackend
 from agent_sec_cli.security_middleware.context import RequestContext
 from agent_sec_cli.security_middleware.result import ActionResult
 
@@ -70,17 +79,60 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
     Raises whatever exception the backend raises (after logging it).
     """
     ctx = RequestContext(action=action, caller=_detect_caller())
-    started_at = time.perf_counter()
+    return _invoke_with_request_context(ctx, kwargs)
 
+
+def invoke_with_context(
+    action: str,
+    *,
+    caller: str,
+    trace_context: Mapping[str, Any] | TraceContext | None = None,
+    **kwargs: Any,
+) -> ActionResult:
+    """Invoke a security action with explicit daemon/plugin request context.
+
+    This entry point is intended for long-running processes, such as the daemon,
+    where caller identity and trace metadata must come from the request instead
+    of being inferred from the Python call stack or process-level CLI state.
+    """
+    token = set_current_trace_context(_coerce_trace_context(trace_context))
+    try:
+        ctx = RequestContext(action=action, caller=_normalize_caller(caller))
+        return _invoke_with_request_context(ctx, kwargs)
+    finally:
+        reset_current_trace_context(token)
+
+
+def _coerce_trace_context(
+    trace_context: Mapping[str, Any] | TraceContext | None,
+) -> TraceContext | None:
+    if trace_context is None:
+        return None
+    if isinstance(trace_context, TraceContext):
+        return trace_context
+    return parse_trace_context_payload(trace_context)
+
+
+def _normalize_caller(caller: str) -> str:
+    stripped = caller.strip()
+    return stripped if stripped else "unknown"
+
+
+def _invoke_with_request_context(
+    ctx: RequestContext,
+    kwargs: dict[str, Any],
+) -> ActionResult:
+    started_at = time.perf_counter()
     logger.debug(
         "action started",
         extra={
             "trace_id": ctx.trace_id,
-            "data": {"action": action, "caller": ctx.caller},
+            "data": {"action": ctx.action, "caller": ctx.caller},
         },
     )
+
     try:
-        backend = router.get_backend(action)
+        backend = router.get_backend(ctx.action)
     except Exception:
         duration_ms = (time.perf_counter() - started_at) * 1000
         logger.error(
@@ -89,7 +141,7 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
             extra={
                 "trace_id": ctx.trace_id,
                 "data": {
-                    "action": action,
+                    "action": ctx.action,
                     "caller": ctx.caller,
                     "duration_ms": duration_ms,
                 },
@@ -97,6 +149,15 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
         )
         raise
 
+    return _execute_action(ctx, kwargs, backend, started_at)
+
+
+def _execute_action(
+    ctx: RequestContext,
+    kwargs: dict[str, Any],
+    backend: BaseBackend,
+    started_at: float,
+) -> ActionResult:
     lifecycle.pre_action(ctx, kwargs)
 
     try:
@@ -110,7 +171,7 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
             extra={
                 "trace_id": ctx.trace_id,
                 "data": {
-                    "action": action,
+                    "action": ctx.action,
                     "caller": ctx.caller,
                     "duration_ms": duration_ms,
                 },
@@ -128,7 +189,7 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
         extra={
             "trace_id": ctx.trace_id,
             "data": {
-                "action": action,
+                "action": ctx.action,
                 "caller": ctx.caller,
                 "duration_ms": duration_ms,
                 "exit_code": result.exit_code,
@@ -138,4 +199,9 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
     return result
 
 
-__all__: list[str] = ["invoke", "ActionResult", "RequestContext"]
+__all__: list[str] = [
+    "invoke",
+    "invoke_with_context",
+    "ActionResult",
+    "RequestContext",
+]

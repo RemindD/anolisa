@@ -17,21 +17,25 @@ LOCK_FILENAME = "daemon.lock"
 
 
 @dataclass
-class PromptRuntimeState:
-    """Prompt runtime state exposed by health without initializing the model."""
+class PromptScanRuntimeState:
+    """Prompt scanner runtime state exposed by health."""
 
     status: str = "pending"
     model: str | None = None
     loaded: bool = False
     last_error: str | None = None
+    last_started_at: str | None = None
+    last_finished_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable prompt state."""
+        """Return a JSON-serializable prompt scanner state."""
         return {
             "status": self.status,
             "model": self.model,
             "loaded": self.loaded,
             "last_error": self.last_error,
+            "last_started_at": self.last_started_at,
+            "last_finished_at": self.last_finished_at,
         }
 
 
@@ -54,7 +58,9 @@ class DaemonRuntime:
     socket_path: Path
     started_monotonic: float = field(default_factory=time.monotonic)
     status: str = "ok"
-    prompt_scan: PromptRuntimeState = field(default_factory=PromptRuntimeState)
+    prompt_scan_state: PromptScanRuntimeState = field(
+        default_factory=PromptScanRuntimeState
+    )
     queues: QueueState = field(default_factory=QueueState)
     jobs: JobManager = field(default_factory=JobManager)
 

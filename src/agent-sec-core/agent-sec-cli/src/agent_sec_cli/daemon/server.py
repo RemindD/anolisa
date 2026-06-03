@@ -24,8 +24,11 @@ from agent_sec_cli.daemon.errors import (
     ResponseTooLargeError,
     ShutdownError,
 )
-from agent_sec_cli.daemon.health import create_default_registry
-from agent_sec_cli.daemon.jobs import register_default_jobs
+from agent_sec_cli.daemon.handlers.prompt_scan import (
+    register_prompt_scan_methods,
+)
+from agent_sec_cli.daemon.health import register_health_methods
+from agent_sec_cli.daemon.jobs.registry import register_default_jobs
 from agent_sec_cli.daemon.protocol import (
     DEFAULT_MAX_REQUEST_BYTES,
     DEFAULT_MAX_RESPONSE_BYTES,
@@ -49,6 +52,14 @@ DEFAULT_MAX_CONNECTIONS = 64
 DEFAULT_DRAIN_TIMEOUT_SECONDS = 2.0
 DEFAULT_REQUEST_READ_TIMEOUT_MS = 5000
 SocketIdentity = tuple[int, int]
+
+
+def create_default_registry() -> MethodRegistry:
+    """Create the default daemon method registry."""
+    registry = MethodRegistry()
+    register_health_methods(registry)
+    register_prompt_scan_methods(registry)
+    return registry
 
 
 class SingleInstanceLock:
@@ -108,7 +119,7 @@ class DaemonServer:
         self.max_connections = max_connections
         self.request_read_timeout_ms = request_read_timeout_ms
         self.runtime = DaemonRuntime(socket_path=resolved_socket_path)
-        register_default_jobs(self.runtime.jobs)
+        register_default_jobs(self.runtime.jobs, self.runtime.prompt_scan_state)
         self._server: asyncio.Server | None = None
         self._lock: SingleInstanceLock | None = None
         self._active_connections = 0
@@ -222,6 +233,7 @@ class DaemonServer:
         started = time.monotonic()
         response: DaemonResponse | None = None
         began_request = False
+        access_log = True
 
         try:
             line = await asyncio.wait_for(
@@ -232,6 +244,7 @@ class DaemonServer:
             request = parse_request_line(line, max_request_bytes=self.max_request_bytes)
             request_id = request.id
             method = request.method
+            access_log = _access_log_enabled(self.registry, method)
             self.runtime.begin_request()
             began_request = True
             response = await dispatch_request(request, self.registry, self.runtime)
@@ -253,14 +266,15 @@ class DaemonServer:
                 asyncio.CancelledError,
             ):
                 bytes_out, response = await self._write_response(writer, response)
-            _log_request_completion(
-                request_id=request_id,
-                method=method,
-                response=response,
-                started=started,
-                bytes_in=bytes_in,
-                bytes_out=bytes_out,
-            )
+            if access_log:
+                _log_request_completion(
+                    request_id=request_id,
+                    method=method,
+                    response=response,
+                    started=started,
+                    bytes_in=bytes_in,
+                    bytes_out=bytes_out,
+                )
 
     async def _write_response(
         self,
@@ -383,6 +397,7 @@ def prepare_socket_path(socket_path: Path) -> SingleInstanceLock:
 
 def configure_logging() -> None:
     """Initialize daemon diagnostic logging."""
+    # TODO: Consider rate-limited async logging for slow or blocking stdout/stderr sinks.
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
@@ -471,6 +486,13 @@ def _install_signal_handlers(stop_event: asyncio.Event) -> None:
     if hasattr(signal, "SIGHUP"):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(signal.SIGHUP, _log_sighup_noop)
+
+
+def _access_log_enabled(registry: MethodRegistry, method: str) -> bool:
+    try:
+        return registry.get(method).access_log
+    except DaemonError:
+        return True
 
 
 def _log_request_completion(
