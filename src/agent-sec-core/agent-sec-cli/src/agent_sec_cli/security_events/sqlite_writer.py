@@ -1,7 +1,7 @@
 """SQLAlchemy-backed writer for security events.
 
 Runs alongside the existing JSONL writer (dual-write pattern).
-All exceptions are swallowed — never raises to callers.
+All exceptions are swallowed; never raises to callers.
 """
 
 import logging
@@ -53,19 +53,25 @@ class SqliteEventWriter:
         return self._store.disabled
 
     def write(self, event: SecurityEvent) -> None:
-        """Insert *event* into SQLite. Fire-and-forget — never raises.
+        """Insert *event* into SQLite. Fire-and-forget; never raises.
 
-        Every silent-return branch routes through :meth:`_log_drop` so that
-        a sudden surge of dropped security events is observable in
-        ``cli.jsonl`` even when nothing reaches stderr (the per-write
-        ``print()`` was removed to keep subprocess callers' stderr clean).
+        Dropped writes that reach the repository route through
+        :meth:`_log_drop` so that a sudden surge of dropped security events is
+        observable in ``cli.jsonl`` even when nothing reaches stderr.
         """
         with self._write_lock:
             if self._store.disabled:
                 return
 
             try:
-                self._repository.insert(event)
+                inserted = self._repository.insert(event)
+                if not inserted:
+                    self._log_drop(
+                        event,
+                        RuntimeError("sqlite write was skipped"),
+                        "insert",
+                    )
+                    return
             except DatabaseError as exc:
                 if _is_sqlite_busy_error(exc):
                     self._log_drop(event, exc, "insert", busy=True)
@@ -94,6 +100,8 @@ class SqliteEventWriter:
             except (SQLAlchemyError, OSError) as exc:
                 self._log_drop(event, exc, "io")
                 self._store.dispose()
+            except Exception as exc:  # noqa: BLE001
+                self._log_drop(event, exc, "insert")
 
     def _log_drop(
         self,

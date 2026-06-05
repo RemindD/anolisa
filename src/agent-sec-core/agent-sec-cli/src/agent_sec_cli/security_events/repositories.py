@@ -44,11 +44,7 @@ class SecurityEventRepository:
         """Insert an event. Returns False for invalid or skipped writes."""
         try:
             values = self._event_values(event)
-        except (ValueError, TypeError) as exc:
-            print(
-                f"[security_events] invalid event params: {exc}",
-                file=sys.stderr,
-            )
+        except (ValueError, TypeError):
             return False
         session_factory = self._store.session_factory(raise_on_error=True)
         if session_factory is None:

@@ -1,11 +1,9 @@
 """Unit tests for security_events.sqlite_writer — SqliteEventWriter."""
 
-import io
 import json
 import logging
 import sqlite3
 import stat
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -55,8 +53,13 @@ def db_path(tmp_path: Path) -> str:
 
 
 class TestSqliteEventWriter:
-    def test_write_with_invalid_timestamp(self, db_path: str) -> None:
-        """Verify that invalid timestamps are caught and logged to stderr."""
+    def test_write_with_invalid_timestamp(
+        self,
+        db_path: str,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Invalid timestamps are dropped without writing to stderr."""
         writer = SqliteEventWriter(path=db_path)
 
         # Create event with malformed timestamp
@@ -67,26 +70,32 @@ class TestSqliteEventWriter:
             timestamp="not-a-valid-timestamp",
         )
 
-        # Capture stderr
-        old_stderr = sys.stderr
-        sys.stderr = io.StringIO()
-
-        try:
+        with caplog.at_level(logging.WARNING, logger=SQLITE_WRITER_LOGGER):
             writer.write(evt)
-            stderr_output = sys.stderr.getvalue()
-        finally:
-            sys.stderr = old_stderr
 
-        # Should print warning to stderr
-        assert "invalid event params" in stderr_output
+        assert capsys.readouterr().err == ""
+        matching = [
+            record
+            for record in caplog.records
+            if record.name == SQLITE_WRITER_LOGGER
+            and record.message == "sqlite write dropped security event"
+        ]
+        assert len(matching) == 1
+        assert matching[0].data["phase"] == "insert"
+        assert matching[0].data["event_id"] == evt.event_id
 
         # DB file should not be created since write fails before connection
         assert not Path(db_path).exists()
 
         writer.close()
 
-    def test_write_with_non_serializable_details(self, db_path: str) -> None:
-        """Verify that non-serializable details are caught and logged."""
+    def test_write_with_non_serializable_details(
+        self,
+        db_path: str,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Non-serializable details are dropped without writing to stderr."""
         writer = SqliteEventWriter(path=db_path)
 
         # Create event with non-serializable details (custom object)
@@ -99,18 +108,19 @@ class TestSqliteEventWriter:
             details={"obj": CustomObject()},  # json.dumps will fail
         )
 
-        # Capture stderr
-        old_stderr = sys.stderr
-        sys.stderr = io.StringIO()
-
-        try:
+        with caplog.at_level(logging.WARNING, logger=SQLITE_WRITER_LOGGER):
             writer.write(evt)
-            stderr_output = sys.stderr.getvalue()
-        finally:
-            sys.stderr = old_stderr
 
-        # Should print warning to stderr
-        assert "invalid event params" in stderr_output
+        assert capsys.readouterr().err == ""
+        matching = [
+            record
+            for record in caplog.records
+            if record.name == SQLITE_WRITER_LOGGER
+            and record.message == "sqlite write dropped security event"
+        ]
+        assert len(matching) == 1
+        assert matching[0].data["phase"] == "insert"
+        assert matching[0].data["event_id"] == evt.event_id
 
         # DB file should not be created since write fails before connection
         assert not Path(db_path).exists()
@@ -225,6 +235,34 @@ class TestSqliteEventWriter:
         writer = SqliteEventWriter(path=invalid_path)
         # Should not raise
         writer.write(_make_event())
+
+    def test_write_swallows_unexpected_insert_exception(
+        self,
+        db_path: str,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        event = _make_event(event_type="unexpected_insert_error")
+        writer = SqliteEventWriter(path=db_path)
+
+        def raise_runtime_error(_event: SecurityEvent) -> bool:
+            raise RuntimeError("unexpected insert failure")
+
+        monkeypatch.setattr(writer._repository, "insert", raise_runtime_error)
+
+        with caplog.at_level(logging.WARNING, logger=SQLITE_WRITER_LOGGER):
+            writer.write(event)
+
+        matching = [
+            record
+            for record in caplog.records
+            if record.name == SQLITE_WRITER_LOGGER
+            and record.message == "sqlite write dropped security event"
+        ]
+        assert len(matching) == 1
+        assert matching[0].data["phase"] == "insert"
+        assert matching[0].data["event_id"] == event.event_id
+        assert matching[0].data["error_type"] == "RuntimeError"
 
     def test_insert_or_ignore_dedup(self, db_path: str) -> None:
         writer = SqliteEventWriter(path=db_path)
