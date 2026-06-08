@@ -6,13 +6,11 @@ from unittest.mock import MagicMock, patch
 from agent_sec_cli.correlation_context import (
     TraceContext,
     clear_process_trace_context,
-    get_current_trace_context,
     init_process_trace_context,
 )
 from agent_sec_cli.security_middleware import (
     _detect_caller,
     invoke,
-    invoke_with_context,
 )
 from agent_sec_cli.security_middleware.result import ActionResult
 
@@ -67,6 +65,42 @@ class TestInvoke(unittest.TestCase):
         _, call_kwargs = mock_backend.execute.call_args
         self.assertEqual(call_kwargs["command"], "ls")
         self.assertEqual(call_kwargs["cwd"], "/tmp")
+
+    @patch("agent_sec_cli.security_middleware.router.get_backend")
+    def test_invoke_uses_explicit_caller(self, mock_get_backend):
+        mock_backend = MagicMock()
+        mock_backend.execute.return_value = ActionResult(success=True)
+        mock_get_backend.return_value = mock_backend
+
+        invoke("prompt_scan", caller="daemon", text="hello")
+
+        ctx = mock_backend.execute.call_args.args[0]
+        _, call_kwargs = mock_backend.execute.call_args
+        self.assertEqual(ctx.caller, "daemon")
+        self.assertNotIn("caller", call_kwargs)
+
+    @patch("agent_sec_cli.security_middleware.router.get_backend")
+    @patch("agent_sec_cli.security_middleware.lifecycle.post_action")
+    @patch("agent_sec_cli.security_middleware.lifecycle.pre_action")
+    def test_invoke_logs_action_started_at_debug(
+        self,
+        mock_pre,
+        mock_post,
+        mock_get_backend,
+    ):
+        mock_backend = MagicMock()
+        mock_backend.execute.return_value = ActionResult(success=True)
+        mock_get_backend.return_value = mock_backend
+
+        with self.assertLogs("agent_sec_cli.security_middleware", level="DEBUG") as cm:
+            invoke("code_scan", code="safe")
+
+        record = cm.records[0]
+        self.assertEqual(record.levelname, "DEBUG")
+        self.assertEqual(record.message, "action started")
+        self.assertEqual(record.data, {"action": "code_scan", "caller": "unknown"})
+        self.assertIsInstance(record.trace_id, str)
+        self.assertTrue(record.trace_id)
 
     def test_invoke_unknown_action_raises(self):
         with self.assertLogs("agent_sec_cli.security_middleware", level="ERROR") as cm:
@@ -193,61 +227,32 @@ class TestInvoke(unittest.TestCase):
         self.assertEqual(cm.records[0].data["duration_ms"], 2500)
 
     @patch("agent_sec_cli.security_middleware.router.get_backend")
-    @patch("agent_sec_cli.security_middleware.lifecycle.post_action")
-    @patch("agent_sec_cli.security_middleware.lifecycle.pre_action")
-    def test_invoke_with_context_uses_explicit_caller_and_trace_context(
+    def test_invoke_uses_current_trace_context(
         self,
-        mock_pre,
-        mock_post,
         mock_get_backend,
     ):
+        init_process_trace_context(
+            TraceContext(
+                trace_id="trace-1",
+                session_id="session-1",
+                run_id="run-1",
+                call_id="call-1",
+                tool_call_id="tool-1",
+            )
+        )
         mock_backend = MagicMock()
         mock_backend.execute.return_value = ActionResult(success=True)
         mock_get_backend.return_value = mock_backend
 
-        result = invoke_with_context(
-            "prompt_scan",
-            caller="daemon",
-            trace_context={
-                "traceId": "trace-1",
-                "session_id": "session-1",
-                "runId": "run-1",
-                "call_id": "call-1",
-                "toolCallId": "tool-1",
-            },
-            text="hello",
-        )
+        invoke("prompt_scan", text="hello")
 
-        self.assertTrue(result.success)
         ctx = mock_backend.execute.call_args.args[0]
         self.assertEqual(ctx.action, "prompt_scan")
-        self.assertEqual(ctx.caller, "daemon")
         self.assertEqual(ctx.trace_id, "trace-1")
         self.assertEqual(ctx.session_id, "session-1")
         self.assertEqual(ctx.run_id, "run-1")
         self.assertEqual(ctx.call_id, "call-1")
         self.assertEqual(ctx.tool_call_id, "tool-1")
-        mock_pre.assert_called_once()
-        mock_post.assert_called_once()
-
-    @patch("agent_sec_cli.security_middleware.router.get_backend")
-    def test_invoke_with_context_suppresses_process_trace_context(
-        self,
-        mock_get_backend,
-    ):
-        init_process_trace_context(TraceContext(session_id="process-session"))
-        mock_backend = MagicMock()
-        mock_backend.execute.return_value = ActionResult(success=True)
-        mock_get_backend.return_value = mock_backend
-
-        invoke_with_context("prompt_scan", caller="daemon", text="hello")
-
-        ctx = mock_backend.execute.call_args.args[0]
-        self.assertIsNone(ctx.session_id)
-        self.assertEqual(
-            get_current_trace_context(),
-            TraceContext(session_id="process-session"),
-        )
 
 
 if __name__ == "__main__":

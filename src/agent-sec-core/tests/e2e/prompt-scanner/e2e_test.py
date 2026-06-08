@@ -23,8 +23,10 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import List, Tuple
 
 import pytest
@@ -44,15 +46,28 @@ def _run_scan(
     mode: str = "fast",
     fmt: str = "json",
     extra_args: List[str] | None = None,
+    top_level_args: List[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run ``agent-sec-cli scan-prompt`` and return CompletedProcess."""
+    top_level = [] if top_level_args is None else top_level_args
     if _CLI_BIN:
-        cmd = [_CLI_BIN, "scan-prompt", "--text", text, "--mode", mode, "--format", fmt]
+        cmd = [
+            _CLI_BIN,
+            *top_level,
+            "scan-prompt",
+            "--text",
+            text,
+            "--mode",
+            mode,
+            "--format",
+            fmt,
+        ]
     else:
         cmd = [
             sys.executable,
             "-m",
             "agent_sec_cli.cli",
+            *top_level,
             "scan-prompt",
             "--text",
             text,
@@ -76,6 +91,30 @@ def _run_scan(
     if proc.stderr:
         print(f"[stderr] {proc.stderr[:200]}")
     return proc
+
+
+def _run_events(trace_id: str) -> subprocess.CompletedProcess:
+    """Run ``agent-sec-cli events`` for a trace id and return CompletedProcess."""
+    if _CLI_BIN:
+        cmd = [_CLI_BIN, "events", "--trace-id", trace_id, "--output", "json"]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "agent_sec_cli.cli",
+            "events",
+            "--trace-id",
+            trace_id,
+            "--output",
+            "json",
+        ]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=os.environ.copy(),
+    )
 
 
 def _parse_result(proc: subprocess.CompletedProcess) -> dict:
@@ -138,6 +177,64 @@ def _stable_success_contract(result: dict) -> dict:
     }
 
 
+def _read_daemon_log_payloads() -> list[dict]:
+    """Read daemon diagnostic JSONL payloads from the active e2e data dir."""
+    log_path = Path(os.environ["AGENT_SEC_DATA_DIR"]) / "daemon.jsonl"
+    if not log_path.exists():
+        return []
+
+    payloads = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            payloads.append(payload)
+    return payloads
+
+
+def _wait_for_daemon_trace_log(trace_context: dict[str, str]) -> dict:
+    """Return the daemon completion log for *trace_context*."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        for payload in _read_daemon_log_payloads():
+            data = payload.get("data", {})
+            if (
+                payload.get("event") == "daemon_request_completed"
+                and isinstance(data, dict)
+                and data.get("method") == "scan-prompt"
+                and all(
+                    payload.get(key) == value for key, value in trace_context.items()
+                )
+            ):
+                return payload
+        time.sleep(0.1)
+    raise AssertionError(
+        "daemon completion log did not include trace context " f"{trace_context!r}"
+    )
+
+
+def _wait_for_security_event(trace_context: dict[str, str]) -> dict:
+    """Return a security event matching *trace_context*."""
+    deadline = time.monotonic() + 5
+    trace_id = trace_context["trace_id"]
+    last_output = ""
+    while time.monotonic() < deadline:
+        proc = _run_events(trace_id)
+        last_output = proc.stdout or proc.stderr
+        if proc.returncode == 0:
+            events = json.loads(proc.stdout)
+            for event in events:
+                if all(event.get(key) == value for key, value in trace_context.items()):
+                    return event
+        time.sleep(0.1)
+    raise AssertionError(
+        "security events query did not include trace context "
+        f"{trace_context!r}; last_output={last_output!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A. Basic functionality
 # ---------------------------------------------------------------------------
@@ -190,7 +287,43 @@ class TestBasicScan:
 
 
 # ---------------------------------------------------------------------------
-# B. Rule coverage — key rules exercised via CLI
+# B. Trace context propagation
+# ---------------------------------------------------------------------------
+
+
+class TestTraceContextPropagation:
+    """Verify CLI trace context reaches daemon logs and security events."""
+
+    def test_trace_context_reaches_daemon_logs_and_security_events(self) -> None:
+        trace_context = {
+            "trace_id": "e2e-scan-prompt-trace",
+            "session_id": "e2e-scan-prompt-session",
+            "run_id": "e2e-scan-prompt-run",
+            "call_id": "e2e-scan-prompt-call",
+            "tool_call_id": "e2e-scan-prompt-tool",
+        }
+
+        proc = _run_scan(
+            "Hello trace context propagation",
+            mode="fast",
+            fmt="json",
+            top_level_args=["--trace-context", json.dumps(trace_context)],
+            extra_args=["--source", "e2e_trace_context"],
+        )
+        result = _parse_result(proc)
+        assert result["verdict"] == "pass"
+
+        daemon_log = _wait_for_daemon_trace_log(trace_context)
+        assert daemon_log["ok"] is True
+        assert daemon_log["exit_code"] == 0
+
+        event = _wait_for_security_event(trace_context)
+        assert event["event_type"] == "prompt_scan"
+        assert event["category"] == "prompt_scan"
+
+
+# ---------------------------------------------------------------------------
+# C. Rule coverage — key rules exercised via CLI
 # ---------------------------------------------------------------------------
 
 # Each entry: (prompt_text, expected_verdict_set, description)
@@ -366,7 +499,7 @@ def test_rule_coverage_via_cli(
 
 
 # ---------------------------------------------------------------------------
-# C. Mode variants
+# D. Mode variants
 # ---------------------------------------------------------------------------
 
 
@@ -402,7 +535,7 @@ class TestModeVariants:
 
 
 # ---------------------------------------------------------------------------
-# D. JSON output format validation
+# E. JSON output format validation
 # ---------------------------------------------------------------------------
 
 
@@ -503,7 +636,7 @@ class TestJsonOutputFormat:
 
 
 # ---------------------------------------------------------------------------
-# E. Error handling
+# F. Error handling
 # ---------------------------------------------------------------------------
 
 

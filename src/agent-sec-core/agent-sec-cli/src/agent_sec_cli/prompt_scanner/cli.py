@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from agent_sec_cli.correlation_context import get_current_trace_context
+from agent_sec_cli.correlation_context import (
+    get_current_trace_context,
+    trace_context_to_payload,
+)
 from agent_sec_cli.daemon.client import DaemonClient
 from agent_sec_cli.daemon.env import daemon_disabled
 from agent_sec_cli.daemon.protocol import DaemonResponse
@@ -233,7 +236,8 @@ def _call_scan_prompt_daemon(
     return DaemonClient(timeout_ms=DAEMON_REQUEST_TIMEOUT_MS).call(
         "scan-prompt",
         params={"text": text, "mode": mode, "source": source},
-        trace_context=_current_trace_context_payload(),
+        trace_context=trace_context_to_payload(get_current_trace_context()),
+        caller="cli",
         timeout_ms=DAEMON_REQUEST_TIMEOUT_MS,
     )
 
@@ -243,23 +247,10 @@ def _should_use_daemon() -> bool:
     return not daemon_disabled()
 
 
-def _current_trace_context_payload() -> dict[str, str]:
-    ctx = get_current_trace_context()
-    if ctx is None:
-        return {}
-
-    payload: dict[str, str] = {}
-    for field_name in (
-        "trace_id",
-        "session_id",
-        "run_id",
-        "call_id",
-        "tool_call_id",
-    ):
-        value = getattr(ctx, field_name)
-        if value is not None:
-            payload[field_name] = value
-    return payload
+def _daemon_unavailable_message(detail: str) -> str:
+    return (
+        "Error: agent-sec daemon is unavailable for scan-prompt. " f"Detail: {detail}"
+    )
 
 
 def _daemon_error_message(response: DaemonResponse) -> str:

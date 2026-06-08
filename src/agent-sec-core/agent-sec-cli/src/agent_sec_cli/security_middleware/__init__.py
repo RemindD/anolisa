@@ -2,8 +2,7 @@
 
 Public API
 ----------
-- ``invoke(action, **kwargs)`` — CLI/local entry point with caller auto-detection
-- ``invoke_with_context(...)`` — explicit context entry point for daemon/plugin paths
+- ``invoke(action, caller=None, **kwargs)`` — entry point with caller attribution
 - ``ActionResult``             — structured return type
 - ``RequestContext``           — per-call context (usually internal)
 """
@@ -11,16 +10,9 @@ Public API
 import logging
 import sys
 import time
-from collections.abc import Mapping
 from pathlib import PurePath
 from typing import Any
 
-from agent_sec_cli.correlation_context import (
-    TraceContext,
-    parse_trace_context_payload,
-    reset_current_trace_context,
-    set_current_trace_context,
-)
 from agent_sec_cli.security_middleware import lifecycle, router
 from agent_sec_cli.security_middleware.backends.base import BaseBackend
 from agent_sec_cli.security_middleware.context import RequestContext
@@ -63,7 +55,7 @@ def _detect_caller() -> str:
 # ---------------------------------------------------------------------------
 
 
-def invoke(action: str, **kwargs: Any) -> ActionResult:
+def invoke(action: str, *, caller: str | None = None, **kwargs: Any) -> ActionResult:
     """Sole public entry point for all security capabilities.
 
     1. Builds a :class:`RequestContext` (auto ``trace_id``, ``timestamp``).
@@ -78,44 +70,8 @@ def invoke(action: str, **kwargs: Any) -> ActionResult:
 
     Raises whatever exception the backend raises (after logging it).
     """
-    ctx = RequestContext(action=action, caller=_detect_caller())
+    ctx = RequestContext(action=action, caller=caller or _detect_caller())
     return _invoke_with_request_context(ctx, kwargs)
-
-
-def invoke_with_context(
-    action: str,
-    *,
-    caller: str,
-    trace_context: Mapping[str, Any] | TraceContext | None = None,
-    **kwargs: Any,
-) -> ActionResult:
-    """Invoke a security action with explicit daemon/plugin request context.
-
-    This entry point is intended for long-running processes, such as the daemon,
-    where caller identity and trace metadata must come from the request instead
-    of being inferred from the Python call stack or process-level CLI state.
-    """
-    token = set_current_trace_context(_coerce_trace_context(trace_context))
-    try:
-        ctx = RequestContext(action=action, caller=_normalize_caller(caller))
-        return _invoke_with_request_context(ctx, kwargs)
-    finally:
-        reset_current_trace_context(token)
-
-
-def _coerce_trace_context(
-    trace_context: Mapping[str, Any] | TraceContext | None,
-) -> TraceContext | None:
-    if trace_context is None:
-        return None
-    if isinstance(trace_context, TraceContext):
-        return trace_context
-    return parse_trace_context_payload(trace_context)
-
-
-def _normalize_caller(caller: str) -> str:
-    stripped = caller.strip()
-    return stripped if stripped else "unknown"
 
 
 def _invoke_with_request_context(
@@ -134,19 +90,7 @@ def _invoke_with_request_context(
     try:
         backend = router.get_backend(ctx.action)
     except Exception:
-        duration_ms = (time.perf_counter() - started_at) * 1000
-        logger.error(
-            "action routing failed",
-            exc_info=True,
-            extra={
-                "trace_id": ctx.trace_id,
-                "data": {
-                    "action": ctx.action,
-                    "caller": ctx.caller,
-                    "duration_ms": duration_ms,
-                },
-            },
-        )
+        _log_action_error(ctx, started_at, "action routing failed")
         raise
 
     return _execute_action(ctx, kwargs, backend, started_at)
@@ -164,23 +108,10 @@ def _execute_action(
         result = backend.execute(ctx, **kwargs)
     except Exception as exc:
         lifecycle.on_error(ctx, exc, kwargs, backend)
-        duration_ms = (time.perf_counter() - started_at) * 1000
-        logger.error(
-            "backend raised an exception",
-            exc_info=True,
-            extra={
-                "trace_id": ctx.trace_id,
-                "data": {
-                    "action": ctx.action,
-                    "caller": ctx.caller,
-                    "duration_ms": duration_ms,
-                },
-            },
-        )
+        _log_action_error(ctx, started_at, "backend raised an exception")
         raise
 
     lifecycle.post_action(ctx, result, kwargs, backend)
-    duration_ms = (time.perf_counter() - started_at) * 1000
     log_level = logging.INFO if result.exit_code == 0 else logging.WARNING
     logger.log(
         log_level,
@@ -191,7 +122,7 @@ def _execute_action(
             "data": {
                 "action": ctx.action,
                 "caller": ctx.caller,
-                "duration_ms": duration_ms,
+                "duration_ms": _duration_ms(started_at),
                 "exit_code": result.exit_code,
             },
         },
@@ -199,9 +130,31 @@ def _execute_action(
     return result
 
 
+def _log_action_error(
+    ctx: RequestContext,
+    started_at: float,
+    message: str,
+) -> None:
+    logger.error(
+        message,
+        exc_info=True,
+        extra={
+            "trace_id": ctx.trace_id,
+            "data": {
+                "action": ctx.action,
+                "caller": ctx.caller,
+                "duration_ms": _duration_ms(started_at),
+            },
+        },
+    )
+
+
+def _duration_ms(started_at: float) -> float:
+    return (time.perf_counter() - started_at) * 1000
+
+
 __all__: list[str] = [
     "invoke",
-    "invoke_with_context",
     "ActionResult",
     "RequestContext",
 ]

@@ -89,18 +89,18 @@ async def dispatch_request(
             timeout=timeout_ms / 1000,
         )
         return success_response(
-            request.id,
+            request.request_id,
             data=result.data,
             stdout=result.stdout,
             stderr=result.stderr,
             exit_code=result.exit_code,
         )
     except asyncio.TimeoutError:
-        return error_response(request.id, DaemonTimeoutError(timeout_ms))
+        return error_response(request.request_id, DaemonTimeoutError(timeout_ms))
     except DaemonError as exc:
-        return error_response(request.id, exc)
+        return error_response(request.request_id, exc)
     except Exception:
-        return error_response(request.id, InternalDaemonError())
+        return error_response(request.request_id, InternalDaemonError())
 
 
 async def _invoke_handler(

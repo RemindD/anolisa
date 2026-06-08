@@ -69,7 +69,7 @@ def _mock_daemon_call(result: ScanResult):
     """Context manager: patch daemon scan-prompt call to return *result*."""
     d = result.to_dict()
     daemon_response = DaemonResponse(
-        id="req-prompt",
+        request_id="req-prompt",
         ok=True,
         data=d,
         stdout=json.dumps(d, indent=2, ensure_ascii=False),
@@ -464,7 +464,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
         self,
     ) -> None:
         daemon_response = DaemonResponse(
-            id="req-prompt",
+            request_id="req-prompt",
             ok=False,
             stderr="prompt scanner is not ready: status=loading",
             exit_code=1,
@@ -544,7 +544,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
     def test_daemon_action_nonzero_exit_outputs_json_before_exit(self) -> None:
         data = _build_error_output("Scanner error: model exploded")
         daemon_response = DaemonResponse(
-            id="req-prompt",
+            request_id="req-prompt",
             ok=True,
             data=data,
             stdout=json.dumps(data, indent=2, ensure_ascii=False),
@@ -569,7 +569,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
     def test_daemon_action_nonzero_exit_outputs_text_before_exit(self) -> None:
         data = _build_error_output("Scanner error: model exploded")
         daemon_response = DaemonResponse(
-            id="req-prompt",
+            request_id="req-prompt",
             ok=True,
             data=data,
             stdout="{}",
@@ -592,7 +592,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
 
     def test_daemon_action_nonzero_exit_without_output_returns_error_json(self) -> None:
         daemon_response = DaemonResponse(
-            id="req-prompt",
+            request_id="req-prompt",
             ok=True,
             data={},
             stdout="",
@@ -627,7 +627,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
         )
         mock_client = mock_client_cls.return_value
         mock_client.call.return_value = DaemonResponse(
-            id="req-prompt",
+            request_id="req-prompt",
             ok=True,
             data={},
             stdout="{}",
@@ -645,7 +645,37 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
                 "call_id": "call-1",
                 "tool_call_id": "tool-1",
             },
+            caller="cli",
             timeout_ms=30_000,
+        )
+
+    @patch("agent_sec_cli.prompt_scanner.cli.DaemonClient")
+    def test_daemon_call_uses_canonical_trace_context_payload(
+        self, mock_client_cls
+    ) -> None:
+        init_process_trace_context(
+            TraceContext(
+                trace_id=" trace-1 ",
+                session_id="   ",
+                run_id="run-1",
+            )
+        )
+        mock_client = mock_client_cls.return_value
+        mock_client.call.return_value = DaemonResponse(
+            request_id="req-prompt",
+            ok=True,
+            data={},
+            stdout="{}",
+        )
+
+        _call_scan_prompt_daemon("hello", "standard", "user_input")
+
+        self.assertEqual(
+            mock_client.call.call_args.kwargs["trace_context"],
+            {
+                "trace_id": "trace-1",
+                "run_id": "run-1",
+            },
         )
 
 

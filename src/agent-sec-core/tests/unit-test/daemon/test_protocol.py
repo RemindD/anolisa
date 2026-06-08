@@ -1,6 +1,7 @@
 """Tests for daemon protocol parsing and dispatch."""
 
 import asyncio
+import uuid
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from agent_sec_cli.daemon.protocol import (
     DaemonRequest,
     NDJSONFrameParser,
     parse_request_line,
+    request_to_payload,
 )
 from agent_sec_cli.daemon.registry import (
     HandlerResult,
@@ -33,12 +35,17 @@ def test_parse_request_rejects_non_object_request():
 def test_frame_parser_handles_partial_and_coalesced_lines():
     parser = NDJSONFrameParser(max_frame_bytes=1024)
 
-    assert parser.feed(b'{"id":"req-1"') == []
-    frames = parser.feed(
-        b',"method":"daemon.health"}\n{"id":"req-2","method":"daemon.health"}\n'
-    )
+    assert parser.feed(b'{"method":"daemon.health"') == []
+    frames = parser.feed(b'}\n{"method":"daemon.health"}\n')
+    requests = [parse_request_line(frame) for frame in frames]
 
-    assert [parse_request_line(frame).id for frame in frames] == ["req-1", "req-2"]
+    assert [request.method for request in requests] == [
+        "daemon.health",
+        "daemon.health",
+    ]
+    assert requests[0].request_id != requests[1].request_id
+    uuid.UUID(requests[0].request_id)
+    uuid.UUID(requests[1].request_id)
 
 
 def test_frame_parser_rejects_oversized_payload():
@@ -51,10 +58,54 @@ def test_frame_parser_rejects_oversized_payload():
 def test_parse_request_generates_missing_request_id():
     request = parse_request_line(b'{"method":"daemon.health"}\n')
 
-    assert request.id.startswith("daemon-")
+    uuid.UUID(request.request_id)
     assert request.method == "daemon.health"
     assert request.params == {}
     assert request.trace_context == {}
+    assert request.caller is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"id":"req-1","method":"daemon.health"}\n',
+        b'{"request_id":"req-1","method":"daemon.health"}\n',
+    ],
+)
+def test_parse_request_ignores_caller_provided_request_id(payload: bytes):
+    request = parse_request_line(payload)
+
+    assert request.request_id != "req-1"
+    uuid.UUID(request.request_id)
+
+
+def test_parse_request_accepts_caller():
+    request = parse_request_line(b'{"method":"scan-prompt","caller":" cli "}\n')
+
+    assert request.caller == "cli"
+
+
+@pytest.mark.parametrize("caller", ['"   "', "42", "false"])
+def test_parse_request_ignores_invalid_optional_caller(caller: str):
+    request = parse_request_line(
+        f'{{"method":"scan-prompt","caller":{caller}}}\n'.encode()
+    )
+
+    assert request.caller is None
+
+
+def test_request_to_payload_includes_caller_when_present():
+    payload = request_to_payload(
+        DaemonRequest(
+            method="scan-prompt",
+            request_id="req-1",
+            caller="cli",
+        )
+    )
+
+    assert "id" not in payload
+    assert "request_id" not in payload
+    assert payload["caller"] == "cli"
 
 
 def test_parse_request_accepts_timeout_ms_at_max():
@@ -75,7 +126,10 @@ def test_parse_request_rejects_timeout_ms_above_max():
 
 def test_dispatch_rejects_unknown_method(tmp_path: Path):
     async def scenario():
-        request = DaemonRequest(id="req-unknown", method="unknown.method")
+        request = DaemonRequest(
+            method="unknown.method",
+            request_id="req-unknown",
+        )
         response = await dispatch_request(
             request,
             MethodRegistry(),
@@ -85,7 +139,7 @@ def test_dispatch_rejects_unknown_method(tmp_path: Path):
 
     response = asyncio.run(scenario())
 
-    assert response.id == "req-unknown"
+    assert response.request_id == "req-unknown"
     assert response.ok is False
     assert response.error == {
         "code": "unknown_method",
@@ -110,7 +164,11 @@ def test_dispatch_applies_request_timeout(tmp_path: Path):
                 timeout_ms=1000,
             )
         )
-        request = DaemonRequest(id="req-timeout", method="slow", timeout_ms=1)
+        request = DaemonRequest(
+            method="slow",
+            request_id="req-timeout",
+            timeout_ms=1,
+        )
         response = await dispatch_request(
             request,
             registry,
@@ -120,7 +178,7 @@ def test_dispatch_applies_request_timeout(tmp_path: Path):
 
     response = asyncio.run(scenario())
 
-    assert response.id == "req-timeout"
+    assert response.request_id == "req-timeout"
     assert response.ok is False
     assert response.error == {
         "code": "timeout",

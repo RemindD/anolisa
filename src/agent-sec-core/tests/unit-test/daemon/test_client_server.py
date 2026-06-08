@@ -9,14 +9,25 @@ import socket
 import stat
 import sys
 import time
+import uuid
 from pathlib import Path
 
+from agent_sec_cli.correlation_context import (
+    TraceContext,
+    clear_invocation_context_for_tests,
+    get_current_trace_context,
+    init_invocation_context,
+)
 from agent_sec_cli.daemon.client import DaemonClient
 from agent_sec_cli.daemon.errors import (
     DaemonProtocolError,
     DaemonRuntimePathError,
 )
 from agent_sec_cli.daemon.health import build_health_snapshot
+from agent_sec_cli.daemon.logging import (
+    reset_daemon_diagnostic_logging_for_tests,
+    setup_daemon_logging,
+)
 from agent_sec_cli.daemon.protocol import (
     DaemonRequest,
     DaemonResponse,
@@ -29,10 +40,12 @@ from agent_sec_cli.daemon.registry import (
     MethodRegistry,
     MethodSpec,
 )
+from agent_sec_cli.daemon.request_context import daemon_request_context
 from agent_sec_cli.daemon.runtime import DaemonRuntime
 from agent_sec_cli.daemon.server import (
     DaemonServer,
     _log_request_completion,
+    configure_logging,
     create_default_registry,
     prepare_socket_path,
 )
@@ -40,6 +53,11 @@ from agent_sec_cli.daemon.server import (
 
 def _matching_modules(prefixes: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(name for name in sys.modules if name.startswith(prefixes)))
+
+
+def _assert_uuid(value: str | None) -> None:
+    assert value is not None
+    uuid.UUID(value)
 
 
 def test_client_uses_env_socket_override(monkeypatch, tmp_path: Path):
@@ -51,6 +69,39 @@ def test_client_uses_env_socket_override(monkeypatch, tmp_path: Path):
     assert client.socket_path == socket_path
 
 
+def test_configure_logging_does_not_install_console_handler(monkeypatch):
+    setup_calls = []
+    root_logger = logging.getLogger()
+    logger = logging.getLogger("agent-sec-core.daemon")
+    original_root_level = root_logger.level
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    def fake_setup_daemon_logging():
+        setup_calls.append(True)
+
+    def fail_basic_config(*_args, **_kwargs):
+        raise AssertionError("daemon logging must not configure stdout/stderr")
+
+    monkeypatch.setattr(
+        "agent_sec_cli.daemon.server.setup_daemon_logging",
+        fake_setup_daemon_logging,
+    )
+    monkeypatch.setattr(logging, "basicConfig", fail_basic_config)
+
+    try:
+        configure_logging()
+
+        assert setup_calls == [True]
+        assert root_logger.level == logging.DEBUG
+        assert logger.level == logging.NOTSET
+        assert logger.propagate is True
+    finally:
+        root_logger.setLevel(original_root_level)
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_daemon_client_rejects_oversized_response(tmp_path: Path):
     server_socket, client_socket = socket.socketpair()
     try:
@@ -58,7 +109,7 @@ def test_daemon_client_rejects_oversized_response(tmp_path: Path):
             socket_path=tmp_path / "unused.sock", max_response_bytes=8
         )
         server_socket.sendall(
-            b'{"id":"req-1","ok":true,"data":{},"stdout":"","stderr":"","exit_code":0}\n'
+            b'{"request_id":"req-1","ok":true,"data":{},"stdout":"","stderr":"","exit_code":0}\n'
         )
 
         try:
@@ -70,6 +121,91 @@ def test_daemon_client_rejects_oversized_response(tmp_path: Path):
     finally:
         server_socket.close()
         client_socket.close()
+
+
+def test_daemon_client_fills_missing_trace_id_from_invocation_id(
+    monkeypatch,
+    tmp_path: Path,
+):
+    clear_invocation_context_for_tests()
+    monkeypatch.setenv("AGENT_SEC_INVOCATION_ID", "invocation-1")
+    init_invocation_context()
+    client = DaemonClient(socket_path=tmp_path / "unused.sock")
+    captured = {}
+
+    def fake_send_request(request: DaemonRequest, _timeout_ms: int) -> DaemonResponse:
+        captured["request"] = request
+        return DaemonResponse(request_id=request.request_id, ok=True)
+
+    monkeypatch.setattr(client, "_send_request", fake_send_request)
+
+    try:
+        client.call(
+            "scan-prompt",
+            trace_context={"session_id": "session-1"},
+        )
+    finally:
+        clear_invocation_context_for_tests()
+
+    request = captured["request"]
+    assert request.caller is None
+    assert request.trace_context == {
+        "trace_id": "invocation-1",
+        "session_id": "session-1",
+    }
+
+
+def test_daemon_client_preserves_explicit_trace_id(
+    monkeypatch,
+    tmp_path: Path,
+):
+    clear_invocation_context_for_tests()
+    monkeypatch.setenv("AGENT_SEC_INVOCATION_ID", "invocation-1")
+    init_invocation_context()
+    client = DaemonClient(socket_path=tmp_path / "unused.sock")
+    trace_context = {"trace_id": "trace-1", "session_id": "session-1"}
+    captured = {}
+
+    def fake_send_request(request: DaemonRequest, _timeout_ms: int) -> DaemonResponse:
+        captured["request"] = request
+        return DaemonResponse(request_id=request.request_id, ok=True)
+
+    monkeypatch.setattr(client, "_send_request", fake_send_request)
+
+    try:
+        client.call(
+            "scan-prompt",
+            trace_context=trace_context,
+        )
+    finally:
+        clear_invocation_context_for_tests()
+
+    request = captured["request"]
+    assert request.caller is None
+    assert request.trace_context == {
+        "trace_id": "trace-1",
+        "session_id": "session-1",
+    }
+    assert trace_context == {"trace_id": "trace-1", "session_id": "session-1"}
+
+
+def test_daemon_client_allows_caller_override(
+    monkeypatch,
+    tmp_path: Path,
+):
+    client = DaemonClient(socket_path=tmp_path / "unused.sock")
+    captured = {}
+
+    def fake_send_request(request: DaemonRequest, _timeout_ms: int) -> DaemonResponse:
+        captured["request"] = request
+        return DaemonResponse(request_id=request.request_id, ok=True)
+
+    monkeypatch.setattr(client, "_send_request", fake_send_request)
+
+    client.call("daemon.health", caller="health-check")
+
+    request = captured["request"]
+    assert request.caller == "health-check"
 
 
 def test_daemon_write_response_closes_writer_when_drain_is_cancelled(
@@ -144,7 +280,6 @@ def test_daemon_client_calls_health_over_temp_socket(tmp_path: Path):
             response = await asyncio.to_thread(
                 client.call,
                 "daemon.health",
-                request_id="req-health",
             )
             runtime_dir_mode = stat.S_IMODE(socket_path.parent.stat().st_mode)
             socket_mode = stat.S_IMODE(socket_path.stat().st_mode)
@@ -155,7 +290,7 @@ def test_daemon_client_calls_health_over_temp_socket(tmp_path: Path):
 
     response, runtime_dir_mode, socket_mode = asyncio.run(scenario())
 
-    assert response.id == "req-health"
+    _assert_uuid(response.request_id)
     assert response.ok is True
     assert response.exit_code == 0
     assert response.data["status"] == "ok"
@@ -232,14 +367,15 @@ def test_daemon_server_returns_busy_when_connection_limit_is_reached(tmp_path: P
         try:
             first_response_task = asyncio.create_task(
                 _send_daemon_request(
-                    socket_path, DaemonRequest(id="req-slow", method="slow")
+                    socket_path,
+                    DaemonRequest(method="slow"),
                 )
             )
             await asyncio.wait_for(handler_started.wait(), timeout=0.5)
 
             busy_response = await _send_daemon_request(
                 socket_path,
-                DaemonRequest(id="req-busy", method="daemon.health"),
+                DaemonRequest(method="daemon.health"),
             )
 
             handler_release.set()
@@ -252,10 +388,11 @@ def test_daemon_server_returns_busy_when_connection_limit_is_reached(tmp_path: P
     busy_response, first_response = asyncio.run(scenario())
 
     assert busy_response.ok is False
+    _assert_uuid(busy_response.request_id)
     assert busy_response.error is not None
     assert busy_response.error["code"] == "busy"
     assert first_response.ok is True
-    assert first_response.id == "req-slow"
+    _assert_uuid(first_response.request_id)
 
 
 def test_daemon_server_rejects_oversized_handler_response(tmp_path: Path, caplog):
@@ -276,12 +413,13 @@ def test_daemon_server_rejects_oversized_handler_response(tmp_path: Path, caplog
         server = DaemonServer(
             socket_path=socket_path,
             registry=registry,
-            max_response_bytes=220,
+            max_response_bytes=320,
         )
         await server.start()
         try:
             response = await _send_daemon_request(
-                socket_path, DaemonRequest(id="req-large", method="large")
+                socket_path,
+                DaemonRequest(method="large"),
             )
         finally:
             await server.stop()
@@ -290,22 +428,22 @@ def test_daemon_server_rejects_oversized_handler_response(tmp_path: Path, caplog
 
     response = asyncio.run(scenario())
 
-    assert response.id == "req-large"
+    _assert_uuid(response.request_id)
     assert response.ok is False
     assert response.error is not None
     assert response.error["code"] == "payload_too_large"
-    assert response.stderr == "response payload exceeds 220 bytes"
+    assert response.stderr == "response payload exceeds 320 bytes"
 
     matching_logs = [
-        json.loads(record.message)
+        record
         for record in caplog.records
         if record.name == "agent-sec-core.daemon"
-        and _is_json(record.message)
-        and json.loads(record.message).get("request_id") == "req-large"
+        and getattr(record, "diagnostic_event", None) == "daemon_request_completed"
+        and getattr(record, "data", {}).get("request_id") == response.request_id
     ]
     assert matching_logs
-    assert matching_logs[-1]["ok"] is False
-    assert matching_logs[-1]["error_code"] == "payload_too_large"
+    assert matching_logs[-1].data["ok"] is False
+    assert matching_logs[-1].data["error_code"] == "payload_too_large"
 
 
 def test_daemon_server_suppresses_method_access_log(tmp_path: Path, caplog):
@@ -326,7 +464,8 @@ def test_daemon_server_suppresses_method_access_log(tmp_path: Path, caplog):
         await server.start()
         try:
             response = await _send_daemon_request(
-                socket_path, DaemonRequest(id="req-quiet", method="quiet")
+                socket_path,
+                DaemonRequest(method="quiet"),
             )
         finally:
             await server.stop()
@@ -336,10 +475,12 @@ def test_daemon_server_suppresses_method_access_log(tmp_path: Path, caplog):
     response = asyncio.run(scenario())
 
     assert response.ok is True
+    _assert_uuid(response.request_id)
     matching_logs = [
         record
         for record in caplog.records
-        if record.name == "agent-sec-core.daemon" and "req-quiet" in record.message
+        if record.name == "agent-sec-core.daemon"
+        and getattr(record, "data", {}).get("request_id") == response.request_id
     ]
     assert matching_logs == []
 
@@ -361,7 +502,7 @@ def test_idle_request_read_times_out_and_releases_connection(tmp_path: Path):
 
             health_response = await _send_daemon_request(
                 socket_path,
-                DaemonRequest(id="req-after-idle-timeout", method="daemon.health"),
+                DaemonRequest(method="daemon.health"),
             )
         finally:
             await server.stop()
@@ -374,8 +515,9 @@ def test_idle_request_read_times_out_and_releases_connection(tmp_path: Path):
     assert timeout_response.error is not None
     assert timeout_response.error["code"] == "timeout"
     assert timeout_response.stderr == "daemon request timed out after 25 ms"
+    _assert_uuid(timeout_response.request_id)
     assert health_response.ok is True
-    assert health_response.id == "req-after-idle-timeout"
+    _assert_uuid(health_response.request_id)
 
 
 def test_partial_request_read_times_out_and_releases_connection(tmp_path: Path):
@@ -397,7 +539,7 @@ def test_partial_request_read_times_out_and_releases_connection(tmp_path: Path):
 
             health_response = await _send_daemon_request(
                 socket_path,
-                DaemonRequest(id="req-after-partial-timeout", method="daemon.health"),
+                DaemonRequest(method="daemon.health"),
             )
         finally:
             await server.stop()
@@ -409,8 +551,9 @@ def test_partial_request_read_times_out_and_releases_connection(tmp_path: Path):
     assert timeout_response.ok is False
     assert timeout_response.error is not None
     assert timeout_response.error["code"] == "timeout"
+    _assert_uuid(timeout_response.request_id)
     assert health_response.ok is True
-    assert health_response.id == "req-after-partial-timeout"
+    _assert_uuid(health_response.request_id)
 
 
 def test_bad_request_does_not_steal_concurrent_inflight_counter(tmp_path: Path):
@@ -439,7 +582,8 @@ def test_bad_request_does_not_steal_concurrent_inflight_counter(tmp_path: Path):
         try:
             slow_task = asyncio.create_task(
                 _send_daemon_request(
-                    socket_path, DaemonRequest(id="req-slow", method="slow")
+                    socket_path,
+                    DaemonRequest(method="slow"),
                 )
             )
             await asyncio.wait_for(handler_started.wait(), timeout=0.5)
@@ -465,8 +609,9 @@ def test_bad_request_does_not_steal_concurrent_inflight_counter(tmp_path: Path):
     assert bad_response.ok is False
     assert bad_response.error is not None
     assert bad_response.error["code"] == "bad_request"
+    _assert_uuid(bad_response.request_id)
     assert slow_response.ok is True
-    assert slow_response.id == "req-slow"
+    _assert_uuid(slow_response.request_id)
     assert observed_inflight == [1]
 
 
@@ -492,7 +637,8 @@ def test_daemon_server_stop_drains_inflight_request(tmp_path: Path):
 
         response_task = asyncio.create_task(
             _send_daemon_request(
-                socket_path, DaemonRequest(id="req-drain", method="slow")
+                socket_path,
+                DaemonRequest(method="slow"),
             )
         )
         await asyncio.wait_for(handler_started.wait(), timeout=0.5)
@@ -510,7 +656,7 @@ def test_daemon_server_stop_drains_inflight_request(tmp_path: Path):
 
     assert stop_is_waiting_for_drain is True
     assert response.ok is True
-    assert response.id == "req-drain"
+    _assert_uuid(response.request_id)
     assert socket_exists is False
 
 
@@ -642,7 +788,7 @@ def test_completion_log_is_emitted_when_inflight_request_is_cancelled(
         client_task = asyncio.create_task(
             _send_daemon_request(
                 socket_path,
-                DaemonRequest(id="req-cancelled", method="hang", timeout_ms=60_000),
+                DaemonRequest(method="hang", timeout_ms=60_000),
             )
         )
         await asyncio.wait_for(handler_started.wait(), timeout=0.5)
@@ -655,26 +801,19 @@ def test_completion_log_is_emitted_when_inflight_request_is_cancelled(
     asyncio.run(scenario())
 
     matching_logs = [
-        json.loads(record.message)
+        record
         for record in caplog.records
         if record.name == "agent-sec-core.daemon"
-        and _is_json(record.message)
-        and json.loads(record.message).get("request_id") == "req-cancelled"
+        and getattr(record, "diagnostic_event", None) == "daemon_request_completed"
+        and getattr(record, "data", {}).get("method") == "hang"
     ]
 
     assert matching_logs, "expected completion log for cancelled in-flight request"
-    payload = matching_logs[-1]
-    assert payload["event"] == "daemon_request_completed"
-    assert payload["method"] == "hang"
-    assert payload["ok"] is False
-
-
-def _is_json(text: str) -> bool:
-    try:
-        json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return True
+    record = matching_logs[-1]
+    assert record.diagnostic_event == "daemon_request_completed"
+    _assert_uuid(record.data["request_id"])
+    assert record.data["method"] == "hang"
+    assert record.data["ok"] is False
 
 
 def test_completion_log_outputs_structured_fields(caplog):
@@ -689,8 +828,10 @@ def test_completion_log_outputs_structured_fields(caplog):
         bytes_out=34,
     )
 
-    payload = json.loads(caplog.records[-1].message)
-    assert payload["event"] == "daemon_request_completed"
+    record = caplog.records[-1]
+    payload = record.data
+    assert record.message == "daemon request completed"
+    assert record.diagnostic_event == "daemon_request_completed"
     assert payload["request_id"] == "req-log"
     assert payload["method"] == "daemon.health"
     assert payload["ok"] is True
@@ -699,6 +840,386 @@ def test_completion_log_outputs_structured_fields(caplog):
     assert payload["bytes_in"] == 12
     assert payload["bytes_out"] == 34
     assert "latency_ms" in payload
+
+
+def test_request_started_log_outputs_structured_fields(tmp_path: Path, caplog):
+    caplog.set_level(logging.INFO, logger="agent-sec-core.daemon")
+
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+        registry = MethodRegistry()
+        registry.register(
+            MethodSpec(
+                method="started",
+                handler=lambda _request, _runtime: HandlerResult(data={"ok": True}),
+                lifecycle="test",
+            )
+        )
+        server = DaemonServer(socket_path=socket_path, registry=registry)
+        await server.start()
+        try:
+            return await _send_daemon_request(
+                socket_path,
+                DaemonRequest(
+                    method="started",
+                    caller="cli",
+                    trace_context={
+                        "trace_id": "trace-started",
+                        "session_id": "session-started",
+                    },
+                ),
+            )
+        finally:
+            await server.stop()
+
+    response = asyncio.run(scenario())
+
+    assert response.ok is True
+    _assert_uuid(response.request_id)
+    matching_logs = [
+        record
+        for record in caplog.records
+        if record.name == "agent-sec-core.daemon"
+        and getattr(record, "diagnostic_event", None) == "daemon_request_started"
+        and getattr(record, "data", {}).get("request_id") == response.request_id
+    ]
+    assert matching_logs
+    record = matching_logs[-1]
+    assert record.message == "daemon request started"
+    assert record.trace_id == "trace-started"
+    assert record.session_id == "session-started"
+    assert record.data == {
+        "request_id": response.request_id,
+        "method": "started",
+        "caller": "cli",
+    }
+
+
+def test_gateway_preserves_missing_trace_id(tmp_path: Path, caplog):
+    caplog.set_level(logging.INFO, logger="agent-sec-core.daemon")
+    observed_contexts = []
+
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+
+        def capture_handler(
+            request: DaemonRequest, _runtime: DaemonRuntime
+        ) -> HandlerResult:
+            observed_contexts.append(
+                (request.trace_context, get_current_trace_context())
+            )
+            return HandlerResult(data={"trace_context": request.trace_context})
+
+        registry = MethodRegistry()
+        registry.register(
+            MethodSpec(
+                method="capture",
+                handler=capture_handler,
+                lifecycle="test",
+            )
+        )
+        server = DaemonServer(socket_path=socket_path, registry=registry)
+        await server.start()
+        try:
+            return await _send_daemon_request(
+                socket_path,
+                DaemonRequest(
+                    method="capture",
+                    trace_context={"session_id": "session-default"},
+                ),
+            )
+        finally:
+            await server.stop()
+
+    response = asyncio.run(scenario())
+
+    assert response.ok is True
+    assert response.data["trace_context"] == {
+        "session_id": "session-default",
+    }
+    assert observed_contexts == [
+        (
+            {
+                "session_id": "session-default",
+            },
+            TraceContext(
+                session_id="session-default",
+            ),
+        )
+    ]
+
+    matching_logs = [
+        record
+        for record in caplog.records
+        if record.name == "agent-sec-core.daemon"
+        and getattr(record, "diagnostic_event", None)
+        in {"daemon_request_started", "daemon_request_completed"}
+        and getattr(record, "data", {}).get("request_id") == response.request_id
+    ]
+    assert len(matching_logs) == 2
+    assert all(not hasattr(record, "trace_id") for record in matching_logs)
+    assert all(record.session_id == "session-default" for record in matching_logs)
+
+
+def test_completion_log_writes_daemon_jsonl_with_trace_context(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_SEC_DAEMON_LOG_LEVEL", "info")
+    log_path = tmp_path / "daemon.jsonl"
+    logger = logging.getLogger("agent-sec-core.daemon")
+    original_level = logger.level
+    reset_daemon_diagnostic_logging_for_tests()
+
+    try:
+        logger.setLevel(logging.INFO)
+        setup_daemon_logging(path=log_path)
+        _log_request_completion(
+            request_id="req-daemon-jsonl",
+            method="scan-prompt",
+            caller="cli",
+            response=success_response("req-daemon-jsonl"),
+            started=time.monotonic() - 0.01,
+            bytes_in=56,
+            bytes_out=78,
+            trace_context=TraceContext(
+                trace_id="trace-1",
+                session_id="session-1",
+                run_id="run-1",
+                call_id="call-1",
+                tool_call_id="tool-1",
+            ),
+        )
+    finally:
+        reset_daemon_diagnostic_logging_for_tests()
+        logger.setLevel(original_level)
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["component"] == "daemon"
+    assert payload["event"] == "daemon_request_completed"
+    assert payload["message"] == "daemon request completed"
+    assert payload["pid"] == os.getpid()
+    assert payload["trace_id"] == "trace-1"
+    assert payload["session_id"] == "session-1"
+    assert payload["run_id"] == "run-1"
+    assert payload["call_id"] == "call-1"
+    assert payload["tool_call_id"] == "tool-1"
+    assert "invocation_id" not in payload
+    assert payload["request_id"] == "req-daemon-jsonl"
+    assert payload["data"]["request_id"] == "req-daemon-jsonl"
+    assert payload["data"]["method"] == "scan-prompt"
+    assert payload["data"]["caller"] == "cli"
+    assert payload["data"]["ok"] is True
+    assert payload["data"]["exit_code"] == 0
+    assert payload["data"]["error_code"] is None
+    assert "latency_ms" in payload["data"]
+    assert payload["data"]["queue_ms"] == 0
+    assert payload["data"]["bytes_in"] == 56
+    assert payload["data"]["bytes_out"] == 78
+
+
+def test_daemon_log_level_off_disables_daemon_jsonl(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_SEC_DAEMON_LOG_LEVEL", "off")
+    log_path = tmp_path / "daemon.jsonl"
+    logger = logging.getLogger("agent-sec-core.daemon")
+    original_level = logger.level
+    reset_daemon_diagnostic_logging_for_tests()
+
+    try:
+        logger.setLevel(logging.INFO)
+        setup_daemon_logging(path=log_path)
+        _log_request_completion(
+            request_id="req-daemon-off",
+            method="scan-prompt",
+            response=success_response("req-daemon-off"),
+            started=time.monotonic() - 0.01,
+            bytes_in=12,
+            bytes_out=34,
+        )
+    finally:
+        reset_daemon_diagnostic_logging_for_tests()
+        logger.setLevel(original_level)
+
+    assert not log_path.exists()
+
+
+def test_daemon_logging_captures_third_party_logs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_SEC_DAEMON_LOG_LEVEL", "info")
+    log_path = tmp_path / "daemon.jsonl"
+    root_logger = logging.getLogger()
+    third_party_logger = logging.getLogger("third_party.daemon_dependency")
+    original_root_level = root_logger.level
+    original_third_party_level = third_party_logger.level
+    original_third_party_propagate = third_party_logger.propagate
+    reset_daemon_diagnostic_logging_for_tests()
+
+    try:
+        root_logger.setLevel(logging.DEBUG)
+        third_party_logger.setLevel(logging.NOTSET)
+        third_party_logger.propagate = True
+        setup_daemon_logging(path=log_path)
+
+        with daemon_request_context(
+            TraceContext(
+                trace_id="trace-third-party",
+                session_id="session-third-party",
+                run_id="run-third-party",
+            ),
+            request_id="req-third-party",
+        ):
+            third_party_logger.info("dependency ready")
+        third_party_logger.info("outside request")
+    finally:
+        reset_daemon_diagnostic_logging_for_tests()
+        root_logger.setLevel(original_root_level)
+        third_party_logger.setLevel(original_third_party_level)
+        third_party_logger.propagate = original_third_party_propagate
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    payload = json.loads(lines[0])
+    assert payload["component"] == "daemon"
+    assert payload["event"] == "daemon_log"
+    assert payload["logger"] == "third_party.daemon_dependency"
+    assert payload["message"] == "dependency ready"
+    assert payload["request_id"] == "req-third-party"
+    assert payload["trace_id"] == "trace-third-party"
+    assert payload["session_id"] == "session-third-party"
+    assert payload["run_id"] == "run-third-party"
+    outside_payload = json.loads(lines[1])
+    assert outside_payload["message"] == "outside request"
+    assert "request_id" not in outside_payload
+
+
+def test_gateway_request_context_adds_request_id_to_ordinary_daemon_logs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_SEC_DAEMON_LOG_LEVEL", "info")
+    log_path = tmp_path / "daemon.jsonl"
+    root_logger = logging.getLogger()
+    handler_logger = logging.getLogger("third_party.gateway_dependency")
+    original_root_level = root_logger.level
+    original_handler_level = handler_logger.level
+    original_handler_propagate = handler_logger.propagate
+    reset_daemon_diagnostic_logging_for_tests()
+
+    async def scenario() -> DaemonResponse:
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+
+        def logging_handler(
+            _request: DaemonRequest,
+            _runtime: DaemonRuntime,
+        ) -> HandlerResult:
+            handler_logger.info("inside gateway request")
+            return HandlerResult(data={"ok": True})
+
+        registry = MethodRegistry()
+        registry.register(
+            MethodSpec(method="log-inside", handler=logging_handler, lifecycle="test")
+        )
+        server = DaemonServer(socket_path=socket_path, registry=registry)
+        await server.start()
+        try:
+            return await _send_daemon_request(
+                socket_path,
+                DaemonRequest(method="log-inside"),
+            )
+        finally:
+            await server.stop()
+
+    try:
+        root_logger.setLevel(logging.DEBUG)
+        handler_logger.setLevel(logging.NOTSET)
+        handler_logger.propagate = True
+        setup_daemon_logging(path=log_path)
+
+        response = asyncio.run(scenario())
+    finally:
+        reset_daemon_diagnostic_logging_for_tests()
+        root_logger.setLevel(original_root_level)
+        handler_logger.setLevel(original_handler_level)
+        handler_logger.propagate = original_handler_propagate
+
+    assert response.ok is True
+    _assert_uuid(response.request_id)
+    payloads = [
+        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    matching_payloads = [
+        payload
+        for payload in payloads
+        if payload.get("message") == "inside gateway request"
+    ]
+    assert matching_payloads
+    assert matching_payloads[-1]["request_id"] == response.request_id
+
+
+def test_setup_daemon_logging_does_not_mutate_daemon_logger_level(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_SEC_DAEMON_LOG_LEVEL", "debug")
+    logger = logging.getLogger("agent-sec-core.daemon")
+    original_level = logger.level
+    logger.setLevel(logging.ERROR)
+    reset_daemon_diagnostic_logging_for_tests()
+
+    try:
+        setup_daemon_logging(path=tmp_path / "daemon.jsonl")
+        assert logger.level == logging.ERROR
+    finally:
+        reset_daemon_diagnostic_logging_for_tests()
+        logger.setLevel(original_level)
+
+
+def test_unknown_method_completion_log_preserves_trace_context(
+    tmp_path: Path,
+    caplog,
+):
+    caplog.set_level(logging.INFO, logger="agent-sec-core.daemon")
+
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+        server = DaemonServer(socket_path=socket_path, registry=MethodRegistry())
+        await server.start()
+        try:
+            return await _send_daemon_request(
+                socket_path,
+                DaemonRequest(
+                    method="unknown.method",
+                    trace_context={
+                        "trace_id": "trace-unknown",
+                        "session_id": "session-unknown",
+                    },
+                ),
+            )
+        finally:
+            await server.stop()
+
+    response = asyncio.run(scenario())
+
+    assert response.ok is False
+    assert response.error is not None
+    assert response.error["code"] == "unknown_method"
+
+    matching_logs = [
+        record
+        for record in caplog.records
+        if record.name == "agent-sec-core.daemon"
+        and getattr(record, "diagnostic_event", None) == "daemon_request_completed"
+        and getattr(record, "data", {}).get("request_id") == response.request_id
+    ]
+    assert matching_logs
+    record = matching_logs[-1]
+    assert record.trace_id == "trace-unknown"
+    assert record.session_id == "session-unknown"
+    assert record.data["method"] == "unknown.method"
 
 
 async def _send_daemon_request(

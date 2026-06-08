@@ -46,7 +46,7 @@ Expected shape:
 
 ```json
 {
-  "id": "req-1",
+  "request_id": "4f56f7b6-0c77-4a71-a6b0-708f6a4f7ec7",
   "ok": false,
   "data": {},
   "stdout": "",
@@ -91,7 +91,7 @@ Expected successful scan shape:
 
 ```json
 {
-  "id": "req-1",
+  "request_id": "4f56f7b6-0c77-4a71-a6b0-708f6a4f7ec7",
   "ok": true,
   "data": {
     "ok": true,
@@ -107,7 +107,7 @@ Expected scanner error result shape:
 
 ```json
 {
-  "id": "req-1",
+  "request_id": "4f56f7b6-0c77-4a71-a6b0-708f6a4f7ec7",
   "ok": true,
   "data": {
     "ok": false,

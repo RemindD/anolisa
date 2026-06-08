@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any
 
-from agent_sec_cli.daemon.jobs.base import BackgroundJob, JobStatus, utc_now
+from agent_sec_cli.daemon.jobs.base import OneShotBackgroundJob
 
 PROMPT_PRELOAD_ENV = "AGENT_SEC_DAEMON_PROMPT_PRELOAD"
 PROMPT_PRELOAD_DOWNLOAD_TIMEOUT_ENV = (
@@ -18,7 +18,7 @@ PROMPT_PRELOAD_CHILD_TERMINATE_TIMEOUT_SECONDS = 5.0
 _PROMPT_PRELOAD_CHILD_MODULE = "agent_sec_cli.daemon.jobs.prompt_preload"
 
 
-class PromptModelPreloadJob(BackgroundJob):
+class PromptModelPreloadJob(OneShotBackgroundJob):
     """One-shot startup job that downloads, loads, and probes the prompt model."""
 
     name = PROMPT_PRELOAD_JOB_NAME
@@ -29,48 +29,13 @@ class PromptModelPreloadJob(BackgroundJob):
         mode: str = "strict",
         probe_text: str = "hello",
     ) -> None:
+        super().__init__()
         self._prompt_state = prompt_state
         self._mode = mode
         self._probe_text = probe_text
-        self._task: asyncio.Task[None] | None = None
-        self._state = "stopped"
-        self._last_error: str | None = None
-        self._last_tick_at: str | None = None
-        self._last_started_at: str | None = None
 
-    async def start(self) -> None:
-        """Start prompt model preload without blocking daemon startup."""
-        if self._task is not None and not self._task.done():
-            return
-
-        self._state = "running"
-        self._task = asyncio.create_task(self._run_once())
-
-    async def stop(self) -> None:
-        """Cancel the preload task if it has not completed."""
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-
-        if self._state == "running":
-            self._state = "stopped"
-        self._task = None
-
-    def status(self) -> JobStatus:
-        """Return current prompt preload job status."""
-        return JobStatus(
-            name=self.name,
-            state=self._state,
-            last_error=self._last_error,
-            last_tick_at=self._last_tick_at,
-            last_started_at=self._last_started_at,
-        )
-
-    async def _run_once(self) -> None:
-        started_at = utc_now()
-        self._last_started_at = started_at
-        self._last_tick_at = started_at
+    def on_run_started(self, started_at: str) -> None:
+        """Mark prompt model preload as downloading."""
         _update_prompt_state(
             self._prompt_state,
             status="downloading",
@@ -80,43 +45,39 @@ class PromptModelPreloadJob(BackgroundJob):
             last_finished_at=None,
         )
 
-        try:
-            await _run_preload_child_process(self._mode)
-            _update_prompt_state(self._prompt_state, status="loading")
-            await asyncio.to_thread(
-                _preload_prompt_model_sync,
-                self._prompt_state,
-                self._mode,
-                self._probe_text,
-            )
-        except asyncio.CancelledError:
-            finished_at = utc_now()
-            self._last_error = None
-            self._state = "stopped"
-            _update_prompt_state(
-                self._prompt_state,
-                status="stopped",
-                loaded=False,
-                last_error=None,
-                last_finished_at=finished_at,
-            )
-            raise
-        except Exception as exc:
-            finished_at = utc_now()
-            self._last_error = str(exc)
-            self._state = "error"
-            _update_prompt_state(
-                self._prompt_state,
-                status="degraded",
-                loaded=False,
-                last_error=self._last_error,
-                last_finished_at=finished_at,
-            )
-            return
+    async def run_once(self) -> None:
+        """Download, load, and probe the prompt model."""
+        await _run_preload_child_process(self._mode)
+        _update_prompt_state(self._prompt_state, status="loading")
+        await asyncio.to_thread(
+            _preload_prompt_model_sync,
+            self._prompt_state,
+            self._mode,
+            self._probe_text,
+        )
 
-        finished_at = utc_now()
-        self._last_error = None
-        self._state = "completed"
+    def on_run_cancelled(self, finished_at: str) -> None:
+        """Mark prompt model preload as stopped after cancellation."""
+        _update_prompt_state(
+            self._prompt_state,
+            status="stopped",
+            loaded=False,
+            last_error=None,
+            last_finished_at=finished_at,
+        )
+
+    def on_run_failed(self, exc: Exception, finished_at: str) -> None:
+        """Mark prompt model preload as degraded after failure."""
+        _update_prompt_state(
+            self._prompt_state,
+            status="degraded",
+            loaded=False,
+            last_error=str(exc),
+            last_finished_at=finished_at,
+        )
+
+    def on_run_completed(self, finished_at: str) -> None:
+        """Mark prompt model preload as ready after successful preload."""
         _update_prompt_state(
             self._prompt_state,
             status="ready",

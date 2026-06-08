@@ -17,14 +17,20 @@ DEFAULT_TIMEOUT_MS = 5000
 MAX_TIMEOUT_MS = 5 * 60 * 1000
 
 
+def generate_request_id() -> str:
+    """Create a daemon-owned request id for one request."""
+    return str(uuid.uuid4())
+
+
 @dataclass(frozen=True)
 class DaemonRequest:
     """Validated daemon request."""
 
-    id: str
     method: str
+    request_id: str = field(default_factory=generate_request_id)
     params: dict[str, Any] = field(default_factory=dict)
     trace_context: dict[str, Any] = field(default_factory=dict)
+    caller: str | None = None
     timeout_ms: int | None = None
 
 
@@ -32,7 +38,7 @@ class DaemonRequest:
 class DaemonResponse:
     """Validated daemon response."""
 
-    id: str
+    request_id: str
     ok: bool
     data: Any = field(default_factory=dict)
     stdout: str = ""
@@ -77,11 +83,6 @@ class NDJSONFrameParser:
         frame = bytes(self._buffer)
         self._buffer.clear()
         return [frame]
-
-
-def generate_request_id() -> str:
-    """Create a daemon-owned request id for requests that do not provide one."""
-    return f"daemon-{uuid.uuid4().hex}"
 
 
 def _decode_json_object(line: bytes) -> dict[str, Any]:
@@ -133,21 +134,19 @@ def parse_request_line(
         raise PayloadTooLargeError(max_request_bytes)
 
     payload = _decode_json_object(line)
-    request_id = payload.get("id")
-    if request_id is None:
-        request_id = generate_request_id()
-    elif not isinstance(request_id, str) or not request_id.strip():
-        raise BadRequestError("id must be a non-empty string when provided")
-
     method = payload.get("method")
     if not isinstance(method, str) or not method.strip():
         raise BadRequestError("method is required")
 
+    caller = payload.get("caller")
+    caller = caller.strip() if isinstance(caller, str) and caller.strip() else None
+
     return DaemonRequest(
-        id=request_id,
         method=method,
+        request_id=generate_request_id(),
         params=_validate_object_field(payload, "params"),
         trace_context=_validate_object_field(payload, "trace_context"),
+        caller=caller,
         timeout_ms=_validate_timeout_ms(payload),
     )
 
@@ -155,11 +154,12 @@ def parse_request_line(
 def request_to_payload(request: DaemonRequest) -> dict[str, Any]:
     """Convert a daemon request to a JSON-serializable payload."""
     payload: dict[str, Any] = {
-        "id": request.id,
         "method": request.method,
         "params": request.params,
         "trace_context": request.trace_context,
     }
+    if request.caller is not None:
+        payload["caller"] = request.caller
     if request.timeout_ms is not None:
         payload["timeout_ms"] = request.timeout_ms
     return payload
@@ -180,7 +180,7 @@ def success_response(
     """Build a successful daemon response."""
     response_data = {} if data is None else data
     return DaemonResponse(
-        id=request_id,
+        request_id=request_id,
         ok=True,
         data=response_data,
         stdout=stdout,
@@ -192,7 +192,7 @@ def success_response(
 def error_response(request_id: str, error: DaemonError) -> DaemonResponse:
     """Build a structured daemon error response."""
     return DaemonResponse(
-        id=request_id,
+        request_id=request_id,
         ok=False,
         data={},
         stdout="",
@@ -205,7 +205,7 @@ def error_response(request_id: str, error: DaemonError) -> DaemonResponse:
 def response_to_payload(response: DaemonResponse) -> dict[str, Any]:
     """Convert a daemon response to a JSON-serializable payload."""
     payload: dict[str, Any] = {
-        "id": response.id,
+        "request_id": response.request_id,
         "ok": response.ok,
         "data": response.data,
         "stdout": response.stdout,
@@ -226,9 +226,9 @@ def parse_response_line(line: bytes) -> DaemonResponse:
     """Parse and validate one daemon response frame."""
     payload = _decode_json_object(line)
 
-    request_id = payload.get("id")
+    request_id = payload.get("request_id")
     if not isinstance(request_id, str) or not request_id.strip():
-        raise BadRequestError("response id must be a non-empty string")
+        raise BadRequestError("response request_id must be a non-empty string")
 
     ok = payload.get("ok")
     if not isinstance(ok, bool):
@@ -255,7 +255,7 @@ def parse_response_line(line: bytes) -> DaemonResponse:
         error = {"code": code, "message": message}
 
     return DaemonResponse(
-        id=request_id,
+        request_id=request_id,
         ok=ok,
         data=payload.get("data", {}),
         stdout=stdout,

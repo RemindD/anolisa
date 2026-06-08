@@ -4,14 +4,13 @@ import argparse
 import asyncio
 import contextlib
 import fcntl
-import json
 import logging
 import os
 import signal
 import stat
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from agent_sec_cli.daemon.client import daemon_health_reachable
 from agent_sec_cli.daemon.errors import (
@@ -24,11 +23,17 @@ from agent_sec_cli.daemon.errors import (
     ResponseTooLargeError,
     ShutdownError,
 )
+from agent_sec_cli.daemon.gateway import (
+    DaemonGateway,
+    PreparedDaemonRequest,
+    _log_request_completion,
+)
 from agent_sec_cli.daemon.handlers.prompt_scan import (
     register_prompt_scan_methods,
 )
 from agent_sec_cli.daemon.health import register_health_methods
 from agent_sec_cli.daemon.jobs.registry import register_default_jobs
+from agent_sec_cli.daemon.logging import log_daemon_event, setup_daemon_logging
 from agent_sec_cli.daemon.protocol import (
     DEFAULT_MAX_REQUEST_BYTES,
     DEFAULT_MAX_RESPONSE_BYTES,
@@ -39,7 +44,7 @@ from agent_sec_cli.daemon.protocol import (
     parse_request_line,
     serialize_response,
 )
-from agent_sec_cli.daemon.registry import MethodRegistry, dispatch_request
+from agent_sec_cli.daemon.registry import MethodRegistry
 from agent_sec_cli.daemon.runtime import (
     DaemonRuntime,
     ensure_runtime_directory,
@@ -124,6 +129,7 @@ class DaemonServer:
         self.request_read_timeout_ms = request_read_timeout_ms
         self.runtime = DaemonRuntime(socket_path=resolved_socket_path)
         register_default_jobs(self.runtime.jobs, self.runtime.prompt_scan_state)
+        self.gateway = DaemonGateway(self.registry, self.runtime)
         self._server: asyncio.Server | None = None
         self._lock: SingleInstanceLock | None = None
         self._active_connections = 0
@@ -230,14 +236,12 @@ class DaemonServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        request_id = generate_request_id()
-        method: str | None = None
+        fallback_request_id = generate_request_id()
         bytes_in = 0
         bytes_out = 0
         started = time.monotonic()
         response: DaemonResponse | None = None
-        began_request = False
-        access_log = True
+        prepared_request: PreparedDaemonRequest | None = None
 
         try:
             line = await asyncio.wait_for(
@@ -246,23 +250,24 @@ class DaemonServer:
             )
             bytes_in = len(line)
             request = parse_request_line(line, max_request_bytes=self.max_request_bytes)
-            request_id = request.id
-            method = request.method
-            access_log = _access_log_enabled(self.registry, method)
-            self.runtime.begin_request()
-            began_request = True
-            response = await dispatch_request(request, self.registry, self.runtime)
+            prepared_request = self.gateway.prepare(request)
+            response = await self.gateway.execute(prepared_request)
         except asyncio.TimeoutError:
             response = error_response(
-                request_id, DaemonTimeoutError(self.request_read_timeout_ms)
+                fallback_request_id,
+                DaemonTimeoutError(self.request_read_timeout_ms),
             )
         except DaemonError as exc:
-            response = error_response(request_id, exc)
+            response = error_response(
+                _request_id_for_response(prepared_request, fallback_request_id),
+                exc,
+            )
         finally:
-            if began_request:
-                self.runtime.end_request()
             if response is None:
-                response = error_response(request_id, ShutdownError())
+                response = error_response(
+                    _request_id_for_response(prepared_request, fallback_request_id),
+                    ShutdownError(),
+                )
             with contextlib.suppress(
                 ConnectionError,
                 BrokenPipeError,
@@ -270,10 +275,18 @@ class DaemonServer:
                 asyncio.CancelledError,
             ):
                 bytes_out, response = await self._write_response(writer, response)
-            if access_log or not response.ok:
+            if prepared_request is not None:
+                self.gateway.complete(
+                    prepared=prepared_request,
+                    response=response,
+                    started=started,
+                    bytes_in=bytes_in,
+                    bytes_out=bytes_out,
+                )
+            elif not response.ok:
                 _log_request_completion(
-                    request_id=request_id,
-                    method=method,
+                    request_id=fallback_request_id,
+                    method=None,
                     response=response,
                     started=started,
                     bytes_in=bytes_in,
@@ -288,7 +301,7 @@ class DaemonServer:
         raw_response = serialize_response(response)
         if len(raw_response) > self.max_response_bytes:
             response = error_response(
-                response.id, ResponseTooLargeError(self.max_response_bytes)
+                response.request_id, ResponseTooLargeError(self.max_response_bytes)
             )
             raw_response = serialize_response(response)
             if len(raw_response) > self.max_response_bytes:
@@ -328,6 +341,7 @@ class DaemonServer:
             started=started,
             bytes_in=0,
             bytes_out=bytes_out,
+            trace_context=None,
         )
 
     async def _drain_client_tasks(self) -> None:
@@ -401,8 +415,22 @@ def prepare_socket_path(socket_path: Path) -> SingleInstanceLock:
 
 def configure_logging() -> None:
     """Initialize daemon diagnostic logging."""
-    # TODO: Consider rate-limited async logging for slow or blocking stdout/stderr sinks.
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # The daemon owns process-level logging. Keep root permissive so records
+    # from agent-sec and third-party libraries can reach the JSONL handler;
+    # AGENT_SEC_DAEMON_LOG_LEVEL is enforced by that handler, not by root.
+    logging.getLogger().setLevel(logging.DEBUG)
+    LOGGER.setLevel(logging.NOTSET)
+    LOGGER.propagate = True
+    setup_daemon_logging()
+
+
+def _request_id_for_response(
+    prepared_request: PreparedDaemonRequest | None,
+    fallback_request_id: str,
+) -> str:
+    if prepared_request is None:
+        return fallback_request_id
+    return prepared_request.request.request_id
 
 
 async def run_daemon(
@@ -424,10 +452,20 @@ async def run_daemon(
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
     await daemon.start()
+    log_daemon_event(
+        event="daemon_started",
+        message="daemon started",
+        data=_daemon_lifecycle_data(daemon),
+    )
     try:
         await stop_event.wait()
     finally:
         await daemon.stop()
+        log_daemon_event(
+            event="daemon_stopped",
+            message="daemon stopped",
+            data=_daemon_lifecycle_data(daemon),
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -492,45 +530,21 @@ def _install_signal_handlers(stop_event: asyncio.Event) -> None:
             loop.add_signal_handler(signal.SIGHUP, _log_sighup_noop)
 
 
-def _access_log_enabled(registry: MethodRegistry, method: str) -> bool:
-    try:
-        return registry.get(method).access_log
-    except DaemonError:
-        return True
-
-
-def _log_request_completion(
-    request_id: str,
-    method: str | None,
-    response: DaemonResponse,
-    started: float,
-    bytes_in: int,
-    bytes_out: int,
-) -> None:
-    latency_ms = int((time.monotonic() - started) * 1000)
-    error_code = None if response.error is None else response.error.get("code")
-    LOGGER.info(
-        json.dumps(
-            {
-                "event": "daemon_request_completed",
-                "request_id": request_id,
-                "method": method,
-                "caller": None,
-                "ok": response.ok,
-                "exit_code": response.exit_code,
-                "error_code": error_code,
-                "latency_ms": latency_ms,
-                "queue_ms": 0,
-                "bytes_in": bytes_in,
-                "bytes_out": bytes_out,
-            },
-            separators=(",", ":"),
-        )
-    )
+def _daemon_lifecycle_data(daemon: DaemonServer) -> dict[str, Any]:
+    return {
+        "socket_path": str(daemon.socket_path),
+        "max_request_bytes": daemon.max_request_bytes,
+        "max_response_bytes": daemon.max_response_bytes,
+        "max_connections": daemon.max_connections,
+        "request_read_timeout_ms": daemon.request_read_timeout_ms,
+    }
 
 
 def _log_sighup_noop() -> None:
-    LOGGER.info(json.dumps({"event": "daemon_sighup_noop"}, separators=(",", ":")))
+    log_daemon_event(
+        event="daemon_sighup_noop",
+        message="daemon SIGHUP ignored",
+    )
 
 
 def _path_exists(path: Path) -> bool:

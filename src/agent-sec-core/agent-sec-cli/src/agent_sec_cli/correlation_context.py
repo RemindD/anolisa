@@ -19,6 +19,7 @@ _FIELD_ALIASES: dict[str, tuple[str, str]] = {
     "call_id": ("call_id", "callId"),
     "tool_call_id": ("tool_call_id", "toolCallId"),
 }
+CORRELATION_FIELD_NAMES: tuple[str, ...] = tuple(_FIELD_ALIASES)
 
 
 def truncate_correlation_id(_field_name: str, value: str) -> str:
@@ -49,11 +50,10 @@ class TraceContext:
 # would default to empty in newly-spawned threads and break the invariant
 # that all records in one CLI process share the same trace context.
 #
-# `_trace_context_override` is intentionally unused in the short-lived CLI;
-# it is reserved for a future daemon mode where one process handles multiple
-# concurrent requests, each needing its own per-request context. Do not
-# delete — removing it forces a redesign of every consumer when daemon mode
-# lands.
+# The normal CLI entry point initializes `_PROCESS_TRACE_CONTEXT` and does not
+# set `_trace_context_override`. Daemon and library-mode paths set the override
+# when they need request-local context in a long-lived process, where concurrent
+# requests must not overwrite each other's trace fields.
 # ---------------------------------------------------------------------------
 _PROCESS_TRACE_CONTEXT: TraceContext | None = None
 
@@ -77,10 +77,6 @@ _trace_context_override: ContextVar[_TraceContextOverride] = ContextVar(
 
 _PROCESS_INVOCATION_ID: str = ""
 _INVOCATION_INIT_LOCK = threading.Lock()
-_invocation_id_override: ContextVar[str] = ContextVar(
-    "invocation_id_override",
-    default="",
-)
 
 
 def _clean_string(field_name: str, value: Any) -> str | None:
@@ -90,6 +86,11 @@ def _clean_string(field_name: str, value: Any) -> str | None:
     if not stripped:
         return None
     return truncate_correlation_id(field_name, stripped)
+
+
+def clean_correlation_value(field_name: str, value: Any) -> str | None:
+    """Return a normalized correlation value, or ``None`` when invalid/empty."""
+    return _clean_string(field_name, value)
 
 
 def _normalized_fields(payload: Mapping[str, Any]) -> dict[str, str]:
@@ -127,6 +128,19 @@ def parse_trace_context_payload(
     if payload is None:
         return None
     return TraceContext(**_normalized_fields(payload))
+
+
+def trace_context_to_payload(ctx: TraceContext | None) -> dict[str, str]:
+    """Serialize a trace context into sanitized top-level log fields."""
+    if ctx is None:
+        return {}
+
+    payload: dict[str, str] = {}
+    for field_name in CORRELATION_FIELD_NAMES:
+        value = clean_correlation_value(field_name, getattr(ctx, field_name, None))
+        if value is not None:
+            payload[field_name] = value
+    return payload
 
 
 def init_process_trace_context(ctx: TraceContext | None) -> None:
@@ -201,29 +215,10 @@ def clear_invocation_context_for_tests() -> None:
     """Clear invocation context state for in-process tests."""
     global _PROCESS_INVOCATION_ID  # noqa: PLW0603
     _PROCESS_INVOCATION_ID = ""
-    _invocation_id_override.set("")
-
-
-def set_current_invocation_id(invocation_id: str) -> Token[str]:
-    """Set a request-local invocation ID override.
-
-    Input is normalized the same way as the env value: stripped and truncated
-    to ``MAX_CORRELATION_ID_LENGTH``. Whitespace-only input clears the override.
-    """
-    cleaned = _clean_string("invocation_id", invocation_id)
-    return _invocation_id_override.set(cleaned or "")
-
-
-def reset_current_invocation_id(token: Token[str]) -> None:
-    """Reset a request-local invocation ID override."""
-    _invocation_id_override.reset(token)
 
 
 def get_invocation_id() -> str:
-    """Return request-local invocation ID, falling back to the process value."""
-    override = _invocation_id_override.get()
-    if override:
-        return override
+    """Return the process-level CLI invocation ID."""
     if not _PROCESS_INVOCATION_ID:
         init_invocation_context()
     return _PROCESS_INVOCATION_ID

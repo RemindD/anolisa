@@ -2,12 +2,14 @@
 
 import json
 import logging
+import os
 import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from agent_sec_cli import diagnostic_logging
 from agent_sec_cli.cli_logging import (
     CLI_LOG_BACKUP_COUNT,
     CLI_LOG_MAX_BYTES,
@@ -38,7 +40,6 @@ def reset_logging_state() -> None:
 
 def _clear_cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_SEC_CLI_LOG_LEVEL", raising=False)
-    monkeypatch.delenv("AGENT_SEC_CLI_LOG_DISABLED", raising=False)
     monkeypatch.delenv("AGENT_SEC_INVOCATION_ID", raising=False)
 
 
@@ -95,13 +96,12 @@ def test_log_level_env_accepts_supported_levels(
     assert config.level == level
 
 
-def test_disabled_env_wins_over_log_level(
+def test_log_level_off_disables_cli_logging(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_cli_env(monkeypatch)
     monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AGENT_SEC_CLI_LOG_LEVEL", "debug")
-    monkeypatch.setenv("AGENT_SEC_CLI_LOG_DISABLED", "true")
+    monkeypatch.setenv("AGENT_SEC_CLI_LOG_LEVEL", "off")
 
     config = resolve_cli_logging_config()
 
@@ -152,13 +152,32 @@ def test_default_path_resolution_failure_disables_cli_logging(
     assert config.log_file is None
 
 
-def test_handler_uses_configured_retention_constants(tmp_path: Path) -> None:
-    handler = JsonlCliLogHandler(tmp_path / "cli.jsonl")
+def test_handler_uses_configured_retention_constants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_writers: list[tuple[Path, int, int]] = []
 
-    # JsonlEventWriter stores the configured size/count on private attributes.
-    # We assert on them because there is no public API to inspect them.
-    assert handler._writer._max_bytes == CLI_LOG_MAX_BYTES
-    assert handler._writer._backup_count == CLI_LOG_BACKUP_COUNT
+    class CapturingWriter:
+        def __init__(
+            self,
+            path: str | Path,
+            *,
+            max_bytes: int,
+            backup_count: int,
+        ) -> None:
+            created_writers.append((Path(path), max_bytes, backup_count))
+
+        def write(self, _record: dict[str, object]) -> None:
+            pass
+
+    monkeypatch.setattr(diagnostic_logging, "JsonlEventWriter", CapturingWriter)
+
+    JsonlCliLogHandler(tmp_path / "cli.jsonl")
+
+    assert created_writers == [
+        (tmp_path / "cli.jsonl", CLI_LOG_MAX_BYTES, CLI_LOG_BACKUP_COUNT)
+    ]
 
 
 def test_handler_writes_jsonl_with_invocation_and_trace_context(
@@ -191,6 +210,9 @@ def test_handler_writes_jsonl_with_invocation_and_trace_context(
 
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert payload["level"] == "WARNING"
+    assert payload["component"] == "cli"
+    assert payload["event"] == "cli_log"
+    assert payload["pid"] == os.getpid()
     assert payload["logger"] == "agent_sec_cli.tests"
     assert payload["message"] == "action completed"
     assert payload["function"] == "test_function"
@@ -393,22 +415,31 @@ def test_setup_cli_logging_disables_root_propagation(
     assert logger.propagate is False
 
 
-@pytest.mark.parametrize(
-    ("env_name", "env_value"),
-    [
-        ("AGENT_SEC_CLI_LOG_DISABLED", "true"),
-        ("AGENT_SEC_CLI_LOG_LEVEL", "off"),
-    ],
-)
-def test_setup_cli_logging_preserves_root_propagation_when_logging_is_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    env_name: str,
-    env_value: str,
+def test_setup_cli_logging_does_not_mutate_cli_logger_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_cli_env(monkeypatch)
     monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv(env_name, env_value)
+    monkeypatch.setenv("AGENT_SEC_CLI_LOG_LEVEL", "debug")
+    logger = logging.getLogger("agent_sec_cli")
+    original_level = logger.level
+
+    try:
+        logger.setLevel(logging.ERROR)
+        setup_cli_logging()
+
+        assert logger.level == logging.ERROR
+    finally:
+        logger.setLevel(original_level)
+
+
+def test_setup_cli_logging_preserves_root_propagation_when_logging_is_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_cli_env(monkeypatch)
+    monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENT_SEC_CLI_LOG_LEVEL", "off")
     logger = logging.getLogger("agent_sec_cli")
     logger.propagate = True
 

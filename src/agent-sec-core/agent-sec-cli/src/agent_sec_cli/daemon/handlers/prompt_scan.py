@@ -38,7 +38,6 @@ async def prompt_scan_handler(
     params = request.params
     result = await asyncio.to_thread(
         _invoke_prompt_scan,
-        trace_context=request.trace_context,
         text=_string_param(params, "text"),
         mode=_string_param(params, "mode", default="standard"),
         source=_string_param(params, "source"),
@@ -48,19 +47,17 @@ async def prompt_scan_handler(
 
 def _invoke_prompt_scan(
     *,
-    trace_context: dict[str, Any],
     text: str,
     mode: str,
     source: str,
 ) -> Any:
     from agent_sec_cli.security_middleware import (  # noqa: PLC0415 - lazy import: daemon handler execution only
-        invoke_with_context,
+        invoke,
     )
 
-    return invoke_with_context(
+    return invoke(
         "prompt_scan",
         caller="daemon",
-        trace_context=trace_context,
         text=text,
         mode=mode,
         source=source,

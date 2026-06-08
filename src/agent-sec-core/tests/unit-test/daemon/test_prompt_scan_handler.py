@@ -4,9 +4,11 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from agent_sec_cli.correlation_context import TraceContext
 from agent_sec_cli.daemon.errors import UnavailableError
 from agent_sec_cli.daemon.handlers.prompt_scan import prompt_scan_handler
 from agent_sec_cli.daemon.protocol import DaemonRequest
+from agent_sec_cli.daemon.request_context import daemon_request_context
 from agent_sec_cli.daemon.runtime import DaemonRuntime
 from agent_sec_cli.security_middleware.result import ActionResult
 
@@ -14,8 +16,8 @@ from agent_sec_cli.security_middleware.result import ActionResult
 def test_prompt_scan_handler_rejects_when_prompt_runtime_not_ready(tmp_path: Path):
     runtime = DaemonRuntime(socket_path=tmp_path / "daemon.sock")
     request = DaemonRequest(
-        id="req-prompt",
         method="scan-prompt",
+        request_id="req-prompt",
         params={"text": "hello", "mode": "standard"},
     )
 
@@ -79,8 +81,8 @@ def test_prompt_scan_handler_unavailable_message_describes_preload_state(
     runtime.prompt_scan_state.model = model
     runtime.prompt_scan_state.last_error = last_error
     request = DaemonRequest(
-        id="req-prompt",
         method="scan-prompt",
+        request_id="req-prompt",
         params={"text": "hello", "mode": "standard"},
     )
 
@@ -92,7 +94,7 @@ def test_prompt_scan_handler_unavailable_message_describes_preload_state(
         assert expected_part in message
 
 
-def test_prompt_scan_handler_invokes_middleware_with_request_context(
+def test_prompt_scan_handler_invokes_middleware_with_prompt_params(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -115,8 +117,8 @@ def test_prompt_scan_handler_invokes_middleware_with_request_context(
         fake_invoke_prompt_scan,
     )
     request = DaemonRequest(
-        id="req-prompt",
         method="scan-prompt",
+        request_id="req-prompt",
         params={"text": "hello", "mode": "standard", "source": "user_input"},
         trace_context={"trace_id": "trace-1"},
     )
@@ -124,7 +126,6 @@ def test_prompt_scan_handler_invokes_middleware_with_request_context(
     result = asyncio.run(prompt_scan_handler(request, runtime))
 
     assert captured == {
-        "trace_context": {"trace_id": "trace-1"},
         "text": "hello",
         "mode": "standard",
         "source": "user_input",
@@ -133,6 +134,47 @@ def test_prompt_scan_handler_invokes_middleware_with_request_context(
     assert result.stdout == '{"ok": true, "verdict": "pass"}'
     assert result.stderr == ""
     assert result.exit_code == 0
+
+
+def test_prompt_scan_handler_uses_gateway_trace_context(
+    monkeypatch,
+    tmp_path: Path,
+):
+    runtime = DaemonRuntime(socket_path=tmp_path / "daemon.sock")
+    runtime.prompt_scan_state.status = "ready"
+    runtime.prompt_scan_state.loaded = True
+    captured = {}
+
+    class FakeBackend:
+        def execute(self, ctx, **_kwargs):
+            captured["ctx"] = ctx
+            return ActionResult(success=True, data={"ok": True})
+
+    monkeypatch.setattr(
+        "agent_sec_cli.security_middleware.router.get_backend",
+        lambda _action: FakeBackend(),
+    )
+    request = DaemonRequest(
+        method="scan-prompt",
+        request_id="req-prompt",
+        params={"text": "hello", "mode": "standard"},
+    )
+
+    with daemon_request_context(
+        TraceContext(
+            trace_id="trace-1",
+            session_id="session-1",
+            run_id="run-1",
+        )
+    ):
+        result = asyncio.run(prompt_scan_handler(request, runtime))
+
+    ctx = captured["ctx"]
+    assert ctx.trace_id == "trace-1"
+    assert ctx.caller == "daemon"
+    assert ctx.session_id == "session-1"
+    assert ctx.run_id == "run-1"
+    assert result.data == {"ok": True}
 
 
 def test_prompt_scan_handler_preserves_action_result_error(
@@ -154,7 +196,7 @@ def test_prompt_scan_handler_preserves_action_result_error(
         "agent_sec_cli.daemon.handlers.prompt_scan._invoke_prompt_scan",
         fake_invoke_prompt_scan,
     )
-    request = DaemonRequest(id="req-prompt", method="scan-prompt")
+    request = DaemonRequest(method="scan-prompt", request_id="req-prompt")
 
     result = asyncio.run(prompt_scan_handler(request, runtime))
 

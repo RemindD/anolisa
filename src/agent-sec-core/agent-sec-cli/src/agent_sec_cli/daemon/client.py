@@ -4,6 +4,10 @@ import socket
 from pathlib import Path
 from typing import Any
 
+from agent_sec_cli.correlation_context import (
+    clean_correlation_value,
+    get_invocation_id,
+)
 from agent_sec_cli.daemon.errors import (
     DaemonClientTimeoutError,
     DaemonProtocolError,
@@ -14,7 +18,6 @@ from agent_sec_cli.daemon.protocol import (
     DEFAULT_TIMEOUT_MS,
     DaemonRequest,
     DaemonResponse,
-    generate_request_id,
     parse_response_line,
     serialize_request,
 )
@@ -40,15 +43,15 @@ class DaemonClient:
         params: dict[str, Any] | None = None,
         trace_context: dict[str, Any] | None = None,
         timeout_ms: int | None = None,
-        request_id: str | None = None,
+        caller: str | None = None,
     ) -> DaemonResponse:
         """Send one request and return the daemon response."""
         effective_timeout_ms = timeout_ms or self.timeout_ms
         request = DaemonRequest(
-            id=request_id or generate_request_id(),
             method=method,
             params={} if params is None else params,
-            trace_context={} if trace_context is None else trace_context,
+            trace_context=_trace_context_with_fallback_trace_id(trace_context),
+            caller=caller,
             timeout_ms=effective_timeout_ms,
         )
         return self._send_request(request, effective_timeout_ms)
@@ -105,3 +108,15 @@ def daemon_health_reachable(socket_path: Path, timeout_ms: int = 250) -> bool:
     except (DaemonProtocolError, DaemonTransportError):
         return False
     return response.ok
+
+
+def _trace_context_with_fallback_trace_id(
+    trace_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = {} if trace_context is None else dict(trace_context)
+    trace_id = clean_correlation_value("trace_id", payload.get("trace_id"))
+    if trace_id is None:
+        trace_id = clean_correlation_value("trace_id", payload.get("traceId"))
+    if trace_id is None:
+        payload["trace_id"] = get_invocation_id()
+    return payload

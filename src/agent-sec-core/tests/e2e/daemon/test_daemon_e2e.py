@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,8 @@ def test_daemon_health_over_unix_socket(
             {"id": "e2e-health", "method": "daemon.health"},
         )
 
-        assert response["id"] == "e2e-health"
+        assert response["request_id"] != "e2e-health"
+        _assert_uuid(response["request_id"])
         assert response["ok"] is True
         assert response["exit_code"] == 0
         assert response.get("error") is None
@@ -75,7 +77,7 @@ def test_daemon_health_over_unix_socket(
 
     assert not socket_path.exists()
     assert output.returncode == 0
-    assert not _has_request_log(output, "e2e-health", "daemon.health")
+    assert not _has_request_log(tmp_path, response["request_id"], "daemon.health")
 
 
 def test_daemon_uses_xdg_runtime_dir_by_default(
@@ -119,7 +121,8 @@ def test_daemon_unknown_method_returns_structured_error(
     finally:
         output = _stop_daemon(process)
 
-    assert response["id"] == "e2e-unknown"
+    assert response["request_id"] != "e2e-unknown"
+    _assert_uuid(response["request_id"])
     assert response["ok"] is False
     assert response["exit_code"] == 1
     assert response["stderr"] == "unknown daemon method: unknown.method"
@@ -128,7 +131,13 @@ def test_daemon_unknown_method_returns_structured_error(
         "message": "unknown daemon method: unknown.method",
     }
     assert output.returncode == 0
-    assert _has_request_log(output, "e2e-unknown", "unknown.method")
+    assert _has_request_event(
+        tmp_path,
+        "daemon_request_started",
+        response["request_id"],
+        "unknown.method",
+    )
+    assert _has_request_log(tmp_path, response["request_id"], "unknown.method")
 
 
 def test_daemon_scan_prompt_returns_unavailable_until_model_ready(
@@ -153,14 +162,15 @@ def test_daemon_scan_prompt_returns_unavailable_until_model_ready(
     finally:
         output = _stop_daemon(process)
 
-    assert response["id"] == "e2e-scan-prompt-not-ready"
+    assert response["request_id"] != "e2e-scan-prompt-not-ready"
+    _assert_uuid(response["request_id"])
     assert response["ok"] is False
     assert response["exit_code"] == 1
     assert response["error"]["code"] == "unavailable"
     assert "prompt scanner is not ready" in response["stderr"]
     assert "status=pending" in response["stderr"]
     assert output.returncode == 0
-    assert _has_request_log(output, "e2e-scan-prompt-not-ready", "scan-prompt")
+    assert _has_request_log(tmp_path, response["request_id"], "scan-prompt")
 
 
 def test_daemon_returns_busy_when_connection_limit_is_exhausted(
@@ -185,6 +195,7 @@ def test_daemon_returns_busy_when_connection_limit_is_exhausted(
         output = _stop_daemon(process)
 
     assert response["ok"] is False
+    _assert_uuid(response["request_id"])
     assert response["exit_code"] == 1
     assert response["error"] == {"code": "busy", "message": "daemon is busy"}
     assert output.returncode == 0
@@ -216,8 +227,10 @@ def test_daemon_idle_client_times_out_and_releases_connection(
         output = _stop_daemon(process)
 
     assert timeout_response["ok"] is False
+    _assert_uuid(timeout_response["request_id"])
     assert timeout_response["error"]["code"] == "timeout"
     assert health_response["ok"] is True
+    _assert_uuid(health_response["request_id"])
     assert output.returncode == 0
 
 
@@ -231,6 +244,8 @@ def test_daemon_sigterm_graceful_shutdown(
 
     assert output.returncode == 0
     assert not socket_path.exists()
+    assert _has_daemon_event(tmp_path, "daemon_started")
+    assert _has_daemon_event(tmp_path, "daemon_stopped")
 
 
 def test_daemon_skillfs_notify_refreshes_skill_ledger_activation(
@@ -428,6 +443,10 @@ def _call_daemon(socket_path: Path, request: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _assert_uuid(value: str) -> None:
+    uuid.UUID(value)
+
+
 def _read_response(client_socket: socket.socket) -> bytes:
     chunks: list[bytes] = []
     total_bytes = 0
@@ -450,19 +469,17 @@ def _read_response(client_socket: socket.socket) -> bytes:
     return raw_response
 
 
-def _has_request_log(output: DaemonOutput, request_id: str, method: str | None) -> bool:
-    for line in f"{output.stdout}\n{output.stderr}".splitlines():
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+def _has_request_log(tmp_path: Path, request_id: str, method: str | None) -> bool:
+    for payload in _read_daemon_log_payloads(tmp_path):
+        data = payload.get("data", {})
         if (
             payload.get("event") == "daemon_request_completed"
             and payload.get("request_id") == request_id
-            and payload.get("method") == method
-            and "latency_ms" in payload
-            and "bytes_in" in payload
-            and "bytes_out" in payload
+            and isinstance(data, dict)
+            and data.get("method") == method
+            and "latency_ms" in data
+            and "bytes_in" in data
+            and "bytes_out" in data
         ):
             return True
     return False
@@ -477,7 +494,8 @@ def _has_request_event(
     return any(
         payload.get("event") == event
         and payload.get("request_id") == request_id
-        and payload.get("method") == method
+        and isinstance(payload.get("data"), dict)
+        and payload["data"].get("method") == method
         for payload in _read_daemon_log_payloads(tmp_path)
     )
 
