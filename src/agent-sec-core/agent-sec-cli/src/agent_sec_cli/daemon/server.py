@@ -20,6 +20,7 @@ from agent_sec_cli.daemon.errors import (
     DaemonError,
     DaemonRuntimePathError,
     DaemonTimeoutError,
+    InternalDaemonError,
     ResponseTooLargeError,
     ShutdownError,
 )
@@ -262,6 +263,24 @@ class DaemonServer:
                 _request_id_for_response(prepared_request, fallback_request_id),
                 exc,
             )
+        except Exception:
+            request_id = _request_id_for_response(prepared_request, fallback_request_id)
+            LOGGER.exception(
+                "unexpected daemon request failure",
+                extra={
+                    "diagnostic_event": "daemon_request_internal_error",
+                    "diagnostic_request_id": request_id,
+                    "data": {
+                        "request_id": request_id,
+                        "method": (
+                            None
+                            if prepared_request is None
+                            else prepared_request.request.method
+                        ),
+                    },
+                },
+            )
+            response = error_response(request_id, InternalDaemonError())
         finally:
             if response is None:
                 response = error_response(
@@ -298,7 +317,19 @@ class DaemonServer:
         writer: asyncio.StreamWriter,
         response: DaemonResponse,
     ) -> tuple[int, DaemonResponse]:
-        raw_response = serialize_response(response)
+        try:
+            raw_response = serialize_response(response)
+        except Exception:
+            LOGGER.exception(
+                "failed to serialize daemon response",
+                extra={
+                    "diagnostic_event": "daemon_response_serialize_failed",
+                    "diagnostic_request_id": response.request_id,
+                    "data": {"request_id": response.request_id},
+                },
+            )
+            response = error_response(response.request_id, InternalDaemonError())
+            raw_response = serialize_response(response)
         if len(raw_response) > self.max_response_bytes:
             response = error_response(
                 response.request_id, ResponseTooLargeError(self.max_response_bytes)

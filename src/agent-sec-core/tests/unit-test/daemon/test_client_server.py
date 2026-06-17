@@ -446,6 +446,98 @@ def test_daemon_server_rejects_oversized_handler_response(tmp_path: Path, caplog
     assert matching_logs[-1].data["error_code"] == "payload_too_large"
 
 
+def test_daemon_server_returns_internal_error_for_unserializable_response(
+    tmp_path: Path,
+):
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+
+        async def unserializable_handler(
+            _request: DaemonRequest, _runtime: DaemonRuntime
+        ) -> HandlerResult:
+            return HandlerResult(data={"value": object()})
+
+        registry = MethodRegistry()
+        registry.register(
+            MethodSpec(
+                method="unserializable",
+                handler=unserializable_handler,
+                lifecycle="test",
+            )
+        )
+        registry.register(
+            MethodSpec(
+                method="daemon.health",
+                handler=lambda _request, _runtime: HandlerResult(data={}),
+                lifecycle="admin",
+            )
+        )
+        server = DaemonServer(socket_path=socket_path, registry=registry)
+        await server.start()
+        try:
+            error_response = await _send_daemon_request(
+                socket_path,
+                DaemonRequest(method="unserializable"),
+            )
+            health_response = await _send_daemon_request(
+                socket_path,
+                DaemonRequest(method="daemon.health"),
+            )
+        finally:
+            await server.stop()
+
+        return error_response, health_response
+
+    error_response, health_response = asyncio.run(scenario())
+
+    assert error_response.ok is False
+    _assert_uuid(error_response.request_id)
+    assert error_response.error is not None
+    assert error_response.error["code"] == "internal_error"
+    assert error_response.stderr == "daemon internal error"
+    assert health_response.ok is True
+
+
+def test_daemon_server_returns_internal_error_for_unexpected_prepare_failure(
+    monkeypatch,
+    tmp_path: Path,
+):
+    async def scenario():
+        socket_path = tmp_path / "runtime" / "daemon.sock"
+        server = DaemonServer(socket_path=socket_path)
+        original_prepare = server.gateway.prepare
+
+        def fail_prepare_for_request(request: DaemonRequest):
+            if request.method == "explode.prepare":
+                raise RuntimeError("prepare exploded")
+            return original_prepare(request)
+
+        monkeypatch.setattr(server.gateway, "prepare", fail_prepare_for_request)
+        await server.start()
+        try:
+            error_response = await _send_daemon_request(
+                socket_path,
+                DaemonRequest(method="explode.prepare"),
+            )
+            health_response = await _send_daemon_request(
+                socket_path,
+                DaemonRequest(method="daemon.health"),
+            )
+        finally:
+            await server.stop()
+
+        return error_response, health_response
+
+    error_response, health_response = asyncio.run(scenario())
+
+    assert error_response.ok is False
+    _assert_uuid(error_response.request_id)
+    assert error_response.error is not None
+    assert error_response.error["code"] == "internal_error"
+    assert error_response.stderr == "daemon internal error"
+    assert health_response.ok is True
+
+
 def test_daemon_server_suppresses_method_access_log(tmp_path: Path, caplog):
     caplog.set_level(logging.INFO, logger="agent-sec-core.daemon")
 
