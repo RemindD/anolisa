@@ -259,7 +259,6 @@ def test_daemon_skillfs_notify_refreshes_skill_ledger_activation(
         response = _call_daemon(
             socket_path,
             {
-                "id": "e2e-skillfs-notify",
                 "method": "skill_ledger.skillfs_notify_change",
                 "params": {
                     "schemaVersion": 1,
@@ -282,7 +281,9 @@ def test_daemon_skillfs_notify_refreshes_skill_ledger_activation(
     }
     assert output.returncode == 0
     assert _has_request_log(
-        output, "e2e-skillfs-notify", "skill_ledger.skillfs_notify_change"
+        tmp_path,
+        response["request_id"],
+        "skill_ledger.skillfs_notify_change",
     )
 
 

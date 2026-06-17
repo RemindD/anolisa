@@ -514,7 +514,7 @@ class TestCliDaemonFallbackHandling(unittest.TestCase):
 
     def test_daemon_protocol_error_response_does_not_fallback(self) -> None:
         daemon_response = DaemonResponse(
-            id="req-prompt",
+            request_id="00000000-0000-4000-8000-000000000000",
             ok=False,
             stderr="request must be valid",
             exit_code=1,

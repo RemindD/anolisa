@@ -404,7 +404,6 @@ def test_daemon_pass_warn_only_policy_hides_deny_snapshot(
                 client.call,
                 METHOD_SKILLFS_NOTIFY_CHANGE,
                 notify_payload(skill_dir),
-                request_id="notify-warn-v1",
             )
             activation_v1 = await wait_for(
                 lambda: (
@@ -421,7 +420,6 @@ def test_daemon_pass_warn_only_policy_hides_deny_snapshot(
                 client.call,
                 METHOD_SKILLFS_NOTIFY_CHANGE,
                 notify_payload(skill_dir, ["run.sh"]),
-                request_id="notify-deny-v2",
             )
             activation_after_deny = await wait_for(
                 lambda: (
