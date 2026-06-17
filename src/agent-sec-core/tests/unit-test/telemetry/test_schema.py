@@ -189,7 +189,7 @@ def test_error_fields_map_from_exception_details() -> None:
     assert record["seccore.request"] == {"skill": "/path"}
 
 
-def test_error_fields_map_from_result_summary_when_present() -> None:
+def test_error_fields_do_not_fallback_to_result_summary() -> None:
     event = _event(
         event_type="pii_scan",
         category="pii_scan",
@@ -204,8 +204,34 @@ def test_error_fields_map_from_result_summary_when_present() -> None:
 
     record = build_telemetry_security_event(event)
 
-    assert record["seccore.error"] == "bad input"
-    assert record["seccore.error_type"] == "TypeError"
+    assert record["seccore.error"] is None
+    assert record["seccore.error_type"] is None
+    assert record["seccore.summary"] == {
+        "error": "bad input",
+        "error_type": "TypeError",
+    }
+
+
+def test_error_fields_preserve_explicit_details_null_over_result_values() -> None:
+    event = _event(
+        event_type="pii_scan",
+        category="pii_scan",
+        result="failed",
+        details={
+            "error": None,
+            "error_type": None,
+            "result": {
+                "error": "ignored",
+                "error_type": "IgnoredError",
+                "summary": {"error": "bad input", "error_type": "TypeError"},
+            },
+        },
+    )
+
+    record = build_telemetry_security_event(event)
+
+    assert record["seccore.error"] is None
+    assert record["seccore.error_type"] is None
 
 
 def test_missing_fields_use_null_except_generated_event_id_timestamp_and_details() -> (
@@ -228,7 +254,7 @@ def test_missing_fields_use_null_except_generated_event_id_timestamp_and_details
     assert record["seccore.details"] == {}
 
 
-def test_mapping_deep_copies_and_converts_values_to_json_safe() -> None:
+def test_mapping_does_not_mutate_input_and_converts_values_to_json_safe() -> None:
     details = {
         "request": {"items": ("a", "b")},
         "result": {"summary": {"values": {"z", "a"}}},
@@ -242,3 +268,27 @@ def test_mapping_deep_copies_and_converts_values_to_json_safe() -> None:
     assert record["seccore.request"] == {"items": ["a", "b"]}
     assert record["seccore.summary"] == {"values": ["a", "z"]}
     json.dumps(record)
+
+
+def test_mapping_converts_non_finite_floats_to_null_for_strict_json() -> None:
+    event = _event(
+        details={
+            "request": {
+                "nan": float("nan"),
+                "values": [float("inf"), float("-inf"), 1.25],
+            },
+            "error": float("nan"),
+            "result": {
+                "elapsed_ms": float("inf"),
+                "summary": {"score": float("nan")},
+            },
+        }
+    )
+
+    record = build_telemetry_security_event(event)
+
+    assert record["seccore.request"] == {"nan": None, "values": [None, None, 1.25]}
+    assert record["seccore.error"] is None
+    assert record["seccore.elapsed_ms"] is None
+    assert record["seccore.summary"] == {"score": None}
+    json.dumps(record, allow_nan=False)

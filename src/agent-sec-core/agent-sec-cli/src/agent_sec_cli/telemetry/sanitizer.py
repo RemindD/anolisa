@@ -1,7 +1,7 @@
 """Map SecurityEvent details into telemetry business fields."""
 
-import copy
 import json
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,9 +12,8 @@ def now_iso() -> str:
 
 
 def to_json_safe(value: Any) -> Any:
-    """Return a deep-copied JSON-safe representation of *value*."""
-    copied = copy.deepcopy(value)
-    return _make_json_safe(copied)
+    """Return a JSON-safe representation of *value*."""
+    return _make_json_safe(value)
 
 
 def details_dict(value: Any) -> dict[str, Any]:
@@ -46,28 +45,18 @@ def request_value(details: dict[str, Any]) -> Any:
     return to_json_safe(details.get("request"))
 
 
-def error_value(details: dict[str, Any], result: dict[str, Any]) -> Any:
-    """Return the best available error value from event details/result data."""
-    if "error" in details:
-        return to_json_safe(details.get("error"))
-    if "error" in result:
-        return to_json_safe(result.get("error"))
-    summary = result.get("summary")
-    if isinstance(summary, dict) and "error" in summary:
-        return to_json_safe(summary.get("error"))
-    return None
+def error_value(details: dict[str, Any]) -> Any:
+    """Return the explicit error value from event details."""
+    if "error" not in details:
+        return None
+    return to_json_safe(details.get("error"))
 
 
-def error_type_value(details: dict[str, Any], result: dict[str, Any]) -> Any:
-    """Return the best available error type from event details/result data."""
-    if "error_type" in details:
-        return to_json_safe(details.get("error_type"))
-    if "error_type" in result:
-        return to_json_safe(result.get("error_type"))
-    summary = result.get("summary")
-    if isinstance(summary, dict) and "error_type" in summary:
-        return to_json_safe(summary.get("error_type"))
-    return None
+def error_type_value(details: dict[str, Any]) -> Any:
+    """Return the explicit error type from event details."""
+    if "error_type" not in details:
+        return None
+    return to_json_safe(details.get("error_type"))
 
 
 def result_value(result: dict[str, Any], key: str) -> Any:
@@ -77,10 +66,22 @@ def result_value(result: dict[str, Any], key: str) -> Any:
     return to_json_safe(result.get(key))
 
 
+def _is_json_scalar(value: Any) -> bool:
+    """Return whether *value* can be represented as a JSON scalar."""
+    return value is None or isinstance(value, (str, bool, int, float))
+
+
+def _normalize_json_scalar(value: Any) -> Any:
+    """Return the strict JSON representation of a scalar value."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def _make_json_safe(value: Any) -> Any:
     """Convert arbitrary Python values into JSON-serializable values."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
+    if _is_json_scalar(value):
+        return _normalize_json_scalar(value)
     if isinstance(value, dict):
         return {str(key): _make_json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -93,7 +94,7 @@ def _make_json_safe(value: Any) -> Any:
         return _make_json_safe(model_dump())
 
     try:
-        json.dumps(value)
-    except TypeError:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError):
         return str(value)
     return value
