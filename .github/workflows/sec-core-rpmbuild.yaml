@@ -16,7 +16,7 @@ permissions:
 jobs:
   build-rpm:
     name: Build agent-sec-core RPM
-    runs-on: ${{ github.event.pull_request.head.repo.fork == true && 'ubuntu-22.04' || fromJSON('["self-hosted", "ubuntu"]') }}
+    runs-on: ${{ (github.event.repository.fork == true || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true)) && 'ubuntu-22.04' || fromJSON('["self-hosted", "ubuntu"]') }}
     container:
       image: alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4:latest
     steps:
