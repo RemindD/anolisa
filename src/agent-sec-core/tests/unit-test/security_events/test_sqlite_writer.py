@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import agent_sec_cli.security_events.models as security_event_models
 import agent_sec_cli.security_events.sqlite_writer as sqlite_writer_module
 import pytest
 from agent_sec_cli.security_events.schema import SecurityEvent
@@ -732,6 +733,76 @@ class TestSqliteEventWriter:
             "nested-verdict": "pass",
             "new-event": "warn",
             "no-verdict": None,
+        }
+
+    def test_v2_database_migrates_verdict_column_in_batches(
+        self,
+        db_path: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            security_event_models,
+            "_VERDICT_MIGRATION_BATCH_SIZE",
+            2,
+        )
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE security_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                category TEXT NOT NULL,
+                result TEXT NOT NULL DEFAULT 'succeeded',
+                timestamp TEXT NOT NULL,
+                timestamp_epoch FLOAT NOT NULL,
+                trace_id TEXT NOT NULL DEFAULT '',
+                pid INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                session_id TEXT,
+                run_id TEXT,
+                call_id TEXT,
+                tool_call_id TEXT,
+                details TEXT NOT NULL
+            );
+            PRAGMA user_version = 2;
+            """)
+        conn.executemany(
+            """
+            INSERT INTO security_events (
+                event_id, event_type, category, result, timestamp, timestamp_epoch,
+                trace_id, pid, uid, session_id, run_id, call_id, tool_call_id, details
+            ) VALUES (?, 'scan', 'prompt_scan', 'succeeded',
+                '2026-05-19T00:00:00+00:00', ?, '', 1, 1, NULL, NULL, NULL, NULL, ?)
+            """,
+            [
+                ("row-1", 1779148800.0, '{"verdict": "deny"}'),
+                ("row-2-no-verdict", 1779148801.0, "{}"),
+                ("row-3", 1779148802.0, '{"verdict": "pass"}'),
+                ("row-4", 1779148803.0, '{"result": {"verdict": "warn"}}'),
+                ("row-5", 1779148804.0, '{"verdict": "deny"}'),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        writer = SqliteEventWriter(path=db_path, max_age_days=None)
+        writer.write(_make_event(event_id="new-event"))
+        writer.close()
+
+        conn = sqlite3.connect(db_path)
+        rows = dict(
+            conn.execute(
+                "SELECT event_id, verdict FROM security_events "
+                "WHERE event_id LIKE 'row-%' ORDER BY event_id"
+            ).fetchall()
+        )
+        conn.close()
+
+        assert rows == {
+            "row-1": "deny",
+            "row-2-no-verdict": None,
+            "row-3": "pass",
+            "row-4": "warn",
+            "row-5": "deny",
         }
 
     def test_schema_repairs_missing_indexes(self, db_path: str) -> None:

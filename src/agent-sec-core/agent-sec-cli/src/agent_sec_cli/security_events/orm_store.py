@@ -148,10 +148,10 @@ def ensure_schema(
     model_tuple = _coerce_models(models)
     with engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
-    with engine.begin() as conn:
         version = conn.execute(text("PRAGMA user_version")).scalar_one()
         if version > schema_version:
             _warn_newer_schema_version(int(version), schema_version, log_prefix)
+            conn.commit()
             return
 
         conn.execute(text("PRAGMA auto_vacuum = INCREMENTAL"))
@@ -163,6 +163,15 @@ def ensure_schema(
                 model_tuple,
                 log_prefix,
             )
+        conn.commit()
+
+    with engine.begin() as conn:
+        version = conn.execute(text("PRAGMA user_version")).scalar_one()
+        if version > schema_version:
+            _warn_newer_schema_version(int(version), schema_version, log_prefix)
+            return
+
+        conn.execute(text("PRAGMA auto_vacuum = INCREMENTAL"))
 
         for model in model_tuple:
             table = model.__table__

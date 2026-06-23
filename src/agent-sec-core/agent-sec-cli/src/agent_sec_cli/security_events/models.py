@@ -14,6 +14,8 @@ from sqlalchemy import Float, Index, Integer, Text, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, mapped_column
 
+_VERDICT_MIGRATION_BATCH_SIZE = 5000
+
 
 class SecurityEventRecord(Base):
     """ORM mapping for the queryable security event index."""
@@ -76,25 +78,46 @@ def _migrate_verdict_column(conn: Connection) -> None:
     inspector = inspect(conn)
     table_name = SecurityEventRecord.__tablename__
     if not inspector.has_table(table_name):
+        conn.commit()
         return
 
     existing = {column["name"] for column in inspector.get_columns(table_name)}
     if "verdict" not in existing:
         conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN verdict TEXT"))
+        conn.commit()
 
-    rows = conn.execute(
-        text("SELECT event_id, details FROM security_events WHERE verdict IS NULL")
-    ).all()
-    updates = _verdict_updates(rows)
-    if updates:
-        conn.execute(
+    last_rowid = 0
+    while True:
+        rows = conn.execute(
             text(
-                "UPDATE security_events "
-                "SET verdict = :verdict "
-                "WHERE event_id = :event_id"
+                "SELECT rowid AS row_id, event_id, details "
+                "FROM security_events "
+                "WHERE verdict IS NULL AND rowid > :last_rowid "
+                "ORDER BY rowid "
+                "LIMIT :limit"
             ),
-            updates,
-        )
+            {
+                "last_rowid": last_rowid,
+                "limit": _VERDICT_MIGRATION_BATCH_SIZE,
+            },
+        ).all()
+        if not rows:
+            conn.commit()
+            break
+
+        last_rowid = max(int(row._mapping["row_id"]) for row in rows)
+        updates = _verdict_updates(rows)
+        if updates:
+            conn.execute(
+                text(
+                    "UPDATE security_events "
+                    "SET verdict = :verdict "
+                    "WHERE event_id = :event_id"
+                ),
+                updates,
+            )
+        # Commit each bounded batch so large migrations do not hold a write lock.
+        conn.commit()
 
 
 def _verdict_updates(rows: list[Any]) -> list[dict[str, str]]:

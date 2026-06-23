@@ -553,7 +553,11 @@ def _json_object(raw: str) -> dict[str, Any]:
 
 
 def _count_map(groups: dict[Any, int]) -> dict[str, int]:
-    return {str(key): int(value) for key, value in groups.items() if key}
+    return {
+        str(key): int(value)
+        for key, value in groups.items()
+        if key is not None and key != ""
+    }
 
 
 def _count_items(groups: dict[Any, int]) -> list[dict[str, Any]]:
