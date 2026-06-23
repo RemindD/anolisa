@@ -330,6 +330,53 @@ class TestSqliteEventReader:
 
         assert reader.count_by("category", offset=1) == {"alpha": 1, "beta": 1}
 
+    def test_summary_returns_aggregates_and_latest_events(
+        self, writer: SqliteEventWriter, reader: SqliteEventReader
+    ) -> None:
+        writer.write(
+            SecurityEvent(
+                event_id="older-deny",
+                event_type="scan",
+                category="code_scan",
+                timestamp="2026-05-19T00:00:00+00:00",
+                session_id="session-1",
+                run_id="run-1",
+                details={"verdict": "deny"},
+            )
+        )
+        writer.write(
+            SecurityEvent(
+                event_id="pass-event",
+                event_type="scan",
+                category="code_scan",
+                timestamp="2026-05-19T00:01:00+00:00",
+                session_id="session-1",
+                run_id="run-1",
+                details={"verdict": "pass"},
+            )
+        )
+        writer.write(
+            SecurityEvent(
+                event_id="newer-deny",
+                event_type="prompt",
+                category="prompt_scan",
+                timestamp="2026-05-19T00:02:00+00:00",
+                session_id="session-2",
+                run_id="run-2",
+                details={"verdict": "deny"},
+            )
+        )
+
+        summary = reader.summary(verdict="deny", latest_limit=1)
+
+        assert summary.total == 2
+        assert summary.by_category == {"code_scan": 1, "prompt_scan": 1}
+        assert summary.by_event_type == {"scan": 1, "prompt": 1}
+        assert summary.by_result == {"succeeded": 2}
+        assert summary.by_session == {"session-1": 1, "session-2": 1}
+        assert summary.by_run == {"run-1": 1, "run-2": 1}
+        assert [event.event_id for event in summary.latest_events] == ["newer-deny"]
+
     def test_query_rejects_naive_time_range_at_repository_boundary(
         self, writer: SqliteEventWriter, reader: SqliteEventReader
     ) -> None:

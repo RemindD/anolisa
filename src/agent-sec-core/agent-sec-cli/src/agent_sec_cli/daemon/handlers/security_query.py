@@ -77,26 +77,21 @@ def security_summary_handler(
     )
     reader = SqliteEventReader()
     try:
-        total = reader.count(**filters)
-        by_category = reader.count_by("category", **filters)
-        by_event_type = reader.count_by("event_type", **filters)
-        by_result = reader.count_by("result", **filters)
-        by_session = reader.count_by("session_id", **filters)
-        by_run = reader.count_by("run_id", **filters)
-        latest_events = reader.query(**filters, limit=latest_limit, offset=0)
+        summary = reader.summary(**filters, latest_limit=latest_limit)
     finally:
         reader.close()
 
     return HandlerResult(
         data={
-            "total": total,
-            "by_category": _count_map(by_category),
-            "by_event_type": _count_map(by_event_type),
-            "by_result": _count_map(by_result),
-            "affected_sessions": _non_empty_group_count(by_session),
-            "affected_runs": _non_empty_group_count(by_run),
+            "total": summary.total,
+            "by_category": _count_map(summary.by_category),
+            "by_event_type": _count_map(summary.by_event_type),
+            "by_result": _count_map(summary.by_result),
+            "affected_sessions": _non_empty_group_count(summary.by_session),
+            "affected_runs": _non_empty_group_count(summary.by_run),
             "latest_events": [
-                _event_payload(event, include_details=False) for event in latest_events
+                _event_payload(event, include_details=False)
+                for event in summary.latest_events
             ],
         }
     )

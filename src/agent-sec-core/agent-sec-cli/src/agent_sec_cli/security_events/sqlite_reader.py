@@ -7,6 +7,7 @@ from agent_sec_cli.security_events.orm_store import SqliteStore
 from agent_sec_cli.security_events.repositories import (
     CorrelationCandidate,
     SecurityEventRepository,
+    SecurityEventsSummary,
 )
 from agent_sec_cli.security_events.schema import SecurityEvent
 from sqlalchemy.engine import Engine
@@ -161,4 +162,35 @@ class SqliteEventReader:
             until=until,
             verdict=verdict,
             offset=offset,
+        )
+
+    def summary(
+        self,
+        event_type: str | None = None,
+        category: str | None = None,
+        result: str | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        call_id: str | None = None,
+        tool_call_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        verdict: str | None = None,
+        latest_limit: int = 5,
+    ) -> SecurityEventsSummary:
+        """Return dashboard summary aggregates and latest events."""
+        return self._repository.summary(
+            event_type=event_type,
+            category=category,
+            result=result,
+            trace_id=trace_id,
+            session_id=session_id,
+            run_id=run_id,
+            call_id=call_id,
+            tool_call_id=tool_call_id,
+            since=since,
+            until=until,
+            verdict=verdict,
+            latest_limit=latest_limit,
         )

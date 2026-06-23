@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import agent_sec_cli.daemon.handlers.security_query as security_query
 import pytest
 from agent_sec_cli.daemon.protocol import DaemonRequest, DaemonResponse
 from agent_sec_cli.daemon.registry import dispatch_request
@@ -11,6 +12,7 @@ from agent_sec_cli.daemon.runtime import DaemonRuntime
 from agent_sec_cli.daemon.server import create_default_registry
 from agent_sec_cli.observability.schema import validate_observability_record
 from agent_sec_cli.observability.sqlite_writer import ObservabilitySqliteWriter
+from agent_sec_cli.security_events.repositories import SecurityEventsSummary
 from agent_sec_cli.security_events.schema import SecurityEvent
 from agent_sec_cli.security_events.sqlite_writer import SqliteEventWriter
 
@@ -175,6 +177,80 @@ def test_security_event_queries_read_sqlite_data(tmp_path: Path) -> None:
     }
     assert summary_response.data["affected_sessions"] == 1
     assert summary_response.data["affected_runs"] == 2
+
+
+def test_security_summary_handler_uses_repository_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any] | str] = []
+
+    class SummaryReader:
+        def summary(self, **kwargs: Any) -> SecurityEventsSummary:
+            calls.append(kwargs)
+            return SecurityEventsSummary(
+                total=2,
+                by_category={"code_scan": 2},
+                by_event_type={"scan": 2},
+                by_result={"succeeded": 2},
+                by_session={"session-1": 1, None: 1},
+                by_run={"run-1": 1, "": 1},
+                latest_events=[
+                    SecurityEvent(
+                        event_id="latest-event",
+                        event_type="scan",
+                        category="code_scan",
+                        details={"hidden": True},
+                    )
+                ],
+            )
+
+        def count(self, **_kwargs: Any) -> int:
+            raise AssertionError("summary handler should not call count")
+
+        def count_by(self, *_args: Any, **_kwargs: Any) -> dict[str, int]:
+            raise AssertionError("summary handler should not call count_by")
+
+        def query(self, **_kwargs: Any) -> list[SecurityEvent]:
+            raise AssertionError("summary handler should not call query")
+
+        def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(security_query, "SqliteEventReader", SummaryReader)
+
+    result = security_query.security_summary_handler(
+        DaemonRequest(
+            method="sec.summary",
+            params={"session_id": "session-1", "latest_limit": 7},
+        ),
+        DaemonRuntime(socket_path=tmp_path / "daemon.sock"),
+    )
+
+    assert calls == [
+        {
+            "event_type": None,
+            "category": None,
+            "result": None,
+            "trace_id": None,
+            "session_id": "session-1",
+            "run_id": None,
+            "call_id": None,
+            "tool_call_id": None,
+            "verdict": None,
+            "since": None,
+            "until": None,
+            "latest_limit": 7,
+        },
+        "close",
+    ]
+    assert result.data["total"] == 2
+    assert result.data["affected_sessions"] == 1
+    assert result.data["affected_runs"] == 1
+    latest_event = result.data["latest_events"][0]
+    assert latest_event["event_id"] == "latest-event"
+    assert latest_event["event_type"] == "scan"
+    assert "details" not in latest_event
 
 
 def test_observability_queries_read_sqlite_data(tmp_path: Path) -> None:
