@@ -11,6 +11,7 @@
 # agent-sec-cli bundles multi-GB NVIDIA/torch libraries; -19 takes 15-30 min
 %define _binary_payload w.zstdio
 %define _source_payload w.zstdio
+%{!?_userunitdir:%global _userunitdir /usr/lib/systemd/user}
 
 # Preserve original shebang (#!/usr/bin/env bash) for cross-platform compatibility
 %undefine __brp_mangle_shebangs
@@ -43,6 +44,7 @@ Source0:        %{name}-%{version}.tar.gz
 #   - gcc, clang, llvm, openssl-devel, libseccomp-devel, bubblewrap
 # If building outside CI, ensure these are installed manually.
 BuildRequires:  make
+BuildRequires:  systemd-rpm-macros
 
 # Metapackage: pull all subpackages
 Requires:       agent-sec-cli = %{version}-%{release}
@@ -73,6 +75,8 @@ Built with maturin as a Rust native Python extension.
 %files -n agent-sec-cli
 %defattr(0644,root,root,0755)
 %attr(0755,root,root) /usr/bin/agent-sec-cli
+%attr(0755,root,root) /usr/bin/agent-sec-daemon
+%{_userunitdir}/agent-sec-core.service
 /opt/agent-sec/lib/python3.11/site-packages/*
 %dir %{_datadir}/anolisa
 %dir %{_datadir}/anolisa/adapters

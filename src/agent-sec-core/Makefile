@@ -293,6 +293,8 @@ CLI_STAGED_SITE     ?= $(BUILD_DIR)/site-packages
 CLI_PRIVATE_SITE    ?= /opt/agent-sec/lib/python3.11/site-packages
 RPM_OPENCLAW_PLUGIN_DIR ?= /opt/agent-sec/openclaw-plugin
 RPM_HERMES_PLUGIN_DIR ?= /opt/agent-sec/hermes-plugin
+SYSTEMD_USER_UNIT_DIR ?= /usr/lib/systemd/user
+SYSTEMD_USER_UNIT_SOURCE ?= agent-sec-cli/config/systemd/agent-sec-core.service
 
 .PHONY: install-sandbox
 install-sandbox: ## Install linux-sandbox binary only
@@ -312,16 +314,17 @@ install-cli: ## Install agent-sec-cli wheel (for dev/debug)
 	pip3 install $(BUILD_DIR)/wheels/agent_sec_cli-*.whl
 
 .PHONY: install-cli-site
-install-cli-site: ## RPM: Copy staged site-packages to private dir + wrapper
+install-cli-site: ## RPM: Copy staged site-packages to private dir + wrappers
 	# 1. Copy all Python packages to private directory
 	install -d -m 0755 $(DESTDIR)$(CLI_PRIVATE_SITE)
 	cp -rp $(CLI_STAGED_SITE)/. $(DESTDIR)$(CLI_PRIVATE_SITE)/
 	# Remove uv-generated bin/ and .lock from private site-packages
 	rm -rf $(DESTDIR)$(CLI_PRIVATE_SITE)/bin
 	rm -f  $(DESTDIR)$(CLI_PRIVATE_SITE)/.lock
-	# 2. Install wrapper script as /usr/bin/agent-sec-cli
+	# 2. Install wrapper scripts as /usr/bin/agent-sec-cli and /usr/bin/agent-sec-daemon
 	install -d -m 0755 $(DESTDIR)/usr/bin
 	install -p -m 0755 scripts/agent-sec-cli-wrapper.sh $(DESTDIR)/usr/bin/agent-sec-cli
+	install -p -m 0755 scripts/agent-sec-daemon-wrapper.sh $(DESTDIR)/usr/bin/agent-sec-daemon
 
 .PHONY: install-cli-venv
 install-cli-venv: ## User: Create venv, install deps from uv.lock, install wheel, symlink
@@ -393,13 +396,18 @@ install-component-manifest: ## Install component.toml to DESTDIR
 	install -m 0644 adapters/component.toml \
 		$(DESTDIR)$(COMPONENT_DIR)/component.toml
 
+.PHONY: install-systemd-user
+install-systemd-user: ## Install agent-sec-core systemd user service
+	install -d -m 0755 $(DESTDIR)$(SYSTEMD_USER_UNIT_DIR)
+	install -p -m 0644 $(SYSTEMD_USER_UNIT_SOURCE) $(DESTDIR)$(SYSTEMD_USER_UNIT_DIR)/agent-sec-core.service
+
 .PHONY: install-all
 install-all: install-cli-venv install-cosh-hook install-openclaw-plugin install-hermes-plugin install-skills install-adapter-manifest ## Install all (user source build)
 
 .PHONY: install-all-for-rpmbuild
 install-all-for-rpmbuild: OPENCLAW_PLUGIN_DIR := $(RPM_OPENCLAW_PLUGIN_DIR)
 install-all-for-rpmbuild: HERMES_PLUGIN_DIR := $(RPM_HERMES_PLUGIN_DIR)
-install-all-for-rpmbuild: install-cli-site install-cosh-hook install-openclaw-plugin install-hermes-plugin install-skills install-adapter-manifest install-component-manifest ## Install all (RPM build)
+install-all-for-rpmbuild: install-cli-site install-cosh-hook install-openclaw-plugin install-hermes-plugin install-skills install-adapter-manifest install-component-manifest install-systemd-user ## Install all (RPM build)
 
 # =============================================================================
 # UNINSTALL
@@ -414,8 +422,9 @@ uninstall-cli-venv: ## Remove venv and agent-sec-cli symlink
 	rm -rf $(DESTDIR)$(VENV_DIR)
 
 .PHONY: uninstall-cli-site
-uninstall-cli-site: ## Remove RPM-style private site-packages and wrapper
+uninstall-cli-site: ## Remove RPM-style private site-packages and wrappers
 	rm -f $(DESTDIR)$(BINDIR)/agent-sec-cli
+	rm -f $(DESTDIR)$(BINDIR)/agent-sec-daemon
 	rm -rf $(DESTDIR)$(CLI_PRIVATE_SITE)
 
 .PHONY: uninstall-cosh-hook

@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Security Core daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/agent-sec-daemon serve
+RuntimeDirectory=agent-sec-core
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
