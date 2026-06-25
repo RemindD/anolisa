@@ -43,7 +43,7 @@ from agent_sec_cli.daemon.registry import (
     MethodSpec,
 )
 from agent_sec_cli.daemon.request_context import daemon_request_context
-from agent_sec_cli.daemon.runtime import DaemonRuntime
+from agent_sec_cli.daemon.runtime import DaemonRuntime, resolve_socket_path
 from agent_sec_cli.daemon.server import (
     DaemonServer,
     _log_request_completion,
@@ -69,6 +69,35 @@ def test_client_uses_env_socket_override(monkeypatch, tmp_path: Path):
     client = DaemonClient()
 
     assert client.socket_path == socket_path
+
+
+def test_resolve_socket_path_falls_back_to_run_user_when_xdg_missing(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr("agent_sec_cli.daemon.runtime.os.getuid", lambda: 1234)
+    monkeypatch.setattr(
+        "agent_sec_cli.daemon.runtime.os.path.isdir",
+        lambda path: path == "/run/user/1234",
+    )
+
+    socket_path = resolve_socket_path(use_env=False)
+
+    assert socket_path == Path("/run/user/1234/agent-sec-core/daemon.sock")
+
+
+def test_resolve_socket_path_rejects_missing_xdg_and_run_user(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr("agent_sec_cli.daemon.runtime.os.getuid", lambda: 5678)
+    monkeypatch.setattr(
+        "agent_sec_cli.daemon.runtime.os.path.isdir",
+        lambda _path: False,
+    )
+
+    try:
+        resolve_socket_path(use_env=False)
+    except DaemonRuntimePathError as exc:
+        assert exc.message == "XDG_RUNTIME_DIR is required for agent-sec daemon"
+    else:
+        raise AssertionError("expected missing runtime directory to fail")
 
 
 def test_configure_logging_does_not_install_console_handler(monkeypatch):

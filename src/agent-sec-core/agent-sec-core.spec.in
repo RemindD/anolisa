@@ -66,6 +66,7 @@ Requires:       python3 >= 3.11
 Requires:       python3 < 3.12
 Requires:       gnupg2 >= 2.0
 Requires:       loongshield >= 1.2.0
+Requires:       systemd
 Recommends:     python3-pgpy >= 0.5
 
 %description -n agent-sec-cli
@@ -88,6 +89,15 @@ Built with maturin as a Rust native Python extension.
 %dir %{_datadir}/anolisa/components/sec-core
 %{_datadir}/anolisa/components/sec-core/component.toml
 %license LICENSE
+
+%post -n agent-sec-cli
+%systemd_user_post agent-sec-core.service
+
+%preun -n agent-sec-cli
+%systemd_user_preun agent-sec-core.service
+
+%postun -n agent-sec-cli
+%systemd_user_postun agent-sec-core.service
 
 # =============================================================================
 # Subpackage 2: agent-sec-cosh-hook

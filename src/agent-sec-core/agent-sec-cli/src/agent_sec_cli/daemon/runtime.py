@@ -1,5 +1,6 @@
 """Daemon runtime state and runtime path helpers."""
 
+import logging
 import os
 import stat
 import time
@@ -14,6 +15,8 @@ from agent_sec_cli.daemon.jobs import JobManager
 RUNTIME_SUBDIR = "agent-sec-core"
 SOCKET_FILENAME = "daemon.sock"
 LOCK_FILENAME = "daemon.lock"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -96,7 +99,18 @@ def resolve_socket_path(
 
     xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if not xdg_runtime_dir:
-        raise DaemonRuntimePathError("XDG_RUNTIME_DIR is required for agent-sec daemon")
+        # Fallback: construct from UID.  Covers edge cases where
+        # XDG_RUNTIME_DIR is not propagated (minimal containers, direct
+        # invocation without a PAM session).
+        uid = os.getuid()
+        fallback = f"/run/user/{uid}"
+        if os.path.isdir(fallback):
+            logger.debug("XDG_RUNTIME_DIR not set; falling back to %s", fallback)
+            xdg_runtime_dir = fallback
+        else:
+            raise DaemonRuntimePathError(
+                "XDG_RUNTIME_DIR is required for agent-sec daemon"
+            )
 
     return Path(xdg_runtime_dir) / RUNTIME_SUBDIR / SOCKET_FILENAME
 

@@ -91,6 +91,10 @@ jobs:
           ls /opt/agent-sec/hermes-plugin/src/
           ls /opt/agent-sec/hermes-plugin/src/plugin.yaml
           ls /opt/agent-sec/hermes-plugin/scripts/deploy.sh
+          echo "=== Verify daemon systemd unit ==="
+          ls /usr/lib/systemd/user/agent-sec-core.service
+          echo "=== Verify daemon binary ==="
+          ls /usr/bin/agent-sec-daemon
           echo "=== Verify skills ==="
           ls /usr/share/anolisa/skills/
           echo "=== Verify component manifest ==="
