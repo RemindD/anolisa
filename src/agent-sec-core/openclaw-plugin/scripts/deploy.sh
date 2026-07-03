@@ -17,6 +17,16 @@
 
 set -euo pipefail
 
+PLUGIN_ID="agent-sec"
+MIN_OPENCLAW_VERSION="2026.4.14"
+MIN_CONVERSATION_ACCESS_VERSION="2026.4.24"
+OPENCLAW_INSTALL_HELP=""
+OPENCLAW_INSTALL_SUPPORTS_UNSAFE=0
+OPENCLAW_INSTALL_USED_UNSAFE=0
+OPENCLAW_INSTALL_REQUIRES_UNSAFE=0
+OPENCLAW_INSPECT_HELP=""
+OPENCLAW_INSPECT_SUPPORTS_RUNTIME=0
+
 # Default PLUGIN_DIR: resolve relative to this script's location (scripts/ -> parent)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="${1:-$(dirname "$SCRIPT_DIR")}"
@@ -34,25 +44,215 @@ openclaw_cli() {
     fi
 }
 
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+extract_openclaw_version() {
+    local raw="$1"
+
+    printf '%s\n' "$raw" | grep -Eo '[0-9]{4}\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?' | head -n 1 || true
+}
+
+version_core() {
+    local version="$1"
+
+    version="${version%%+*}"
+    version="${version%%-*}"
+    printf '%s\n' "$version"
+}
+
+version_has_prerelease() {
+    local version="$1"
+    local without_build="${version%%+*}"
+
+    [[ "$without_build" == *-* ]]
+}
+
+version_ge() {
+    local current="$1"
+    local minimum="$2"
+    local current_year current_month current_patch
+    local minimum_year minimum_month minimum_patch
+
+    IFS=. read -r current_year current_month current_patch <<<"$(version_core "$current")"
+    IFS=. read -r minimum_year minimum_month minimum_patch <<<"$(version_core "$minimum")"
+
+    current_year="${current_year:-0}"
+    current_month="${current_month:-0}"
+    current_patch="${current_patch:-0}"
+    minimum_year="${minimum_year:-0}"
+    minimum_month="${minimum_month:-0}"
+    minimum_patch="${minimum_patch:-0}"
+
+    if (( current_year != minimum_year )); then
+        (( current_year > minimum_year ))
+        return
+    fi
+    if (( current_month != minimum_month )); then
+        (( current_month > minimum_month ))
+        return
+    fi
+    if (( current_patch != minimum_patch )); then
+        (( current_patch > minimum_patch ))
+        return
+    fi
+
+    if version_has_prerelease "$current" && ! version_has_prerelease "$minimum"; then
+        return 1
+    fi
+    return 0
+}
+
+detect_openclaw_version() {
+    local version_override="${OPENCLAW_COMPATIBILITY_HOST_VERSION:-${OPENCLAW_VERSION:-}}"
+    local raw_version
+
+    if [[ -n "$version_override" ]]; then
+        extract_openclaw_version "$version_override"
+        return
+    fi
+
+    raw_version="$(openclaw_cli --version 2>/dev/null || true)"
+    extract_openclaw_version "$raw_version"
+}
+
+verify_openclaw_compatibility() {
+    local openclaw_version="$1"
+
+    [[ -n "$openclaw_version" ]] || die "无法识别 OpenClaw 版本。请升级到 >=${MIN_OPENCLAW_VERSION}，或设置 OPENCLAW_VERSION 后重试。"
+
+    if ! version_ge "$openclaw_version" "$MIN_OPENCLAW_VERSION"; then
+        die "agent-sec OpenClaw 插件要求 OpenClaw >=${MIN_OPENCLAW_VERSION}，当前为 ${openclaw_version}。请升级 OpenClaw，或降级使用支持旧 OpenClaw 的 agent-sec 插件包。"
+    fi
+}
+
+verify_openclaw_install_cli() {
+    local install_help_normalized
+
+    OPENCLAW_INSTALL_HELP="$(openclaw_cli plugins install --help 2>&1)" || die "无法读取 openclaw plugins install --help，请升级 OpenClaw 到 >=${MIN_OPENCLAW_VERSION} 后重试。"
+    install_help_normalized="$OPENCLAW_INSTALL_HELP"
+    install_help_normalized="${install_help_normalized//$'\n'/ }"
+    install_help_normalized="${install_help_normalized//$'\t'/ }"
+    while [[ "$install_help_normalized" == *"  "* ]]; do
+        install_help_normalized="${install_help_normalized//  / }"
+    done
+
+    [[ "$install_help_normalized" == *"--force"* ]] || die "当前 OpenClaw plugins install 不支持 --force。请升级 OpenClaw 到 >=${MIN_OPENCLAW_VERSION} 后重试。"
+    if [[ "$install_help_normalized" == *"--dangerously-force-unsafe-install"* ]]; then
+        OPENCLAW_INSTALL_SUPPORTS_UNSAFE=1
+    fi
+
+    # OpenClaw <= 2026.5.x published installers, and some source-checkout
+    # 2026.6.x builds, still run built-in dangerous-code install blocking.
+    # In those installers the flag has real semantics and must be passed on
+    # the first install attempt for this plugin because agent-sec intentionally
+    # shells out to agent-sec-cli/agent-sec-daemon.
+    #
+    # Newer published installers mark the flag as a deprecated no-op because
+    # built-in install-time scanning was removed; those must not receive it.
+    if [[ "$install_help_normalized" == *"Bypass built-in dangerous-code install blocking"* ]]; then
+        OPENCLAW_INSTALL_REQUIRES_UNSAFE=1
+        [[ "$OPENCLAW_INSTALL_SUPPORTS_UNSAFE" == "1" ]] || die "OpenClaw ${OPENCLAW_VERSION_DETECTED} 安装器需要 legacy unsafe-install 兼容 flag，但当前 CLI 未暴露 --dangerously-force-unsafe-install。请升级 OpenClaw。"
+    fi
+}
+
+verify_openclaw_inspect_cli() {
+    OPENCLAW_INSPECT_HELP="$(openclaw_cli plugins inspect --help 2>&1)" || die "无法读取 openclaw plugins inspect --help，请升级 OpenClaw 到 >=${MIN_OPENCLAW_VERSION} 后重试。"
+
+    [[ "$OPENCLAW_INSPECT_HELP" == *"--json"* ]] || die "当前 OpenClaw plugins inspect 不支持 --json。请升级 OpenClaw 到 >=${MIN_OPENCLAW_VERSION} 后重试。"
+    if [[ "$OPENCLAW_INSPECT_HELP" == *"--runtime"* ]]; then
+        OPENCLAW_INSPECT_SUPPORTS_RUNTIME=1
+    fi
+}
+
+install_plugin() {
+    local install_args=("plugins" "install" "$PLUGIN_DIR" "--force")
+
+    if [[ "$OPENCLAW_INSTALL_REQUIRES_UNSAFE" == "1" ]]; then
+        echo "安装策略: OpenClaw ${OPENCLAW_VERSION_DETECTED} 安装器仍启用内置危险代码阻断，首次安装将使用 legacy --dangerously-force-unsafe-install。"
+        echo "安装策略: 该 flag 仅用于 agent-sec 调用 agent-sec-cli/agent-sec-daemon 的已知安装期兼容路径。"
+        install_args+=("--dangerously-force-unsafe-install")
+        OPENCLAW_INSTALL_USED_UNSAFE=1
+    else
+        echo "安装策略: OpenClaw ${OPENCLAW_VERSION_DETECTED} 不需要 legacy --dangerously-force-unsafe-install。"
+    fi
+
+    openclaw_cli "${install_args[@]}"
+}
+
+configure_conversation_access() {
+    if version_ge "$OPENCLAW_VERSION_DETECTED" "$MIN_CONVERSATION_ACCESS_VERSION"; then
+        echo "允许 agent-sec 检查大模型输入输出安全"
+        echo "  openclaw config set plugins.entries.agent-sec.hooks.allowConversationAccess true"
+        openclaw_cli config set plugins.entries.agent-sec.hooks.allowConversationAccess true
+        return
+    fi
+
+    echo "OpenClaw ${OPENCLAW_VERSION_DETECTED} 不支持插件会话访问配置"
+    echo "  跳过 plugins.entries.agent-sec.hooks.allowConversationAccess=true (OpenClaw ${MIN_CONVERSATION_ACCESS_VERSION} 引入, #71221)"
+    echo "  llm_input/llm_output/agent_end 会话观测 hook 在当前 OpenClaw 版本中不可用"
+}
+
+verify_runtime_loaded() {
+    local inspect_args=("plugins" "inspect" "$PLUGIN_ID" "--json")
+    local inspect_label="openclaw plugins inspect ${PLUGIN_ID} --json"
+    local runtime_inspect_json
+    local runtime_status
+
+    if [[ "$OPENCLAW_INSPECT_SUPPORTS_RUNTIME" == "1" ]]; then
+        inspect_args=("plugins" "inspect" "$PLUGIN_ID" "--runtime" "--json")
+        inspect_label="openclaw plugins inspect ${PLUGIN_ID} --runtime --json"
+    fi
+
+    runtime_inspect_json="$(openclaw_cli "${inspect_args[@]}" 2>/dev/null)" || die "插件已安装，但 ${inspect_label} 失败。请运行: ${inspect_label}"
+    runtime_status="$(printf '%s\n' "$runtime_inspect_json" | jq -r '.plugin.status // "unknown"')"
+
+    if [[ "$runtime_status" != "loaded" ]]; then
+        printf '%s\n' "$runtime_inspect_json" | jq -r '.diagnostics[]?.message' >&2
+        die "插件已安装，但 ${inspect_label} 状态为 ${runtime_status}，未达到 loaded。请运行: ${inspect_label}"
+    fi
+}
+
 # 1. 前置检查
-command -v openclaw >/dev/null 2>&1 || { echo "ERROR: openclaw 不在 PATH 中"; exit 1; }
-command -v agent-sec-cli >/dev/null 2>&1 || { echo "ERROR: agent-sec-cli 不在 PATH 中"; exit 1; }
-[[ -f "$PLUGIN_DIR/openclaw.plugin.json" ]] || { echo "ERROR: 清单文件不存在: $PLUGIN_DIR/openclaw.plugin.json"; exit 1; }
-[[ -d "$PLUGIN_DIR/dist" ]] || { echo "ERROR: dist/ 不存在,请先运行 npm run build"; exit 1; }
+command -v openclaw >/dev/null 2>&1 || die "openclaw 不在 PATH 中"
+command -v agent-sec-cli >/dev/null 2>&1 || die "agent-sec-cli 不在 PATH 中"
+command -v jq >/dev/null 2>&1 || die "jq 不在 PATH 中"
+[[ -f "$PLUGIN_DIR/openclaw.plugin.json" ]] || die "清单文件不存在: $PLUGIN_DIR/openclaw.plugin.json"
+[[ -d "$PLUGIN_DIR/dist" ]] || die "dist/ 不存在,请先运行 npm run build"
+[[ -f "$PLUGIN_DIR/dist/index.js" ]] || die "dist/index.js 不存在,请先运行 npm run build"
+
+OPENCLAW_VERSION_DETECTED="$(detect_openclaw_version)"
+verify_openclaw_compatibility "$OPENCLAW_VERSION_DETECTED"
+verify_openclaw_install_cli
+verify_openclaw_inspect_cli
 
 PLUGIN_VERSION=$(jq -r '.version' "$PLUGIN_DIR/openclaw.plugin.json")
 echo "部署插件: agent-sec v${PLUGIN_VERSION}"
 echo "  路径: $PLUGIN_DIR"
+echo "  OpenClaw: ${OPENCLAW_VERSION_DETECTED}"
 
 # 2. 使用官方命令安装插件
 echo ""
 echo "安装插件..."
-openclaw_cli plugins install "$PLUGIN_DIR" --force --dangerously-force-unsafe-install
+install_plugin
 
 echo "  ✓ 插件已安装/更新"
-echo "允许 agent-sec 检查大模型输入输出安全"
-echo "  openclaw config set plugins.entries.agent-sec.hooks.allowConversationAccess true"
-openclaw_cli config set plugins.entries.agent-sec.hooks.allowConversationAccess true
+configure_conversation_access
+
+echo ""
+echo "校验插件安装记录..."
+openclaw_cli plugins inspect "$PLUGIN_ID" --json >/dev/null
+echo "  ✓ OpenClaw 已记录插件 ${PLUGIN_ID}"
+
+echo "校验插件运行时加载..."
+verify_runtime_loaded
+if [[ "$OPENCLAW_INSPECT_SUPPORTS_RUNTIME" == "1" ]]; then
+    echo "  ✓ openclaw plugins inspect ${PLUGIN_ID} --runtime --json 已证明插件可加载"
+else
+    echo "  ✓ openclaw plugins inspect ${PLUGIN_ID} --json 已证明插件可加载"
+fi
 
 echo ""
 echo "提示: 请重启 OpenClaw gateway 以加载插件"

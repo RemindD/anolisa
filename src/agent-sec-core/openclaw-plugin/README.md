@@ -51,6 +51,7 @@ openclaw-plugin/
 │           ├── helpers.ts      #     generic parsing helpers
 │           └── types.ts        #     shared observability types
 ├── tests/                      # Test utilities (not compiled into dist/)
+│   ├── e2e/                    # Latest OpenClaw pilot runner
 │   ├── test-harness.ts         # Mock OpenClaw API for local testing
 │   ├── smoke-test.ts           # Smoke test for all capabilities
 │   └── unit/                   # Unit tests
@@ -153,13 +154,17 @@ openclaw gateway restart
 
 The deployment script performs these steps:
 
-1. **Pre-checks** — Verifies `openclaw` and `agent-sec-cli` are in PATH; validates `openclaw.plugin.json` and `dist/` exist
-2. **Plugin installation** — Runs `openclaw plugins install <path> --force --dangerously-force-unsafe-install` to register the plugin
-3. **Conversation access policy** — Sets `plugins.entries.agent-sec.hooks.allowConversationAccess=true` so conversation observability hooks can register
-4. **User guidance** — Displays instructions to restart the OpenClaw gateway (does NOT restart automatically)
+1. **Pre-checks** — Verifies `openclaw`, `agent-sec-cli`, and `jq` are in PATH; validates `openclaw.plugin.json` and `dist/index.js` exist
+2. **Compatibility guard** — Requires OpenClaw `>=2026.4.14` and probes `openclaw plugins install --help` for the supported `--force` flag
+3. **Plugin installation** — Decides the install command before execution. OpenClaw installers whose `plugins install --help` advertises built-in dangerous-code install blocking are invoked with `--dangerously-force-unsafe-install`; installers that mark the flag as a deprecated no-op, or do not expose it, are invoked without it. The script runs exactly one install command.
+4. **Conversation access policy** — On OpenClaw `>=2026.4.24`, sets `plugins.entries.agent-sec.hooks.allowConversationAccess=true` so conversation observability hooks can register. Older supported hosts skip this config because OpenClaw did not accept it before `2026.4.24` (#71221, fixes #71215).
+5. **Install verification** — Runs `openclaw plugins inspect agent-sec --json`; when the host supports `--runtime`, also runs `openclaw plugins inspect agent-sec --runtime --json`. The inspect used for runtime proof must report `plugin.status == "loaded"`
+6. **User guidance** — Displays instructions to restart the OpenClaw gateway (does NOT restart automatically)
 
 > **Important:** `deploy.sh` installs the plugin and applies required OpenClaw config. It does **NOT** start/stop/restart the gateway service.
-> 
+>
+> `--dangerously-force-unsafe-install` is not a test-runner input. `deploy.sh` owns the decision and runs exactly one install command based on the installed OpenClaw CLI's advertised installer contract. Published OpenClaw versions through `2026.5.28` still need the legacy flag for this plugin; published `2026.6.10` marks it as a deprecated no-op and does not need it. Source-checkout builds that still advertise built-in dangerous-code install blocking are treated like the blocking installer even if their version string is newer.
+>
 > To restart the gateway:
 > ```bash
 > openclaw gateway restart  # Recommended: OpenClaw CLI
@@ -170,42 +175,31 @@ The deployment script performs these steps:
 ### Custom Config Path
 
 ```bash
-OPENCLAW_CONFIG=~/.openclaw-dev/openclaw.json ./scripts/deploy.sh "$(pwd)"
+OPENCLAW_STATE_DIR=~/.openclaw-dev ./scripts/deploy.sh "$(pwd)"
 ```
 
 ---
 
 ## Verify Installation
 
-After deployment, verify the plugin is loaded:
+After deployment, verify the plugin install record and runtime registration:
 
 ```bash
-openclaw plugins inspect agent-sec
+openclaw plugins inspect agent-sec --json | jq -e '.plugin.id == "agent-sec"'
+openclaw plugins inspect agent-sec --runtime --json | jq -e '.plugin.status == "loaded"'
+```
+
+For OpenClaw versions that do not expose `plugins inspect --runtime`, use:
+
+```bash
+openclaw plugins inspect agent-sec --json | jq -e '.plugin.status == "loaded"'
 ```
 
 Expected output:
 
 ```
-Agent Security
-id: agent-sec
-Security hooks powered by agent-sec-cli
-
-Status: loaded
-Version: 0.x.y
-Source: ~/path/to/openclaw-plugin/dist/index.js
-
-Typed hooks:
-before_dispatch (priority 200)
-before_dispatch (priority 190)
-llm_input (priority 1000)
-model_call_started (priority 1000)
-model_call_ended (priority 1000)
-llm_output (priority 1000)
-agent_end (priority 1000)
-before_tool_call (priority 80)
-before_tool_call (priority 0)
-before_tool_call (priority -10000)
-after_tool_call (priority 1000)
+true
+true
 ```
 
 Also check the plugin is activated by gateway after openclaw **v2026.4.25**
@@ -235,6 +229,64 @@ Runs against the real `agent-sec-cli` binary:
 ```bash
 AGENT_SEC_LIVE=1 npm run smoke
 ```
+
+### Latest OpenClaw Pilot E2E
+
+`npm run e2e:latest-openclaw` is the reusable pilot entry for
+`PILOT-LATEST-OPENCLAW-E2E`. It uses isolated state directories, builds and
+packs this plugin, starts `agent-sec-daemon`, installs the plugin into the
+selected OpenClaw runtime, starts a local Gateway, verifies runtime plugin
+loading, and writes structured evidence to `pilot-result.json`.
+
+```bash
+npm run e2e:latest-openclaw -- \
+  --openclaw-bin /path/to/openclaw \
+  --agent-sec-cli /path/to/agent-sec-cli \
+  --agent-sec-daemon /path/to/agent-sec-daemon
+```
+
+If the binaries are already on `PATH` or in the repository root `.venv/bin/`,
+the explicit `--agent-sec-*` arguments can be omitted. From the repository root,
+`source .venv/bin/activate` also works for manual runs, but the pilot runner
+does not require the shell to be activated because it detects `.venv/bin`
+directly. The same values can be provided with
+`AGENT_SEC_OPENCLAW_PILOT_AGENT_SEC_CLI` and
+`AGENT_SEC_OPENCLAW_PILOT_AGENT_SEC_DAEMON`. Use `--workdir <dir>` to keep
+logs and artifacts in a stable directory.
+
+The pilot runner does not control unsafe-install behavior. It calls `deploy.sh`
+directly and records the actual install command path through the deploy
+stdout/stderr logs.
+
+The runner starts the local Gateway with token auth and redacts the token in
+recorded command arguments. Override the generated local token with
+`--gateway-token` or `AGENT_SEC_OPENCLAW_PILOT_GATEWAY_TOKEN` only when needed.
+The default Gateway health wait is 180 seconds because first startup from an
+OpenClaw source checkout may build Control UI assets before binding the port.
+
+The runner records:
+
+- `openclaw --version`, `agent-sec-cli --version`, and package tarball path
+- isolated `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, daemon socket, and
+  Gateway URL
+- `agent-sec-daemon` health over the Unix socket
+- `deploy.sh` stdout/stderr and whether the unsafe install flag was used
+- `openclaw plugins inspect agent-sec --runtime --json` summary
+- Gateway-driven `sessions.create` / `sessions.send` / `agent.wait` evidence
+  against a local OpenAI-compatible mock model, including a model-issued `exec`
+  tool call and tool-result follow-up request
+- Gateway log evidence that `prompt-scan` and `scan-code` ran on that real turn
+- `AGENT_SEC_DATA_DIR/observability.jsonl` records for the same Gateway run ID
+- hook-level capability probes for `prompt-scan`, `scan-code`,
+  `pii-scan-user-input`, `skill-ledger`, and `observability`
+- negative fail-open probes for missing CLI, nonzero exit, invalid JSON, and
+  timeout
+
+The Gateway traffic probe proves the installed plugin participates in a real
+OpenClaw chat/tool turn. The direct hook probes remain as supplemental capability
+and fail-open coverage for edge cases that are hard to force through a single
+model turn. The matrix task should keep this pilot as the bootstrap lane and
+run the same acceptance checks per supported host version.
 
 ---
 
@@ -326,6 +378,8 @@ Supported OpenClaw plugin entry config:
 
 Set a capability's `enabled` value to `false` to skip registering only that capability while keeping the rest of the `agent-sec` plugin active. `skill-ledger` is enabled by default with `policy: "ask"` so actionable Skill Ledger exposure messages request user approval instead of silently hiding the context.
 Set `enableBlock` on supported capabilities to control whether matching security findings block or ask the user for approval.
+
+`hooks.allowConversationAccess` is supported by OpenClaw `>=2026.4.24`; that release added validation and plugin policy inspection support for `plugins.entries.*.hooks.allowConversationAccess` (#71221, fixes #71215). `deploy.sh` skips this config on OpenClaw `2026.4.14` through `2026.4.23`, where the plugin can still install but conversation observability hooks cannot be enabled.
 
 `llm_input`, `llm_output`, and `agent_end` require OpenClaw to allow conversation access for this external plugin with `plugins.entries.agent-sec.hooks.allowConversationAccess=true`. Without that OpenClaw setting, those hooks are blocked by OpenClaw before this plugin sees them.
 
