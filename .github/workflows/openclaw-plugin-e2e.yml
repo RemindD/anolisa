@@ -123,5 +123,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openclaw-plugin-e2e-${{ matrix.openclaw.label }}
-          path: src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/
+          path: |
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/summary.json
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/summary.md
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/**
           if-no-files-found: warn

@@ -105,10 +105,25 @@ run_id="${OPENCLAW_E2E_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 result_dir="${OPENCLAW_E2E_RESULT_DIR:-$result_root/$openclaw_label/$run_id}"
 tmp_root="${OPENCLAW_E2E_TMP_ROOT:-${TMPDIR:-/tmp}}"
 pilot_workdir="${OPENCLAW_E2E_WORKDIR:-$tmp_root/agentsec-openclaw-e2e-$openclaw_label-$run_id}"
+artifact_workdir="$result_dir/workdir"
 tools_root="${OPENCLAW_E2E_TOOLS_ROOT:-$repo_root/target/openclaw-e2e/tools}"
 npm_cache="${NPM_CONFIG_CACHE:-$result_dir/npm-cache}"
 export NPM_CONFIG_CACHE="$npm_cache"
 export npm_config_cache="$npm_cache"
+
+sync_pilot_workdir() {
+    if [[ "$OPENCLAW_E2E_DRY_RUN" == "1" || ! -d "$pilot_workdir" ]]; then
+        return 0
+    fi
+    if [[ "$pilot_workdir" == "$artifact_workdir" ]]; then
+        return 0
+    fi
+    rm -rf "$artifact_workdir"
+    mkdir -p "$result_dir"
+    cp -R "$pilot_workdir" "$artifact_workdir"
+}
+
+trap 'sync_pilot_workdir || true' EXIT
 
 run_openclaw() {
     local bin="$1"
@@ -263,7 +278,6 @@ write_summary() {
     fi
 
     local result_file="$pilot_workdir/pilot-result.json"
-    local artifact_workdir="$result_dir/workdir"
     local artifact_result_file="$artifact_workdir/pilot-result.json"
 
     [[ -f "$result_file" ]] || die "pilot result not found: $result_file"
@@ -273,10 +287,6 @@ write_summary() {
         local actual_unsafe
         actual_unsafe="$(jq -r '.install.usedUnsafeInstallFlag' "$result_file")"
         [[ "$actual_unsafe" == "$EXPECT_UNSAFE_INSTALL_FLAG" ]] || die "unsafe install flag mismatch: expected $EXPECT_UNSAFE_INSTALL_FLAG, got $actual_unsafe"
-    fi
-
-    if [[ "$pilot_workdir" != "$artifact_workdir" ]]; then
-        run cp -R "$pilot_workdir" "$artifact_workdir"
     fi
 
     local summary_json="$result_dir/summary.json"
