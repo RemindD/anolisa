@@ -135,6 +135,8 @@ async function runPilot() {
   await fs.mkdir(xdgConfigHome, { recursive: true });
   await fs.mkdir(xdgCacheHome, { recursive: true });
   await fs.writeFile(agentSecCliCallsLog, "");
+  // The CLI wrapper reads this file to keep policy-triggering inputs
+  // deterministic while passing normal agent-sec-cli calls through.
   await fs.writeFile(
     agentSecCliOverrideFile,
     `${JSON.stringify(buildAgentSecCliOverrideConfig(), null, 2)}\n`,
@@ -222,30 +224,6 @@ async function runPilot() {
     deployResult.stderr.includes("--dangerously-force-unsafe-install");
 
   await runRequiredStep(
-    "openclaw-config-enable-prompt-block",
-    "openclaw",
-    [
-      "config",
-      "set",
-      "plugins.entries.agent-sec.config.promptScanBlock",
-      "true",
-      "--strict-json",
-    ],
-    { cwd: PLUGIN_ROOT, env: baseEnv },
-  );
-  await runRequiredStep(
-    "openclaw-config-enable-code-approval",
-    "openclaw",
-    [
-      "config",
-      "set",
-      "plugins.entries.agent-sec.config.codeScanRequireApproval",
-      "true",
-      "--strict-json",
-    ],
-    { cwd: PLUGIN_ROOT, env: baseEnv },
-  );
-  await runRequiredStep(
     "openclaw-config-enable-pii-block",
     "openclaw",
     [
@@ -270,6 +248,8 @@ async function runPilot() {
     { cwd: PLUGIN_ROOT, env: baseEnv },
   );
 
+  // The mock model is only responsible for deterministic tool-turn behavior;
+  // prompts still travel through real OpenClaw Gateway sessions and plugin hooks.
   const mockModel = await startMockModelServer({
     logsDir,
     registerServer: (serverRef) => startedServers.push(serverRef),
@@ -279,6 +259,8 @@ async function runPilot() {
     baseUrl: mockModel.baseUrl,
     requestsLog: mockModel.requestsLog,
   };
+  // Point OpenClaw at the mock model through normal config so the Gateway uses
+  // the same model-selection path as a user-run session.
   await configureGatewayPilotModel({
     env: baseEnv,
     mockModel,
@@ -295,8 +277,8 @@ async function runPilot() {
     if (gatewayProcess) {
       await stopStartedProcess(gatewayProcess);
     }
-    // Policy config changes are applied before each matrix case. Restarting the
-    // Gateway gives every case a fresh plugin runtime with the requested config.
+    // Shared starter used for the initial Gateway process and any explicit
+    // restart probes that need a fresh runtime.
     const started = await startOpenClawGateway({
       env: baseEnv,
       gatewayPort,
@@ -328,6 +310,8 @@ async function runPilot() {
   result.runtimeInspect.rawLog = runtimeInspect.stdoutLog;
 
   if (!args.skipGateway) {
+    // Happy-path probe: verify one full model-driven Gateway turn reaches the
+    // plugin hooks, agent-sec-cli, tool execution, and observability output.
     result.gatewayTrafficProbe = await runGatewayTrafficProbe({
       assertProcessStillRunning,
       callGatewayRpc,
@@ -339,6 +323,8 @@ async function runPilot() {
       processRef: gatewayProcess,
     });
     assertGatewayTrafficProbe(result.gatewayTrafficProbe);
+    // Policy matrix: mutate plugin config in-place, let Gateway hot reload
+    // settle, then assert behavior from session/model/approval evidence.
     result.policyMatrix = await runGatewayPolicyMatrix({
       callGatewayRpc,
       cliLogPath: agentSecCliCallsLog,
@@ -347,7 +333,6 @@ async function runPilot() {
       gatewayUrl,
       mockModel,
       pluginRoot: PLUGIN_ROOT,
-      restartGateway,
       runRequiredStep,
     });
     assertPolicyMatrix(result.policyMatrix);
@@ -362,6 +347,8 @@ async function runPilot() {
     };
   }
 
+  // Direct hook probe stays as a lower-level diagnostic lane. The Gateway probes
+  // are the acceptance signal; this makes hook-level failures easier to isolate.
   result.hookProbe = await runHookProbe({
     env: baseEnv,
     logsDir,
@@ -647,7 +634,7 @@ async function startOpenClawGateway({ env, gatewayPort, gatewayToken, gatewayTim
 }
 
 async function stopStartedProcess(proc) {
-  if (!proc || proc.child.exitCode !== null) return;
+  if (!proc || hasChildExited(proc.child)) return;
   proc.child.kill("SIGTERM");
   try {
     await withTimeout(waitForExit(proc.child), 5_000, `stop ${proc.name}`);
@@ -749,7 +736,7 @@ async function waitForGatewayHealth(gatewayUrl, { env, processRef, token, timeou
 
 function assertProcessStillRunning(processRef) {
   if (!processRef) return;
-  if (processRef.child.exitCode !== null) {
+  if (hasChildExited(processRef.child)) {
     throw new Error(
       `${processRef.name} exited early with code=${processRef.exitCode} signal=${processRef.signal}; stdout=${processRef.stdoutLog} stderr=${processRef.stderrLog}`,
     );
@@ -966,7 +953,7 @@ function parseNpmPackArtifact(stdout, artifactsDir) {
 
 async function stopAllProcesses() {
   for (const proc of [...startedProcesses].reverse()) {
-    if (proc.child.exitCode !== null) continue;
+    if (hasChildExited(proc.child)) continue;
     proc.child.kill("SIGTERM");
     try {
       await withTimeout(waitForExit(proc.child), 5_000, `stop ${proc.name}`);
@@ -982,13 +969,19 @@ async function stopAllProcesses() {
 
 function waitForExit(child) {
   return new Promise((resolve, reject) => {
-    if (child.exitCode !== null) {
+    if (hasChildExited(child)) {
       resolve();
       return;
     }
     child.once("exit", resolve);
     child.once("error", reject);
   });
+}
+
+function hasChildExited(child) {
+  // Signal-terminated children keep exitCode null, and stale references may
+  // reach cleanup after their exit event has already fired.
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 function closeServer(serverRef) {

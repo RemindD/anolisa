@@ -19,6 +19,12 @@ import {
 } from "./common.mjs";
 import { summarizeMockModelRequests, waitForMockModelToolTurn } from "./mock-model.mjs";
 
+const CONFIG_HOT_RELOAD_SETTLE_MS = 3_000;
+const POLICY_CONFIG_PATHS = {
+  promptScanBlock: "plugins.entries.agent-sec.config.promptScanBlock",
+  codeScanRequireApproval: "plugins.entries.agent-sec.config.codeScanRequireApproval",
+};
+
 export async function runGatewayTrafficProbe({
   assertProcessStillRunning,
   callGatewayRpc,
@@ -129,7 +135,6 @@ export async function runGatewayPolicyMatrix({
   gatewayUrl,
   mockModel,
   pluginRoot,
-  restartGateway,
   runRequiredStep,
 }) {
   // The matrix validates policy outcomes from Gateway/session/model evidence,
@@ -155,7 +160,6 @@ export async function runGatewayPolicyMatrix({
       mockModel,
       pluginRoot,
       promptScanBlock: false,
-      restartGateway,
       runRequiredStep,
     }),
   );
@@ -170,7 +174,6 @@ export async function runGatewayPolicyMatrix({
       mockModel,
       pluginRoot,
       promptScanBlock: true,
-      restartGateway,
       runRequiredStep,
     }),
   );
@@ -185,7 +188,6 @@ export async function runGatewayPolicyMatrix({
       gatewayUrl,
       mockModel,
       pluginRoot,
-      restartGateway,
       runRequiredStep,
     }),
   );
@@ -200,7 +202,6 @@ export async function runGatewayPolicyMatrix({
       gatewayUrl,
       mockModel,
       pluginRoot,
-      restartGateway,
       runRequiredStep,
     }),
   );
@@ -284,12 +285,11 @@ async function runPromptPolicyCase({
   mockModel,
   pluginRoot,
   promptScanBlock,
-  restartGateway,
   runRequiredStep,
 }) {
   // promptScanBlock=false should still scan and return deny, but allow the turn
   // to reach the model. promptScanBlock=true should stop before model request.
-  await applyAgentSecPolicyConfig({
+  const configReload = await applyAgentSecPolicyConfig({
     caseName,
     codeScanRequireApproval: true,
     env,
@@ -297,7 +297,6 @@ async function runPromptPolicyCase({
     promptScanBlock,
     runRequiredStep,
   });
-  await restartGateway(slugify(caseName));
 
   const cliCallStart = await countJsonLines(cliLogPath);
   const modelRequestStart = mockModel.requests.length;
@@ -330,6 +329,7 @@ async function runPromptPolicyCase({
   const policyCase = {
     name: caseName,
     config: { promptScanBlock },
+    configReload,
     cli: summarizePolicyCliCall(promptCall),
     gateway: {
       runId: turn.runId,
@@ -378,12 +378,11 @@ async function runCodeApprovalPolicyCase({
   gatewayUrl,
   mockModel,
   pluginRoot,
-  restartGateway,
   runRequiredStep,
 }) {
   // codeScanRequireApproval controls whether a deny scan opens plugin approval.
   // The true case resolves that approval as deny and verifies the tool never ran.
-  await applyAgentSecPolicyConfig({
+  const configReload = await applyAgentSecPolicyConfig({
     caseName,
     codeScanRequireApproval,
     env,
@@ -391,7 +390,6 @@ async function runCodeApprovalPolicyCase({
     promptScanBlock: true,
     runRequiredStep,
   });
-  await restartGateway(slugify(caseName));
 
   const observer = codeScanRequireApproval
     ? await openGatewayApprovalObserver({ gatewayToken, gatewayUrl })
@@ -461,6 +459,7 @@ async function runCodeApprovalPolicyCase({
     const policyCase = {
       name: caseName,
       config: { codeScanRequireApproval },
+      configReload,
       cli: summarizePolicyCliCall(codeCall),
       gateway: {
         runId: turn.runId,
@@ -523,13 +522,32 @@ async function applyAgentSecPolicyConfig({
   promptScanBlock,
   runRequiredStep,
 }) {
+  const configPath = env?.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error(`${caseName}: OPENCLAW_CONFIG_PATH is required for hot-reload synchronization`);
+  }
+  const configBefore = await readOpenClawConfig(configPath);
+  const desiredPolicyValues = [
+    {
+      path: POLICY_CONFIG_PATHS.promptScanBlock,
+      value: promptScanBlock,
+    },
+    {
+      path: POLICY_CONFIG_PATHS.codeScanRequireApproval,
+      value: codeScanRequireApproval,
+    },
+  ];
+  const changedPaths = desiredPolicyValues
+    .filter((item) => !jsonValuesEqual(readConfigPath(configBefore, item.path), item.value))
+    .map((item) => item.path);
+
   await runRequiredStep(
     `${caseName}-config-promptScanBlock`,
     "openclaw",
     [
       "config",
       "set",
-      "plugins.entries.agent-sec.config.promptScanBlock",
+      POLICY_CONFIG_PATHS.promptScanBlock,
       JSON.stringify(promptScanBlock),
       "--strict-json",
     ],
@@ -541,12 +559,59 @@ async function applyAgentSecPolicyConfig({
     [
       "config",
       "set",
-      "plugins.entries.agent-sec.config.codeScanRequireApproval",
+      POLICY_CONFIG_PATHS.codeScanRequireApproval,
       JSON.stringify(codeScanRequireApproval),
       "--strict-json",
     ],
     { cwd: pluginRoot, env },
   );
+  return await waitForGatewayConfigSettle({ changedPaths });
+}
+
+async function waitForGatewayConfigSettle({ changedPaths }) {
+  if (changedPaths.length === 0) {
+    return {
+      changedPaths,
+      skipped: true,
+      reason: "policy config already matched requested values",
+    };
+  }
+
+  // OpenClaw currently has no stable reload-ack protocol. Avoid coupling this
+  // e2e to gateway log wording; the following policy assertions prove whether
+  // the settled runtime actually picked up the requested config.
+  await sleep(CONFIG_HOT_RELOAD_SETTLE_MS);
+  return {
+    changedPaths,
+    settleMs: CONFIG_HOT_RELOAD_SETTLE_MS,
+  };
+}
+
+async function readOpenClawConfig(configPath) {
+  const text = await readTextIfExists(configPath);
+  if (!text.trim()) {
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`failed to parse OpenClaw config at ${configPath}: ${error.message}`);
+  }
+}
+
+function readConfigPath(config, pathValue) {
+  let current = config;
+  for (const segment of pathValue.split(".")) {
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function jsonValuesEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 async function runGatewayPolicyTurn({ callGatewayRpc, caseName, gatewayToken, gatewayUrl, message }) {
