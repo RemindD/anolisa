@@ -16,6 +16,7 @@ import { afterEach, describe, it } from "node:test";
 const DEPLOY_SCRIPT = resolve("scripts/deploy.sh");
 
 type DeployOptions = {
+  inspectStdoutPrefixLogs?: boolean;
   inspectHasRuntime?: boolean;
   installHelpMode?: "blocking" | "deprecated-noop" | "no-force" | "no-unsafe";
   runtimeStatus?: string;
@@ -148,12 +149,20 @@ fi
 
 if [[ "$*" == "plugins inspect agent-sec --json" ]]; then
     status="\${OPENCLAW_FAKE_RUNTIME_STATUS:-loaded}"
+    if [[ "\${OPENCLAW_FAKE_INSPECT_STDOUT_PREFIX_LOGS:-0}" == "1" ]]; then
+        echo "[plugins] [agent-sec] registered: scan-code -> [before_tool_call]"
+        echo "[plugins] [agent-sec] 5/5 capabilities active"
+    fi
     printf '{"plugin":{"id":"agent-sec","status":"%s"},"diagnostics":[{"message":"runtime status %s"}]}\\n' "$status" "$status"
     exit 0
 fi
 
 if [[ "$*" == "plugins inspect agent-sec --runtime --json" ]]; then
     status="\${OPENCLAW_FAKE_RUNTIME_STATUS:-loaded}"
+    if [[ "\${OPENCLAW_FAKE_INSPECT_STDOUT_PREFIX_LOGS:-0}" == "1" ]]; then
+        echo "[plugins] [agent-sec] registered: scan-code -> [before_tool_call]"
+        echo "[plugins] [agent-sec] 5/5 capabilities active"
+    fi
     printf '{"plugin":{"id":"agent-sec","status":"%s"},"diagnostics":[{"message":"runtime status %s"}]}\\n' "$status" "$status"
     exit 0
 fi
@@ -194,6 +203,8 @@ function runDeploy(options: DeployOptions = {}): DeployResult {
       : "0",
     OPENCLAW_FAKE_LOG: logPath,
     OPENCLAW_FAKE_INSPECT_RUNTIME: options.inspectHasRuntime === true ? "1" : "0",
+    OPENCLAW_FAKE_INSPECT_STDOUT_PREFIX_LOGS:
+      options.inspectStdoutPrefixLogs === true ? "1" : "0",
     OPENCLAW_FAKE_RUNTIME_STATUS: options.runtimeStatus ?? "loaded",
     OPENCLAW_FAKE_VERSION: options.version ?? "2026.4.14",
     PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -235,6 +246,17 @@ describe("deploy.sh", () => {
       result.log,
       /config set plugins\.entries\.agent-sec\.hooks\.allowConversationAccess true/,
     );
+  });
+
+  it("parses inspect JSON when legacy hosts print plugin logs to stdout first", () => {
+    const result = runDeploy({ inspectStdoutPrefixLogs: true, version: "2026.4.14" });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /OpenClaw: 2026\.4\.14/);
+    assert.match(result.stdout, /plugins inspect agent-sec --json/);
+    assert.match(result.log, /plugins inspect agent-sec --json/);
+    assert.doesNotMatch(result.stderr, /parse error/);
+    assert.doesNotMatch(result.stderr, /输出不是可解析 JSON/);
   });
 
   it("uses the unsafe flag and runtime inspect on blocking hosts that expose --runtime", () => {

@@ -314,15 +314,25 @@ async function runPilot() {
     await restartGateway("initial");
   }
 
+  const inspectHelp = await runRequiredStep(
+    "openclaw-plugin-inspect-help",
+    "openclaw",
+    ["plugins", "inspect", "--help"],
+    { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
+  );
+  const runtimeInspectArgs = inspectHelp.stdout.includes("--runtime")
+    ? ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"]
+    : ["plugins", "inspect", PLUGIN_ID, "--json"];
   const runtimeInspect = await runRequiredStep(
     "openclaw-plugin-runtime-inspect",
     "openclaw",
-    ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"],
+    runtimeInspectArgs,
     { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   const runtimeInspectJson = parseJsonFromOutput(runtimeInspect.stdout);
   assertRuntimeLoaded(runtimeInspectJson);
   result.runtimeInspect = summarizeRuntimeInspect(runtimeInspectJson);
+  result.runtimeInspect.args = runtimeInspectArgs;
   result.runtimeInspect.rawLog = runtimeInspect.stdoutLog;
 
   if (!args.skipGateway) {
@@ -337,6 +347,7 @@ async function runPilot() {
       logsDir,
       mockModel,
       processRef: gatewayProcess,
+      runtimeInspect: result.runtimeInspect,
     });
     assertGatewayTrafficProbe(result.gatewayTrafficProbe);
     // Policy matrix: mutate plugin config in-place, let Gateway hot reload

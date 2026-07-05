@@ -54,19 +54,21 @@ export function parseJsonFromOutput(output) {
   if (!trimmed) throw new Error("empty JSON output");
   try {
     return JSON.parse(trimmed);
-  } catch {
+  } catch (originalError) {
     // Some OpenClaw commands can print warnings before JSON. Preserve support
     // for that shape while still failing if no JSON-looking payload exists.
-    const startObject = trimmed.indexOf("{");
-    const startArray = trimmed.indexOf("[");
-    const start =
-      startObject === -1
-        ? startArray
-        : startArray === -1
-          ? startObject
-          : Math.min(startObject, startArray);
-    if (start === -1) throw new Error(`no JSON found in output: ${trimmed.slice(0, 200)}`);
-    return JSON.parse(trimmed.slice(start));
+    const candidates = [...trimmed.matchAll(/[\[{]/gu)].map((match) => match.index);
+    for (const start of candidates) {
+      try {
+        return JSON.parse(trimmed.slice(start));
+      } catch {
+        // Keep trying: OpenClaw 2026.4.x may prefix JSON with log lines like
+        // [plugins] ..., which look array-ish but are not JSON payloads.
+      }
+    }
+    throw new Error(
+      `no parseable JSON found in output: ${trimmed.slice(0, 200)}; original=${originalError.message}`,
+    );
   }
 }
 

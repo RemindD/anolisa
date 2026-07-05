@@ -22,6 +22,8 @@ export function createPilotHarness({
   startedProcesses,
   startedServers,
 }) {
+  let gatewayCommandEnv = process.env;
+
   async function runRequiredStep(name, command, commandArgs, options = {}) {
     const step = await runCommand(name, command, commandArgs, options);
     if (step.exitCode !== 0) {
@@ -137,6 +139,7 @@ export function createPilotHarness({
     const child = spawn(command, commandArgs, {
       cwd: options.cwd ?? pluginRoot,
       env: options.env ?? process.env,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdoutStream = createWriteStream(stdoutLog);
@@ -146,6 +149,7 @@ export function createPilotHarness({
     const proc = {
       name,
       child,
+      processGroupId: process.platform !== "win32" ? child.pid : undefined,
       stdoutLog,
       stderrLog,
       startedAt: new Date().toISOString(),
@@ -173,6 +177,7 @@ export function createPilotHarness({
   }
 
   async function startOpenClawGateway({ env, gatewayPort, gatewayToken, gatewayTimeoutMs, reason }) {
+    gatewayCommandEnv = env;
     const processName = reason === "initial" ? "openclaw-gateway" : `openclaw-gateway-${reason}`;
     const processRef = startProcess(
       processName,
@@ -195,6 +200,7 @@ export function createPilotHarness({
       ],
       { cwd: pluginRoot, env },
     );
+    processRef.gatewayPort = gatewayPort;
     const health = await waitForGatewayHealth(`ws://127.0.0.1:${gatewayPort}`, {
       env,
       processRef,
@@ -205,13 +211,15 @@ export function createPilotHarness({
   }
 
   async function stopStartedProcess(proc) {
-    if (!proc || hasChildExited(proc.child)) return;
-    proc.child.kill("SIGTERM");
+    if (!proc) return;
+    await signalStartedProcess(proc, "SIGTERM");
     try {
-      await withTimeout(waitForExit(proc.child), 5_000, `stop ${proc.name}`);
+      await withTimeout(waitForStartedProcessStop(proc), 5_000, `stop ${proc.name}`);
     } catch {
-      proc.child.kill("SIGKILL");
-      await waitForExit(proc.child).catch(() => {});
+      await signalStartedProcess(proc, "SIGKILL");
+      await withTimeout(waitForStartedProcessStop(proc), 5_000, `kill ${proc.name}`).catch(
+        () => {},
+      );
     }
   }
 
@@ -315,64 +323,58 @@ export function createPilotHarness({
   }
 
   async function callGatewayRpc(stepName, method, params, { gatewayToken, gatewayUrl, timeoutMs }) {
-    const startedAt = new Date().toISOString();
-    const stdoutLog = path.join(result.logsDir, `${slugify(stepName)}.stdout.log`);
-    const stderrLog = path.join(result.logsDir, `${slugify(stepName)}.stderr.log`);
     const stepTimeoutMs = timeoutMs ?? defaultCommandTimeoutMs;
-    console.log(`[pilot] ${stepName}: gateway-rpc ${method}`);
-    try {
-      // Gateway RPCs are not shell commands, but recording them as steps keeps the
-      // final evidence timeline comparable with deploy/config/build commands.
-      const payload = await callGatewayRpcDirect({
-        gatewayToken,
-        gatewayUrl,
-        method,
-        params,
-        timeoutMs: stepTimeoutMs,
-      });
-      await fs.writeFile(stdoutLog, `${JSON.stringify(payload, null, 2)}\n`);
-      await fs.writeFile(stderrLog, "");
-      result.steps.push({
-        name: stepName,
-        command: "gateway-rpc",
-        args: [method],
-        exitCode: 0,
-        timedOut: false,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        stdoutLog,
-        stderrLog,
-      });
-      return payload;
-    } catch (error) {
-      await fs.writeFile(stdoutLog, "");
-      await fs.writeFile(stderrLog, `${formatError(error)}\n`);
-      const step = {
-        name: stepName,
-        command: "gateway-rpc",
-        args: [method],
-        exitCode: 1,
-        signal: undefined,
-        timedOut: false,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        stdoutLog,
-        stderrLog,
-      };
-      result.steps.push(step);
-      throw new StepError(stepName, "gateway RPC failed", step);
+    const maxAttempts = 3;
+    let lastStep;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const attemptStepName = attempt === 1 ? stepName : `${stepName}-retry-${attempt}`;
+      // Use OpenClaw's own Gateway client via `gateway call` instead of hand-rolling
+      // the WebSocket handshake. Older gateways bind operator scopes to a signed
+      // device identity, which the CLI handles consistently across versions.
+      const step = await runCommand(
+        attemptStepName,
+        "openclaw",
+        [
+          "gateway",
+          "call",
+          method,
+          "--url",
+          gatewayUrl,
+          "--token",
+          gatewayToken,
+          "--json",
+          "--timeout",
+          String(stepTimeoutMs),
+          "--params",
+          JSON.stringify(params ?? {}),
+        ],
+        { env: gatewayCommandEnv, timeoutMs: stepTimeoutMs + 5_000 },
+      );
+      if (step.exitCode === 0) {
+        return parseJsonFromOutput(step.stdout);
+      }
+      lastStep = step;
+      const approvedPairingUpgrade = isPairingScopeUpgradeFailure(step)
+        ? await approveLocalGatewayCliScopeUpgrade(gatewayCommandEnv, result)
+        : undefined;
+      if (!approvedPairingUpgrade && (!isTransientGatewayCallFailure(step) || attempt === maxAttempts)) {
+        break;
+      }
+      await sleep(2_000 * attempt);
     }
+    throw new StepError(stepName, `gateway RPC ${method} failed`, lastStep);
   }
 
   async function stopAllProcesses() {
     for (const proc of [...startedProcesses].reverse()) {
-      if (hasChildExited(proc.child)) continue;
-      proc.child.kill("SIGTERM");
+      await signalStartedProcess(proc, "SIGTERM");
       try {
-        await withTimeout(waitForExit(proc.child), 5_000, `stop ${proc.name}`);
+        await withTimeout(waitForStartedProcessStop(proc), 5_000, `stop ${proc.name}`);
       } catch {
-        proc.child.kill("SIGKILL");
-        await waitForExit(proc.child).catch(() => {});
+        await signalStartedProcess(proc, "SIGKILL");
+        await withTimeout(waitForStartedProcessStop(proc), 5_000, `kill ${proc.name}`).catch(
+          () => {},
+        );
       }
     }
     for (const serverRef of [...startedServers].reverse()) {
@@ -405,124 +407,108 @@ export function createPilotHarness({
   };
 }
 
-function callGatewayRpcDirect({ gatewayToken, gatewayUrl, method, params, timeoutMs }) {
-  if (typeof WebSocket !== "function") {
-    throw new Error("Node.js WebSocket global is unavailable; Node 22+ is required");
-  }
-
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(gatewayUrl);
-    const connectId = `connect-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const requestId = `rpc-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    let connected = false;
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      settle(new Error(`gateway RPC ${method} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref();
-
-    const settle = (error, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket.close();
-      } catch {
-        // Ignore close errors after a terminal RPC result.
-      }
-      if (error) {
-        reject(error);
-      } else {
-        resolve(value);
-      }
-    };
-
-    socket.addEventListener("open", () => {
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id: connectId,
-          method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 4,
-            client: {
-              id: "gateway-client",
-              version: "agent-sec-openclaw-pilot",
-              platform: process.platform,
-              mode: "backend",
-            },
-            role: "operator",
-            scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-            caps: [],
-            commands: [],
-            permissions: {},
-            auth: { token: gatewayToken },
-            locale: "en-US",
-            userAgent: "agent-sec-openclaw-pilot/0.7.0",
-          },
-        }),
-      );
-    });
-
-    socket.addEventListener("message", (event) => {
-      let frame;
-      try {
-        frame = JSON.parse(String(event.data));
-      } catch (error) {
-        settle(error);
-        return;
-      }
-      if (frame.type === "event") {
-        return;
-      }
-      if (frame.type !== "res") {
-        return;
-      }
-      if (frame.id === connectId) {
-        if (frame.ok !== true) {
-          settle(new Error(`gateway connect failed: ${JSON.stringify(frame.error ?? frame)}`));
-          return;
-        }
-        connected = true;
-        socket.send(
-          JSON.stringify({
-            type: "req",
-            id: requestId,
-            method,
-            params,
-          }),
-        );
-        return;
-      }
-      if (frame.id === requestId) {
-        if (frame.ok !== true) {
-          settle(new Error(`gateway RPC ${method} failed: ${JSON.stringify(frame.error ?? frame)}`));
-          return;
-        }
-        settle(undefined, frame.payload);
-      }
-    });
-
-    socket.addEventListener("error", () => {
-      settle(new Error(`gateway RPC ${method} WebSocket error`));
-    });
-    socket.addEventListener("close", (event) => {
-      if (!settled && !connected) {
-        settle(new Error(`gateway closed before connect (${event.code}): ${event.reason}`));
-      } else if (!settled) {
-        settle(new Error(`gateway closed during RPC ${method} (${event.code}): ${event.reason}`));
-      }
-    });
-  });
-}
-
 function assertRuntimeLoaded(data) {
   const status = data?.plugin?.status;
   if (status !== "loaded") {
     throw new Error(`runtime inspect status is ${JSON.stringify(status)}, expected "loaded"`);
   }
+}
+
+function isTransientGatewayCallFailure(step) {
+  const text = `${step?.stdout ?? ""}\n${step?.stderr ?? ""}`;
+  return /gateway closed|ECONNREFUSED|ECONNRESET|WebSocket error|socket hang up|abnormal closure/iu.test(
+    text,
+  );
+}
+
+function isPairingScopeUpgradeFailure(step) {
+  const text = `${step?.stdout ?? ""}\n${step?.stderr ?? ""}`;
+  return /scope upgrade pending approval|pairing required: device is asking for more scopes/iu.test(
+    text,
+  );
+}
+
+async function approveLocalGatewayCliScopeUpgrade(env, result) {
+  if (!env?.AGENT_SEC_OPENCLAW_PILOT_CLI_LOG) {
+    return undefined;
+  }
+  const stateDir = env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    return undefined;
+  }
+  const pendingPath = path.join(stateDir, "devices", "pending.json");
+  const pairedPath = path.join(stateDir, "devices", "paired.json");
+  const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
+  let pending;
+  let paired;
+  let deviceAuth;
+  try {
+    [pending, paired, deviceAuth] = await Promise.all([
+      readJsonFileOrDefault(pendingPath, {}),
+      readJsonFileOrDefault(pairedPath, {}),
+      readJsonFileOrDefault(deviceAuthPath, {}),
+    ]);
+  } catch (error) {
+    result.gatewayPairingApprovals ??= [];
+    result.gatewayPairingApprovals.push({
+      approved: false,
+      reason: "read-failed",
+      error: formatError(error),
+    });
+    return undefined;
+  }
+
+  const deviceId = typeof deviceAuth.deviceId === "string" ? deviceAuth.deviceId : "";
+  const device = deviceId ? paired[deviceId] : undefined;
+  const pendingEntries = Object.values(pending).filter((request) => {
+    return (
+      request &&
+      request.deviceId === deviceId &&
+      request.clientId === "cli" &&
+      request.clientMode === "cli" &&
+      request.role === "operator" &&
+      Array.isArray(request.scopes) &&
+      request.scopes.length > 0 &&
+      (!device?.publicKey || request.publicKey === device.publicKey)
+    );
+  });
+  if (!device || pendingEntries.length === 0 || !device.tokens?.operator || !deviceAuth.tokens?.operator) {
+    result.gatewayPairingApprovals ??= [];
+    result.gatewayPairingApprovals.push({
+      approved: false,
+      reason: "no-matching-cli-scope-upgrade",
+      deviceId: deviceId || undefined,
+      pendingCount: Object.keys(pending).length,
+    });
+    return undefined;
+  }
+
+  const requestedScopes = mergeStringLists(...pendingEntries.map((request) => request.scopes));
+  const approvedScopes = mergeStringLists(device.approvedScopes, device.scopes, requestedScopes);
+  device.scopes = approvedScopes;
+  device.approvedScopes = approvedScopes;
+  device.roles = mergeStringLists(device.roles, device.role, "operator");
+  device.tokens.operator.scopes = approvedScopes;
+  deviceAuth.tokens.operator.scopes = approvedScopes;
+  for (const request of pendingEntries) {
+    delete pending[request.requestId];
+  }
+  await Promise.all([
+    writeJsonFile(pendingPath, pending),
+    writeJsonFile(pairedPath, paired),
+    writeJsonFile(deviceAuthPath, deviceAuth),
+  ]);
+
+  const approval = {
+    approved: true,
+    deviceId,
+    requestIds: pendingEntries.map((request) => request.requestId),
+    requestedScopes,
+    approvedScopes,
+  };
+  result.gatewayPairingApprovals ??= [];
+  result.gatewayPairingApprovals.push(approval);
+  return approval;
 }
 
 function summarizeRuntimeInspect(data) {
@@ -563,6 +549,42 @@ function parseNpmPackArtifact(stdout, artifactsDir) {
   return match ? path.join(artifactsDir, match[0]) : undefined;
 }
 
+async function readJsonFileOrDefault(filePath, defaultValue) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return defaultValue;
+    }
+    throw error;
+  }
+}
+
+async function writeJsonFile(filePath, value) {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function mergeStringLists(...items) {
+  const out = new Set();
+  for (const item of items) {
+    if (typeof item === "string") {
+      if (item.trim()) {
+        out.add(item.trim());
+      }
+      continue;
+    }
+    if (!Array.isArray(item)) {
+      continue;
+    }
+    for (const value of item) {
+      if (typeof value === "string" && value.trim()) {
+        out.add(value.trim());
+      }
+    }
+  }
+  return [...out];
+}
+
 function waitForExit(child) {
   return new Promise((resolve, reject) => {
     if (hasChildExited(child)) {
@@ -572,6 +594,139 @@ function waitForExit(child) {
     child.once("exit", resolve);
     child.once("error", reject);
   });
+}
+
+async function waitForStartedProcessStop(proc) {
+  if (proc.processGroupId === undefined && proc.gatewayPort === undefined) {
+    await waitForExit(proc.child);
+    return;
+  }
+  while (
+    (proc.processGroupId !== undefined && processGroupExists(proc.processGroupId)) ||
+    (proc.gatewayPort !== undefined && (await listeningPidsOnPort(proc.gatewayPort)).length > 0)
+  ) {
+    await sleep(100);
+  }
+}
+
+async function signalStartedProcess(proc, signal) {
+  try {
+    if (proc.processGroupId !== undefined) {
+      process.kill(-proc.processGroupId, signal);
+    } else if (!hasChildExited(proc.child)) {
+      proc.child.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
+  if (proc.gatewayPort !== undefined) {
+    for (const pid of await listeningPidsOnPort(proc.gatewayPort)) {
+      signalPid(pid, signal);
+    }
+  }
+}
+
+function processGroupExists(processGroupId) {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function signalPid(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
+async function listeningPidsOnPort(port) {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  const socketInodes = await listeningSocketInodesOnPort(port);
+  if (socketInodes.size === 0) {
+    return [];
+  }
+  const procEntries = await fs.readdir("/proc", { withFileTypes: true });
+  const pids = new Set();
+  for (const entry of procEntries) {
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
+      continue;
+    }
+    if (await processOwnsSocketInode(entry.name, socketInodes)) {
+      pids.add(Number(entry.name));
+    }
+  }
+  return [...pids];
+}
+
+async function listeningSocketInodesOnPort(port) {
+  const inodes = new Set();
+  await collectListeningSocketInodes("/proc/net/tcp", port, inodes);
+  await collectListeningSocketInodes("/proc/net/tcp6", port, inodes);
+  return inodes;
+}
+
+async function collectListeningSocketInodes(procNetFile, port, inodes) {
+  let content;
+  try {
+    content = await fs.readFile(procNetFile, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+    return;
+  }
+  const expectedPortHex = port.toString(16).toUpperCase().padStart(4, "0");
+  for (const line of content.trim().split(/\n/u).slice(1)) {
+    const fields = line.trim().split(/\s+/u);
+    const localAddress = fields[1] ?? "";
+    const state = fields[3] ?? "";
+    const inode = fields[9] ?? "";
+    const localPortHex = localAddress.split(":").at(-1)?.toUpperCase();
+    if (localPortHex === expectedPortHex && state === "0A" && inode) {
+      inodes.add(inode);
+    }
+  }
+}
+
+async function processOwnsSocketInode(pid, socketInodes) {
+  let fds;
+  try {
+    fds = await fs.readdir(`/proc/${pid}/fd`);
+  } catch (error) {
+    if (["ENOENT", "EACCES", "EPERM"].includes(error?.code)) {
+      return false;
+    }
+    throw error;
+  }
+  for (const fd of fds) {
+    let target;
+    try {
+      target = await fs.readlink(`/proc/${pid}/fd/${fd}`);
+    } catch (error) {
+      if (["ENOENT", "EACCES", "EPERM"].includes(error?.code)) {
+        continue;
+      }
+      throw error;
+    }
+    const match = target.match(/^socket:\[(\d+)\]$/u);
+    if (match && socketInodes.has(match[1])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasChildExited(child) {

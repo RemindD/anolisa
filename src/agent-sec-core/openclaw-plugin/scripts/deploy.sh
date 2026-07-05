@@ -200,6 +200,7 @@ verify_runtime_loaded() {
     local inspect_label="openclaw plugins inspect ${PLUGIN_ID} --json"
     local inspect_stdout
     local inspect_stderr
+    local inspect_json
     local jq_stderr
     local runtime_inspect_json
     local runtime_status
@@ -211,6 +212,7 @@ verify_runtime_loaded() {
 
     inspect_stdout="$(mktemp)"
     inspect_stderr="$(mktemp)"
+    inspect_json="$(mktemp)"
     jq_stderr="$(mktemp)"
 
     if ! openclaw_cli "${inspect_args[@]}" >"$inspect_stdout" 2>"$inspect_stderr"; then
@@ -218,16 +220,32 @@ verify_runtime_loaded() {
         die "插件已安装，但 ${inspect_label} 失败。请运行: ${inspect_label}"
     fi
 
-    if ! runtime_status="$(jq -r '.plugin.status // "unknown"' <"$inspect_stdout" 2>"$jq_stderr")"; then
+    if ! extract_json_object_from_output "$inspect_stdout" "$inspect_json"; then
+        print_inspect_debug "$inspect_label" "$inspect_stdout" "$inspect_stderr" "$jq_stderr"
+        die "插件已安装，但 ${inspect_label} 输出中未找到 JSON 对象。请运行: ${inspect_label}"
+    fi
+
+    if ! runtime_status="$(jq -r '.plugin.status // "unknown"' <"$inspect_json" 2>"$jq_stderr")"; then
         print_inspect_debug "$inspect_label" "$inspect_stdout" "$inspect_stderr" "$jq_stderr"
         die "插件已安装，但 ${inspect_label} 输出不是可解析 JSON。请运行: ${inspect_label}"
     fi
-    runtime_inspect_json="$(cat "$inspect_stdout")"
+    runtime_inspect_json="$(cat "$inspect_json")"
 
     if [[ "$runtime_status" != "loaded" ]]; then
         printf '%s\n' "$runtime_inspect_json" | jq -r '.diagnostics[]?.message' >&2
         die "插件已安装，但 ${inspect_label} 状态为 ${runtime_status}，未达到 loaded。请运行: ${inspect_label}"
     fi
+}
+
+extract_json_object_from_output() {
+    local input_file="$1"
+    local output_file="$2"
+
+    # OpenClaw 2026.4.x may print plugin registration diagnostics to stdout
+    # before the requested --json payload. Keep deploy.sh compatible with that
+    # host behavior while still parsing the official JSON object with jq.
+    sed -n '/^[[:space:]]*{/,$p' "$input_file" >"$output_file"
+    [[ -s "$output_file" ]]
 }
 
 print_debug_file_preview() {

@@ -134,7 +134,6 @@ export async function configureGatewayPilotModel({ env, mockModel, pluginRoot, r
       "agents.defaults.models",
       JSON.stringify({ [modelRef]: {} }),
       "--strict-json",
-      "--merge",
     ],
     { cwd: pluginRoot, env },
   );

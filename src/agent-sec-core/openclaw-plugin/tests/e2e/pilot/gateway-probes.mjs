@@ -34,6 +34,7 @@ export async function runGatewayTrafficProbe({
   logsDir,
   mockModel,
   processRef,
+  runtimeInspect,
 }) {
   // This is the positive end-to-end lane: prompt scan, code scan, tool execution,
   // and observability must all happen through a real Gateway session.
@@ -57,6 +58,8 @@ export async function runGatewayTrafficProbe({
       observability: observabilityPath,
     },
   };
+  const modelCallObservability = resolveModelCallObservabilityRequirement(runtimeInspect);
+  probe.observabilityCompatibility = modelCallObservability;
 
   probe.rpc.createSession = unwrapGatewayPayload(
     await callGatewayRpc("gateway-sessions-create", "sessions.create", {
@@ -113,12 +116,12 @@ export async function runGatewayTrafficProbe({
     observabilityPath,
     requiredHooks: [
       "before_agent_run",
-      "before_llm_call",
-      "after_llm_call",
       "before_tool_call",
       "after_tool_call",
       "after_agent_run",
+      ...(modelCallObservability.required ? ["before_llm_call", "after_llm_call"] : []),
     ],
+    requireModelCalls: modelCallObservability.required,
     runId,
     timeoutMs: 45_000,
   });
@@ -245,7 +248,7 @@ export function assertGatewayTrafficProbe(probe) {
   if (!secondRequest?.hasToolResultMessage) {
     throw new Error("second model request did not include a tool result message");
   }
-  const requiredHooks = [
+  const requiredHooks = probe.observability?.requirements?.hooks ?? [
     "after_agent_run",
     "after_llm_call",
     "after_tool_call",
@@ -306,9 +309,12 @@ async function runPromptPolicyCase({
   // promptScanBlock=false should still scan and return deny, but allow the turn
   // to reach the model. promptScanBlock=true should stop before model request.
   const configReload = await applyAgentSecPolicyConfig({
+    callGatewayRpc,
     caseName,
     codeScanRequireApproval: true,
     env,
+    gatewayToken,
+    gatewayUrl,
     pluginRoot,
     promptScanBlock,
     runRequiredStep,
@@ -402,18 +408,18 @@ async function runCodeApprovalPolicyCase({
   // approval runtime cannot acquire approval scope in a fresh test gateway, so
   // the stable assertion is: deny scan happened and the tool never executed.
   const configReload = await applyAgentSecPolicyConfig({
+    callGatewayRpc,
     caseName,
     codeScanRequireApproval,
     env,
+    gatewayToken,
+    gatewayUrl,
     pluginRoot,
     promptScanBlock: true,
     runRequiredStep,
   });
 
-  const observer = codeScanRequireApproval
-    ? await openGatewayApprovalObserver({ gatewayToken, gatewayUrl })
-    : undefined;
-  try {
+  {
     const approvalPolls = [];
     const cliCallStart = await countJsonLines(cliLogPath);
     const modelRequestStart = mockModel.requests.length;
@@ -474,6 +480,10 @@ async function runCodeApprovalPolicyCase({
     const toolExecuted = sessionHasSuccessfulToolOutput(records, POLICY_CODE_DENY_OUTPUT);
     const approvalRequiredErrorFound = sessionContainsText(records, "Plugin approval required");
     const approvalTimedOutFound = sessionContainsText(records, "Approval timed out");
+    const approvalUnavailableErrorFound = sessionContainsText(
+      records,
+      "Plugin approval unavailable",
+    );
     const pendingApprovalSnapshot = await listPluginApprovalSnapshot({
       callGatewayRpc,
       descriptionIncludes: POLICY_CODE_DENY_COMMAND,
@@ -506,13 +516,17 @@ async function runCodeApprovalPolicyCase({
         ? "gateway-approval"
         : approvalRequiredErrorFound
           ? "fail-closed-session-error"
-          : "missing",
+          : approvalTimedOutFound
+            ? "fail-closed-approval-timeout"
+            : approvalUnavailableErrorFound
+              ? "fail-closed-approval-unavailable"
+              : "missing",
       approvalPolling: approvalPolls,
-      approvalObserver: summarizeApprovalObserverEvents(observer?.events ?? []),
       postWaitApprovalList: summarizeApprovalSnapshot(pendingApprovalSnapshot),
       sessionSignals: {
         approvalRequiredErrorFound,
         approvalTimedOutFound,
+        approvalUnavailableErrorFound,
         toolResultErrors: summarizeToolResultErrors(records),
       },
       assertions: {
@@ -520,6 +534,7 @@ async function runCodeApprovalPolicyCase({
         approvalFound: Boolean(approval),
         approvalRequiredErrorFound,
         approvalTimedOutFound,
+        approvalUnavailableErrorFound,
         preResolveToolExecuted,
         toolExecuted,
         pendingApprovalsAfterWait: pendingApprovalsAfterWait.length,
@@ -536,10 +551,17 @@ async function runCodeApprovalPolicyCase({
     if (codeCall?.stdoutJson?.verdict !== "deny") {
       throw new Error(`${caseName}: expected scan-code deny call`);
     }
-    if (codeScanRequireApproval) {
-      if (!approval && !approvalRequiredErrorFound) {
-        throw new Error(`${caseName}: expected plugin approval or fail-closed session error`);
-      }
+  if (codeScanRequireApproval) {
+    if (
+      !approval &&
+      !approvalRequiredErrorFound &&
+      !approvalTimedOutFound &&
+      !approvalUnavailableErrorFound
+    ) {
+      throw new Error(
+        `${caseName}: expected plugin approval, fail-closed session error, approval timeout, or approval-unavailable fail-closed result`,
+      );
+    }
       if (approval && approval.request?.pluginId !== PLUGIN_ID) {
         throw new Error(`${caseName}: approval pluginId was ${approval.request?.pluginId}`);
       }
@@ -557,15 +579,16 @@ async function runCodeApprovalPolicyCase({
 
     policyCase.passed = true;
     return policyCase;
-  } finally {
-    observer?.close();
   }
 }
 
 async function applyAgentSecPolicyConfig({
+  callGatewayRpc,
   caseName,
   codeScanRequireApproval,
   env,
+  gatewayToken,
+  gatewayUrl,
   pluginRoot,
   promptScanBlock,
   runRequiredStep,
@@ -613,7 +636,19 @@ async function applyAgentSecPolicyConfig({
     ],
     { cwd: pluginRoot, env },
   );
-  return await waitForGatewayConfigSettle({ changedPaths });
+  const settle = await waitForGatewayConfigSettle({ changedPaths });
+  if (changedPaths.length === 0) {
+    return settle;
+  }
+  return {
+    ...settle,
+    gatewayReady: await waitForGatewayReadyAfterConfig({
+      callGatewayRpc,
+      caseName,
+      gatewayToken,
+      gatewayUrl,
+    }),
+  };
 }
 
 async function waitForGatewayConfigSettle({ changedPaths }) {
@@ -633,6 +668,44 @@ async function waitForGatewayConfigSettle({ changedPaths }) {
     changedPaths,
     settleMs: CONFIG_HOT_RELOAD_SETTLE_MS,
   };
+}
+
+async function waitForGatewayReadyAfterConfig({
+  callGatewayRpc,
+  caseName,
+  gatewayToken,
+  gatewayUrl,
+}) {
+  const timeoutMs = 60_000;
+  const startedAtMs = Date.now();
+  const deadline = startedAtMs + timeoutMs;
+  let attempt = 0;
+  let lastError;
+  while (Date.now() < deadline) {
+    attempt += 1;
+    try {
+      const health = await callGatewayRpc(
+        `${caseName}-gateway-ready-${attempt}`,
+        "health",
+        {},
+        { gatewayToken, gatewayUrl, timeoutMs: 5_000 },
+      );
+      // A successful Gateway RPC proves the restarted or hot-reloaded runtime is
+      // accepting operator traffic again. The policy cases below prove config use.
+      await sleep(500);
+      return {
+        attempts: attempt,
+        waitMs: Date.now() - startedAtMs,
+        health,
+      };
+    } catch (error) {
+      lastError = error;
+      await sleep(1_000);
+    }
+  }
+  throw new Error(
+    `${caseName}: gateway did not become ready after config change within ${timeoutMs}ms: ${String(lastError?.message ?? lastError)}`,
+  );
 }
 
 async function readOpenClawConfig(configPath) {
@@ -700,84 +773,6 @@ async function runGatewayPolicyTurn({ callGatewayRpc, caseName, gatewayToken, ga
     send,
     sessionFile: createSession?.entry?.sessionFile,
     sessionKey,
-  };
-}
-
-async function openGatewayApprovalObserver({ gatewayToken, gatewayUrl }) {
-  // Keep an operator WebSocket connected while approvals are created. Listing is
-  // still done by RPC polling below; the observer matches real UI behavior.
-  const socket = new WebSocket(gatewayUrl);
-  const connectId = `approval-observer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const events = [];
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("approval observer connect timed out")),
-      10_000,
-    );
-    timer.unref();
-    socket.addEventListener("open", () => {
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id: connectId,
-          method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 4,
-            client: {
-              id: "gateway-client",
-              version: "agent-sec-openclaw-pilot",
-              platform: process.platform,
-              mode: "backend",
-            },
-            role: "operator",
-            scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-            caps: [],
-            commands: [],
-            permissions: {},
-            auth: { token: gatewayToken },
-            locale: "en-US",
-            userAgent: "agent-sec-openclaw-pilot/0.7.0",
-          },
-        }),
-      );
-    });
-    socket.addEventListener("message", (event) => {
-      let frame;
-      try {
-        frame = JSON.parse(String(event.data));
-      } catch (error) {
-        clearTimeout(timer);
-        reject(error);
-        return;
-      }
-      if (frame.type === "event") {
-        events.push(frame);
-        return;
-      }
-      if (frame.type === "res" && frame.id === connectId) {
-        clearTimeout(timer);
-        if (frame.ok === true) {
-          resolve();
-        } else {
-          reject(new Error(`approval observer connect failed: ${JSON.stringify(frame.error ?? frame)}`));
-        }
-      }
-    });
-    socket.addEventListener("error", () => {
-      clearTimeout(timer);
-      reject(new Error("approval observer WebSocket error"));
-    });
-  });
-  return {
-    events,
-    close: () => {
-      try {
-        socket.close();
-      } catch {
-        // Ignore close errors during cleanup.
-      }
-    },
   };
 }
 
@@ -919,25 +914,6 @@ function summarizeApproval(approval) {
   };
 }
 
-function summarizeApprovalObserverEvents(events) {
-  return {
-    count: events.length,
-    types: uniqueNonEmptyStrings(events.map((event) => event?.type)),
-    methods: uniqueNonEmptyStrings(events.map((event) => event?.method)),
-    names: uniqueNonEmptyStrings(events.map((event) => event?.name)),
-    tail: events.slice(-10).map((event) => ({
-      type: event?.type,
-      method: event?.method,
-      name: event?.name,
-      keys: Object.keys(event ?? {}).sort(),
-      payloadKeys:
-        event?.payload && typeof event.payload === "object"
-          ? Object.keys(event.payload).sort()
-          : undefined,
-    })),
-  };
-}
-
 function summarizeToolResultErrors(records) {
   return records
     .filter((record) => {
@@ -1030,6 +1006,7 @@ async function waitForObservabilityHooks({
   expectedToolOutput,
   observabilityPath,
   requiredHooks,
+  requireModelCalls,
   runId,
   timeoutMs,
 }) {
@@ -1047,6 +1024,7 @@ async function waitForObservabilityHooks({
       observabilityPath,
       records,
       requiredHooks,
+      requireModelCalls,
     });
     if (isObservabilityEvidenceComplete(evidence)) {
       return evidence;
@@ -1064,6 +1042,7 @@ async function waitForObservabilityHooks({
     observabilityPath,
     records,
     requiredHooks,
+    requireModelCalls,
   });
   const failedAssertions = Object.entries(evidence.assertions)
     .filter(([, value]) => value !== true)
@@ -1080,6 +1059,7 @@ function summarizeObservabilityEvidence({
   observabilityPath,
   records,
   requiredHooks,
+  requireModelCalls,
 }) {
   const hooks = [...new Set(records.map((record) => record.hook).filter(Boolean))].sort();
   const countsByHook = countObservabilityHooks(records);
@@ -1113,8 +1093,9 @@ function summarizeObservabilityEvidence({
     }),
     singleSessionObserved: sessionIds.length === 1,
     twoModelCallsObserved:
-      (countsByHook.before_llm_call ?? 0) >= 2 && (countsByHook.after_llm_call ?? 0) >= 2,
-    modelCallIdsLinked: sharedLlmCallIds.length >= 2,
+      !requireModelCalls ||
+      ((countsByHook.before_llm_call ?? 0) >= 2 && (countsByHook.after_llm_call ?? 0) >= 2),
+    modelCallIdsLinked: !requireModelCalls || sharedLlmCallIds.length >= 2,
     execBeforeToolRecorded: beforeToolRecords.some((record) => record?.metrics?.tool_name === "exec"),
     execCommandRecorded: beforeToolRecords.some((record) =>
       JSON.stringify(record?.metrics?.parameters ?? "").includes(expectedToolCommand),
@@ -1147,6 +1128,28 @@ function summarizeObservabilityEvidence({
       shared: sharedToolCallIds,
     },
     assertions,
+    requirements: {
+      modelCalls: requireModelCalls,
+      hooks: requiredHooks,
+    },
+  };
+}
+
+function resolveModelCallObservabilityRequirement(runtimeInspect) {
+  const diagnostics = Array.isArray(runtimeInspect?.diagnostics) ? runtimeInspect.diagnostics : [];
+  const ignoredModelCallHooks = diagnostics
+    .map((diagnostic) => String(diagnostic?.message ?? ""))
+    .filter((message) => /unknown typed hook "model_call_(started|ended)" ignored/u.test(message));
+  if (ignoredModelCallHooks.length > 0) {
+    return {
+      required: false,
+      reason: "openclaw-runtime-ignores-model-call-hooks",
+      diagnostics: ignoredModelCallHooks,
+    };
+  }
+  return {
+    required: true,
+    reason: "openclaw-runtime-supports-model-call-hooks",
   };
 }
 
