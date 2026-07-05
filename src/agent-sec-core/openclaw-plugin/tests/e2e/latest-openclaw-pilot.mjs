@@ -182,6 +182,9 @@ async function runPilot() {
     AGENT_SEC_DATA_DIR: dataDir,
     AGENT_SEC_OPENCLAW_PILOT_CLI_LOG: agentSecCliCallsLog,
     AGENT_SEC_OPENCLAW_PILOT_CLI_OVERRIDE_FILE: agentSecCliOverrideFile,
+    // Bonjour/mDNS discovery is unrelated to this plugin e2e and OpenClaw
+    // 2026.4.24 has a reproducible ciao cancellation crash in CI-like hosts.
+    OPENCLAW_DISABLE_BONJOUR: "1",
     XDG_DATA_HOME: xdgDataHome,
     XDG_CONFIG_HOME: xdgConfigHome,
     XDG_CACHE_HOME: xdgCacheHome,
@@ -235,9 +238,7 @@ async function runPilot() {
   );
   result.install.deployStdoutLog = deployResult.stdoutLog;
   result.install.deployStderrLog = deployResult.stderrLog;
-  result.install.usedUnsafeInstallFlag =
-    deployResult.stdout.includes("--dangerously-force-unsafe-install") ||
-    deployResult.stderr.includes("--dangerously-force-unsafe-install");
+  result.install.usedUnsafeInstallFlag = detectDeployUsedUnsafeInstallFlag(deployResult);
 
   await runRequiredStep(
     "openclaw-config-enable-pii-block",
@@ -360,6 +361,7 @@ async function runPilot() {
       gatewayUrl,
       logsDir,
       mockModel,
+      openclawVersion: result.versions.openclaw,
       pluginRoot: PLUGIN_ROOT,
       runRequiredStep,
     });
@@ -387,4 +389,9 @@ async function runPilot() {
   });
 
   assertHookProbe(result.hookProbe);
+}
+
+function detectDeployUsedUnsafeInstallFlag(deployResult) {
+  const output = `${deployResult.stdout}\n${deployResult.stderr}`;
+  return output.includes("首次安装将使用 legacy --dangerously-force-unsafe-install");
 }

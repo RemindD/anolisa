@@ -12,6 +12,7 @@ import {
   POLICY_PROMPT_REACHED_MODEL_TEXT,
   MOCK_MODEL_ID,
   MOCK_MODEL_PROVIDER_ID,
+  isOpenClawVersionLessThan,
   readJsonLines,
   readTextIfExists,
   sleep,
@@ -140,6 +141,7 @@ export async function runGatewayPolicyMatrix({
   gatewayUrl,
   logsDir,
   mockModel,
+  openclawVersion,
   pluginRoot,
   runRequiredStep,
 }) {
@@ -156,6 +158,15 @@ export async function runGatewayPolicyMatrix({
     },
     cases: [],
   };
+  const livePolicyConfig = resolveLivePolicyConfigSupport(openclawVersion);
+  matrix.livePolicyConfig = livePolicyConfig;
+  if (!livePolicyConfig.supported) {
+    return {
+      ...matrix,
+      skipped: true,
+      reason: livePolicyConfig.reason,
+    };
+  }
 
   matrix.cases.push(
     await runPromptPolicyCase({
@@ -217,6 +228,21 @@ export async function runGatewayPolicyMatrix({
   );
 
   return matrix;
+}
+
+function resolveLivePolicyConfigSupport(openclawVersion) {
+  if (isOpenClawVersionLessThan(openclawVersion, "2026.5.7")) {
+    return {
+      supported: false,
+      reason: "openclaw-version-requires-gateway-restart-for-plugin-policy-config",
+      openclawVersion,
+      minimumLivePolicyMatrixVersion: "2026.5.7",
+    };
+  }
+  return {
+    supported: true,
+    openclawVersion,
+  };
 }
 
 export function assertGatewayTrafficProbe(probe) {

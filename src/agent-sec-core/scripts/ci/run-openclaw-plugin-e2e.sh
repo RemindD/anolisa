@@ -305,6 +305,9 @@ write_summary() {
           status,
           usedUnsafeInstallFlag: .install.usedUnsafeInstallFlag,
           resultFile: $resultFile,
+          policyMatrixSkipped: (.policyMatrix.skipped // false),
+          policyMatrixSkipReason: (.policyMatrix.reason // null),
+          livePolicyConfig: (.policyMatrix.livePolicyConfig // null),
           policyMatrix: [.policyMatrix.cases[]? | {name, passed, approvalDelivery, assertions}],
           observabilityAssertions: .gatewayTrafficProbe.observability.assertions
         }' "$result_file" > "$summary_json"

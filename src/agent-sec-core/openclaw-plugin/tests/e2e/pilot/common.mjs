@@ -76,6 +76,28 @@ export function extractVersion(output) {
   return output.match(/[0-9]{4}\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?/u)?.[0];
 }
 
+export function compareOpenClawVersions(left, right) {
+  const leftParts = parseStableVersion(left);
+  const rightParts = parseStableVersion(right);
+  if (!leftParts || !rightParts) return undefined;
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] < rightParts[index]) return -1;
+    if (leftParts[index] > rightParts[index]) return 1;
+  }
+  return 0;
+}
+
+export function isOpenClawVersionLessThan(version, minimum) {
+  const comparison = compareOpenClawVersions(version, minimum);
+  return comparison !== undefined && comparison < 0;
+}
+
+function parseStableVersion(version) {
+  const match = String(version ?? "").match(/^([0-9]{4})\.([0-9]+)\.([0-9]+)/u);
+  if (!match) return undefined;
+  return match.slice(1).map((part) => Number(part));
+}
+
 export async function findFreePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
