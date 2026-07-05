@@ -8,8 +8,6 @@ on:
       - "src/agent-sec-core/scripts/ci/run-openclaw-plugin-e2e.sh"
       - ".github/workflows/openclaw-plugin-e2e.yml"
   push:
-    branches:
-      - main
     paths:
       - "src/agent-sec-core/agent-sec-cli/**"
       - "src/agent-sec-core/openclaw-plugin/**"
