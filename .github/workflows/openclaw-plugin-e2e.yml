@@ -59,6 +59,18 @@ jobs:
       fail-fast: false
       matrix:
         openclaw:
+          - label: min-supported
+            version: "2026.4.14"
+            expected-version: "2026.4.14"
+            expect-unsafe-install: "true"
+          - label: conversation-access
+            version: "2026.4.24"
+            expected-version: "2026.4.24"
+            expect-unsafe-install: "true"
+          - label: current-pinned
+            version: "2026.5.7"
+            expected-version: "2026.5.7"
+            expect-unsafe-install: "true"
           - label: latest
             version: "latest"
             expected-version: ""
