@@ -108,6 +108,8 @@ export async function runGatewayTrafficProbe({
   assertProcessStillRunning(processRef);
   probe.gatewayLogSignals = await waitForGatewayLogSignals(gatewayLogPaths, 45_000);
   probe.observability = await waitForObservabilityHooks({
+    expectedToolCommand: "printf agent-sec-pilot-safe",
+    expectedToolOutput: "agent-sec-pilot-safe",
     observabilityPath,
     requiredHooks: [
       "before_agent_run",
@@ -250,6 +252,15 @@ export function assertGatewayTrafficProbe(probe) {
     if (!probe.observability?.hooks?.includes(hook)) {
       throw new Error(`gateway traffic observability missing ${hook}`);
     }
+  }
+  const observabilityAssertions = probe.observability?.assertions ?? {};
+  const failedObservabilityAssertions = Object.entries(observabilityAssertions)
+    .filter(([, value]) => value !== true)
+    .map(([key]) => key);
+  if (failedObservabilityAssertions.length > 0) {
+    throw new Error(
+      `gateway traffic observability assertions failed: ${failedObservabilityAssertions.join(",")}`,
+    );
   }
 }
 
@@ -878,7 +889,14 @@ async function waitForGatewayLogSignals(logPaths, timeoutMs) {
   );
 }
 
-async function waitForObservabilityHooks({ observabilityPath, requiredHooks, runId, timeoutMs }) {
+async function waitForObservabilityHooks({
+  expectedToolCommand,
+  expectedToolOutput,
+  observabilityPath,
+  requiredHooks,
+  runId,
+  timeoutMs,
+}) {
   // Observability records are keyed by runId so older records in the same data
   // dir cannot make the current Gateway turn pass accidentally.
   const deadline = Date.now() + timeoutMs;
@@ -887,14 +905,15 @@ async function waitForObservabilityHooks({ observabilityPath, requiredHooks, run
       const metadata = record?.metadata ?? {};
       return metadata.runId === runId;
     });
-    const hooks = new Set(records.map((record) => record.hook).filter(Boolean));
-    const missingHooks = requiredHooks.filter((hook) => !hooks.has(hook));
-    if (missingHooks.length === 0) {
-      return {
-        path: observabilityPath,
-        count: records.length,
-        hooks: [...hooks].sort(),
-      };
+    const evidence = summarizeObservabilityEvidence({
+      expectedToolCommand,
+      expectedToolOutput,
+      observabilityPath,
+      records,
+      requiredHooks,
+    });
+    if (isObservabilityEvidenceComplete(evidence)) {
+      return evidence;
     }
     await sleep(500);
   }
@@ -903,8 +922,131 @@ async function waitForObservabilityHooks({ observabilityPath, requiredHooks, run
     const metadata = record?.metadata ?? {};
     return metadata.runId === runId;
   });
-  const hooks = [...new Set(records.map((record) => record.hook).filter(Boolean))].sort();
+  const evidence = summarizeObservabilityEvidence({
+    expectedToolCommand,
+    expectedToolOutput,
+    observabilityPath,
+    records,
+    requiredHooks,
+  });
+  const failedAssertions = Object.entries(evidence.assertions)
+    .filter(([, value]) => value !== true)
+    .map(([key]) => key);
   throw new Error(
-    `observability hooks missing for run ${runId}: saw=${hooks.join(",") || "<none>"} path=${observabilityPath}`,
+    `observability evidence incomplete for run ${runId}: failed=${failedAssertions.join(",") || "<none>"} ` +
+      `hooks=${evidence.hooks.join(",") || "<none>"} path=${observabilityPath}`,
   );
+}
+
+function summarizeObservabilityEvidence({
+  expectedToolCommand,
+  expectedToolOutput,
+  observabilityPath,
+  records,
+  requiredHooks,
+}) {
+  const hooks = [...new Set(records.map((record) => record.hook).filter(Boolean))].sort();
+  const countsByHook = countObservabilityHooks(records);
+  const beforeToolRecords = records.filter((record) => record.hook === "before_tool_call");
+  const afterToolRecords = records.filter((record) => record.hook === "after_tool_call");
+  const beforeLlmRecords = records.filter((record) => record.hook === "before_llm_call");
+  const afterLlmRecords = records.filter((record) => record.hook === "after_llm_call");
+  const sessionIds = uniqueNonEmptyStrings(records.map((record) => record?.metadata?.sessionId));
+  const beforeLlmCallIds = uniqueNonEmptyStrings(
+    beforeLlmRecords.map((record) => record?.metadata?.callId),
+  );
+  const afterLlmCallIds = uniqueNonEmptyStrings(
+    afterLlmRecords.map((record) => record?.metadata?.callId),
+  );
+  const sharedLlmCallIds = beforeLlmCallIds.filter((callId) => afterLlmCallIds.includes(callId));
+  const beforeToolCallIds = uniqueNonEmptyStrings(
+    beforeToolRecords.map((record) => record?.metadata?.toolCallId),
+  );
+  const afterToolCallIds = uniqueNonEmptyStrings(
+    afterToolRecords.map((record) => record?.metadata?.toolCallId),
+  );
+  const sharedToolCallIds = beforeToolCallIds.filter((toolCallId) =>
+    afterToolCallIds.includes(toolCallId),
+  );
+  const metricKeysByHook = summarizeMetricKeysByHook(records);
+  const assertions = {
+    requiredHooksPresent: requiredHooks.every((hook) => hooks.includes(hook)),
+    scopedToRunAndSession: records.every((record) => {
+      const metadata = record?.metadata ?? {};
+      return typeof metadata.runId === "string" && typeof metadata.sessionId === "string";
+    }),
+    singleSessionObserved: sessionIds.length === 1,
+    twoModelCallsObserved:
+      (countsByHook.before_llm_call ?? 0) >= 2 && (countsByHook.after_llm_call ?? 0) >= 2,
+    modelCallIdsLinked: sharedLlmCallIds.length >= 2,
+    execBeforeToolRecorded: beforeToolRecords.some((record) => record?.metrics?.tool_name === "exec"),
+    execCommandRecorded: beforeToolRecords.some((record) =>
+      JSON.stringify(record?.metrics?.parameters ?? "").includes(expectedToolCommand),
+    ),
+    execAfterToolRecorded: afterToolRecords.length > 0,
+    execOutputRecorded: afterToolRecords.some((record) =>
+      JSON.stringify(record?.metrics?.result ?? "").includes(expectedToolOutput),
+    ),
+    toolCallIdLinked: sharedToolCallIds.length > 0,
+    finalResponseRecorded: records
+      .filter((record) => record.hook === "after_agent_run")
+      .some((record) => JSON.stringify(record?.metrics ?? "").includes(expectedToolOutput)),
+  };
+
+  return {
+    path: observabilityPath,
+    count: records.length,
+    hooks,
+    countsByHook,
+    metricKeysByHook,
+    sessionIds,
+    modelCallIds: {
+      beforeLlmCall: beforeLlmCallIds,
+      afterLlmCall: afterLlmCallIds,
+      shared: sharedLlmCallIds,
+    },
+    toolCallIds: {
+      beforeToolCall: beforeToolCallIds,
+      afterToolCall: afterToolCallIds,
+      shared: sharedToolCallIds,
+    },
+    assertions,
+  };
+}
+
+function isObservabilityEvidenceComplete(evidence) {
+  return Object.values(evidence.assertions).every((value) => value === true);
+}
+
+function countObservabilityHooks(records) {
+  const counts = {};
+  for (const record of records) {
+    if (typeof record?.hook !== "string") {
+      continue;
+    }
+    counts[record.hook] = (counts[record.hook] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function summarizeMetricKeysByHook(records) {
+  const keysByHook = {};
+  for (const record of records) {
+    if (typeof record?.hook !== "string") {
+      continue;
+    }
+    const metricKeys = Object.keys(record?.metrics ?? {});
+    const existing = keysByHook[record.hook] ?? new Set();
+    for (const key of metricKeys) {
+      existing.add(key);
+    }
+    keysByHook[record.hook] = existing;
+  }
+  return Object.fromEntries(
+    Object.entries(keysByHook).map(([hook, keys]) => [hook, [...keys].sort()]),
+  );
+}
+
+function uniqueNonEmptyStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value.length > 0))];
 }
