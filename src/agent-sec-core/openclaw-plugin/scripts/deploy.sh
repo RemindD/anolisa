@@ -198,6 +198,9 @@ configure_conversation_access() {
 verify_runtime_loaded() {
     local inspect_args=("plugins" "inspect" "$PLUGIN_ID" "--json")
     local inspect_label="openclaw plugins inspect ${PLUGIN_ID} --json"
+    local inspect_stdout
+    local inspect_stderr
+    local jq_stderr
     local runtime_inspect_json
     local runtime_status
 
@@ -206,13 +209,51 @@ verify_runtime_loaded() {
         inspect_label="openclaw plugins inspect ${PLUGIN_ID} --runtime --json"
     fi
 
-    runtime_inspect_json="$(openclaw_cli "${inspect_args[@]}" 2>/dev/null)" || die "插件已安装，但 ${inspect_label} 失败。请运行: ${inspect_label}"
-    runtime_status="$(printf '%s\n' "$runtime_inspect_json" | jq -r '.plugin.status // "unknown"')"
+    inspect_stdout="$(mktemp)"
+    inspect_stderr="$(mktemp)"
+    jq_stderr="$(mktemp)"
+
+    if ! openclaw_cli "${inspect_args[@]}" >"$inspect_stdout" 2>"$inspect_stderr"; then
+        print_inspect_debug "$inspect_label" "$inspect_stdout" "$inspect_stderr" "$jq_stderr"
+        die "插件已安装，但 ${inspect_label} 失败。请运行: ${inspect_label}"
+    fi
+
+    if ! runtime_status="$(jq -r '.plugin.status // "unknown"' <"$inspect_stdout" 2>"$jq_stderr")"; then
+        print_inspect_debug "$inspect_label" "$inspect_stdout" "$inspect_stderr" "$jq_stderr"
+        die "插件已安装，但 ${inspect_label} 输出不是可解析 JSON。请运行: ${inspect_label}"
+    fi
+    runtime_inspect_json="$(cat "$inspect_stdout")"
 
     if [[ "$runtime_status" != "loaded" ]]; then
         printf '%s\n' "$runtime_inspect_json" | jq -r '.diagnostics[]?.message' >&2
         die "插件已安装，但 ${inspect_label} 状态为 ${runtime_status}，未达到 loaded。请运行: ${inspect_label}"
     fi
+}
+
+print_debug_file_preview() {
+    local title="$1"
+    local file="$2"
+    local bytes
+
+    bytes="$(wc -c <"$file" 2>/dev/null || printf '0')"
+    echo "----- ${title} (${bytes} bytes, first 160 lines) -----" >&2
+    if [[ -s "$file" ]]; then
+        sed -n '1,160p' "$file" >&2
+    else
+        echo "<empty>" >&2
+    fi
+}
+
+print_inspect_debug() {
+    local inspect_label="$1"
+    local stdout_file="$2"
+    local stderr_file="$3"
+    local jq_stderr_file="$4"
+
+    echo "DEBUG: ${inspect_label} raw output follows for compatibility analysis." >&2
+    print_debug_file_preview "inspect stdout" "$stdout_file"
+    print_debug_file_preview "inspect stderr" "$stderr_file"
+    print_debug_file_preview "jq stderr" "$jq_stderr_file"
 }
 
 # 1. 前置检查

@@ -135,6 +135,7 @@ export async function runGatewayPolicyMatrix({
   env,
   gatewayToken,
   gatewayUrl,
+  logsDir,
   mockModel,
   pluginRoot,
   runRequiredStep,
@@ -142,11 +143,13 @@ export async function runGatewayPolicyMatrix({
   // The matrix validates policy outcomes from Gateway/session/model evidence,
   // not by scraping logs: model request deltas, session text, approvals, and CLI
   // call records must line up with each config state.
+  const policyDebugLog = logsDir ? path.join(logsDir, "gateway-policy-debug.jsonl") : undefined;
   const matrix = {
     mode: "openclaw-gateway-policy-matrix",
     evidence: {
       cliCalls: cliLogPath,
       mockModelRequests: mockModel.requestsLog,
+      policyDebug: policyDebugLog,
     },
     cases: [],
   };
@@ -189,6 +192,7 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyDebugLog,
       pluginRoot,
       runRequiredStep,
     }),
@@ -203,6 +207,7 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyDebugLog,
       pluginRoot,
       runRequiredStep,
     }),
@@ -388,6 +393,7 @@ async function runCodeApprovalPolicyCase({
   gatewayToken,
   gatewayUrl,
   mockModel,
+  policyDebugLog,
   pluginRoot,
   runRequiredStep,
 }) {
@@ -408,6 +414,7 @@ async function runCodeApprovalPolicyCase({
     ? await openGatewayApprovalObserver({ gatewayToken, gatewayUrl })
     : undefined;
   try {
+    const approvalPolls = [];
     const cliCallStart = await countJsonLines(cliLogPath);
     const modelRequestStart = mockModel.requests.length;
     const turn = await runGatewayPolicyTurn({
@@ -428,6 +435,7 @@ async function runCodeApprovalPolicyCase({
         descriptionIncludes: POLICY_CODE_DENY_COMMAND,
         gatewayToken,
         gatewayUrl,
+        observations: approvalPolls,
         timeoutMs: 5_000,
       });
       if (approval) {
@@ -465,12 +473,14 @@ async function runCodeApprovalPolicyCase({
     const modelRequests = mockModel.requests.slice(modelRequestStart);
     const toolExecuted = sessionHasSuccessfulToolOutput(records, POLICY_CODE_DENY_OUTPUT);
     const approvalRequiredErrorFound = sessionContainsText(records, "Plugin approval required");
-    const pendingApprovalsAfterWait = await listMatchingPluginApprovals({
+    const approvalTimedOutFound = sessionContainsText(records, "Approval timed out");
+    const pendingApprovalSnapshot = await listPluginApprovalSnapshot({
       callGatewayRpc,
       descriptionIncludes: POLICY_CODE_DENY_COMMAND,
       gatewayToken,
       gatewayUrl,
     });
+    const pendingApprovalsAfterWait = pendingApprovalSnapshot.matching;
 
     const policyCase = {
       name: caseName,
@@ -497,15 +507,31 @@ async function runCodeApprovalPolicyCase({
         : approvalRequiredErrorFound
           ? "fail-closed-session-error"
           : "missing",
+      approvalPolling: approvalPolls,
+      approvalObserver: summarizeApprovalObserverEvents(observer?.events ?? []),
+      postWaitApprovalList: summarizeApprovalSnapshot(pendingApprovalSnapshot),
+      sessionSignals: {
+        approvalRequiredErrorFound,
+        approvalTimedOutFound,
+        toolResultErrors: summarizeToolResultErrors(records),
+      },
       assertions: {
         scanCodeDeny: codeCall?.stdoutJson?.verdict === "deny",
         approvalFound: Boolean(approval),
         approvalRequiredErrorFound,
+        approvalTimedOutFound,
         preResolveToolExecuted,
         toolExecuted,
         pendingApprovalsAfterWait: pendingApprovalsAfterWait.length,
       },
     };
+
+    await appendPolicyDebug(policyDebugLog, {
+      type: "code-approval-policy-case",
+      observedAt: new Date().toISOString(),
+      caseName,
+      policyCase,
+    });
 
     if (codeCall?.stdoutJson?.verdict !== "deny") {
       throw new Error(`${caseName}: expected scan-code deny call`);
@@ -760,18 +786,20 @@ async function waitForPluginApprovalOrUndefined({
   descriptionIncludes,
   gatewayToken,
   gatewayUrl,
+  observations,
   timeoutMs,
 }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const approvals = await listMatchingPluginApprovals({
+    const snapshot = await listPluginApprovalSnapshot({
       callGatewayRpc,
       descriptionIncludes,
       gatewayToken,
       gatewayUrl,
     });
-    if (approvals.length > 0) {
-      return approvals[0];
+    observations?.push(summarizeApprovalSnapshot(snapshot));
+    if (snapshot.matching.length > 0) {
+      return snapshot.matching[0];
     }
     await sleep(500);
   }
@@ -779,6 +807,21 @@ async function waitForPluginApprovalOrUndefined({
 }
 
 async function listMatchingPluginApprovals({
+  callGatewayRpc,
+  descriptionIncludes,
+  gatewayToken,
+  gatewayUrl,
+}) {
+  const snapshot = await listPluginApprovalSnapshot({
+    callGatewayRpc,
+    descriptionIncludes,
+    gatewayToken,
+    gatewayUrl,
+  });
+  return snapshot.matching;
+}
+
+async function listPluginApprovalSnapshot({
   callGatewayRpc,
   descriptionIncludes,
   gatewayToken,
@@ -792,7 +835,8 @@ async function listMatchingPluginApprovals({
       { gatewayToken, gatewayUrl, timeoutMs: 10_000 },
     ),
   );
-  return (Array.isArray(approvals) ? approvals : []).filter((approval) => {
+  const approvalList = Array.isArray(approvals) ? approvals : [];
+  const matching = approvalList.filter((approval) => {
     const request = approval?.request ?? {};
     return (
       request.pluginId === PLUGIN_ID &&
@@ -802,6 +846,13 @@ async function listMatchingPluginApprovals({
       request.description.includes(descriptionIncludes)
     );
   });
+  return {
+    observedAt: new Date().toISOString(),
+    payloadType: Array.isArray(approvals) ? "array" : typeof approvals,
+    total: approvalList.length,
+    matching,
+    approvals: approvalList,
+  };
 }
 
 async function countJsonLines(file) {
@@ -833,6 +884,80 @@ function summarizePolicyCliCall(call) {
     verdict: call.stdoutJson?.verdict,
     findings: Array.isArray(call.stdoutJson?.findings) ? call.stdoutJson.findings.length : undefined,
   };
+}
+
+async function appendPolicyDebug(file, entry) {
+  if (!file) return;
+  await fs.appendFile(file, `${JSON.stringify(entry)}\n`);
+}
+
+function summarizeApprovalSnapshot(snapshot) {
+  return {
+    observedAt: snapshot.observedAt,
+    payloadType: snapshot.payloadType,
+    total: snapshot.total,
+    matching: snapshot.matching.length,
+    approvals: snapshot.approvals.map(summarizeApproval),
+  };
+}
+
+function summarizeApproval(approval) {
+  const request = approval?.request ?? {};
+  const description =
+    typeof request.description === "string" ? request.description : "";
+  return {
+    id: approval?.id,
+    status: approval?.status,
+    decision: approval?.decision,
+    request: {
+      pluginId: request.pluginId,
+      title: request.title,
+      toolName: request.toolName,
+      descriptionIncludesPolicyCommand: description.includes(POLICY_CODE_DENY_COMMAND),
+      descriptionPreview: description.slice(0, 300),
+    },
+  };
+}
+
+function summarizeApprovalObserverEvents(events) {
+  return {
+    count: events.length,
+    types: uniqueNonEmptyStrings(events.map((event) => event?.type)),
+    methods: uniqueNonEmptyStrings(events.map((event) => event?.method)),
+    names: uniqueNonEmptyStrings(events.map((event) => event?.name)),
+    tail: events.slice(-10).map((event) => ({
+      type: event?.type,
+      method: event?.method,
+      name: event?.name,
+      keys: Object.keys(event ?? {}).sort(),
+      payloadKeys:
+        event?.payload && typeof event.payload === "object"
+          ? Object.keys(event.payload).sort()
+          : undefined,
+    })),
+  };
+}
+
+function summarizeToolResultErrors(records) {
+  return records
+    .filter((record) => {
+      const message = record?.message ?? {};
+      return (
+        record?.type === "message" &&
+        message.role === "toolResult" &&
+        (message.isError === true || message?.details?.status === "error")
+      );
+    })
+    .map((record) => {
+      const message = record.message ?? {};
+      return {
+        isError: message.isError,
+        detailsStatus: message?.details?.status,
+        detailsTool: message?.details?.tool,
+        detailsError: message?.details?.error,
+        preview: JSON.stringify(message?.content ?? message?.details ?? "").slice(0, 500),
+      };
+    });
 }
 
 async function waitForSessionRecords(sessionFile, timeoutMs) {

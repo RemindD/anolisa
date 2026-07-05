@@ -347,6 +347,7 @@ async function runPilot() {
       env: baseEnv,
       gatewayToken,
       gatewayUrl,
+      logsDir,
       mockModel,
       pluginRoot: PLUGIN_ROOT,
       runRequiredStep,
