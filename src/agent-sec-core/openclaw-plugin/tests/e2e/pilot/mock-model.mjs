@@ -88,8 +88,11 @@ export async function configureGatewayPilotModel({ env, mockModel, pluginRoot, r
         api: "openai-completions",
         reasoning: false,
         input: ["text"],
-        contextWindow: 8192,
-        maxTokens: 512,
+        // OpenClaw 2026.6.11+ performs a context-overflow precheck before the
+        // provider is called. Keep the mock model large enough for Gateway's
+        // normal system/tool prompt so the test reaches the plugin hooks.
+        contextWindow: 65536,
+        maxTokens: 1024,
         cost: {
           input: 0,
           output: 0,

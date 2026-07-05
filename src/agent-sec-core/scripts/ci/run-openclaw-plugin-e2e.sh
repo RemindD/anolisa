@@ -305,15 +305,15 @@ write_summary() {
           status,
           usedUnsafeInstallFlag: .install.usedUnsafeInstallFlag,
           resultFile: $resultFile,
-          policyMatrix: [.policyMatrix.cases[]? | {name, passed, assertions}],
+          policyMatrix: [.policyMatrix.cases[]? | {name, passed, approvalDelivery, assertions}],
           observabilityAssertions: .gatewayTrafficProbe.observability.assertions
         }' "$result_file" > "$summary_json"
 
     {
         printf '# OpenClaw Plugin E2E\n\n'
-        printf '- Matrix label: `%s`\n' "$OPENCLAW_MATRIX_LABEL"
-        printf '- Requested OpenClaw: `%s`\n' "$OPENCLAW_REQUESTED_VERSION"
-        printf '- Result file: `%s`\n' "$result_file"
+        printf '%s\n' "- Matrix label: \`$OPENCLAW_MATRIX_LABEL\`"
+        printf '%s\n' "- Requested OpenClaw: \`$OPENCLAW_REQUESTED_VERSION\`"
+        printf '%s\n' "- Result file: \`$result_file\`"
         printf '\n```json\n'
         cat "$summary_json"
         printf '\n```\n'

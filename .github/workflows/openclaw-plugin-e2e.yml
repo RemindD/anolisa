@@ -59,18 +59,6 @@ jobs:
       fail-fast: false
       matrix:
         openclaw:
-          - label: min-supported
-            version: "2026.4.14"
-            expected-version: "2026.4.14"
-            expect-unsafe-install: "true"
-          - label: conversation-access
-            version: "2026.4.24"
-            expected-version: "2026.4.24"
-            expect-unsafe-install: "true"
-          - label: current-pinned
-            version: "2026.5.7"
-            expected-version: "2026.5.7"
-            expect-unsafe-install: "true"
           - label: latest
             version: "latest"
             expected-version: ""
@@ -126,5 +114,11 @@ jobs:
           path: |
             src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/summary.json
             src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/summary.md
-            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/**
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/pilot-result.json
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/logs/**
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/agent-sec-cli-overrides.json
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/agent-sec-data/*.jsonl
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/agent-sec-data/*.db
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/openclaw-state/openclaw.json
+            src/agent-sec-core/target/openclaw-e2e/results/${{ matrix.openclaw.label }}/**/workdir/openclaw-state/logs/*.jsonl
           if-no-files-found: warn

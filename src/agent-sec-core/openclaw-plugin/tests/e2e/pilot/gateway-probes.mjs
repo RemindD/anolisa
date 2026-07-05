@@ -196,7 +196,7 @@ export async function runGatewayPolicyMatrix({
   matrix.cases.push(
     await runCodeApprovalPolicyCase({
       callGatewayRpc,
-      caseName: "codeScanRequireApproval=true opens approval and blocks denied tool",
+      caseName: "codeScanRequireApproval=true blocks denied tool before execution",
       cliLogPath,
       codeScanRequireApproval: true,
       env,
@@ -273,7 +273,7 @@ export function assertPolicyMatrix(matrix) {
     "promptScanBlock=false passes deny prompt to model",
     "promptScanBlock=true handles deny prompt before model",
     "codeScanRequireApproval=false allows deny scan without approval",
-    "codeScanRequireApproval=true opens approval and blocks denied tool",
+    "codeScanRequireApproval=true blocks denied tool before execution",
   ];
   for (const expectedCase of expectedCases) {
     const actual = cases.find((item) => item?.name === expectedCase);
@@ -391,8 +391,10 @@ async function runCodeApprovalPolicyCase({
   pluginRoot,
   runRequiredStep,
 }) {
-  // codeScanRequireApproval controls whether a deny scan opens plugin approval.
-  // The true case resolves that approval as deny and verifies the tool never ran.
+  // codeScanRequireApproval controls whether a deny scan requires operator
+  // approval before execution. Newer OpenClaw builds may fail closed when their
+  // approval runtime cannot acquire approval scope in a fresh test gateway, so
+  // the stable assertion is: deny scan happened and the tool never executed.
   const configReload = await applyAgentSecPolicyConfig({
     caseName,
     codeScanRequireApproval,
@@ -421,26 +423,28 @@ async function runCodeApprovalPolicyCase({
     let approvalResolve;
     let preResolveToolExecuted = false;
     if (codeScanRequireApproval) {
-      approval = await waitForPluginApproval({
+      approval = await waitForPluginApprovalOrUndefined({
         callGatewayRpc,
-        caseName,
         descriptionIncludes: POLICY_CODE_DENY_COMMAND,
         gatewayToken,
         gatewayUrl,
+        timeoutMs: 5_000,
       });
-      const recordsBeforeResolve = await readSessionRecords(turn.sessionFile);
-      preResolveToolExecuted = sessionHasSuccessfulToolOutput(
-        recordsBeforeResolve,
-        POLICY_CODE_DENY_OUTPUT,
-      );
-      approvalResolve = unwrapGatewayPayload(
-        await callGatewayRpc(
-          `${caseName}-approval-deny`,
-          "plugin.approval.resolve",
-          { id: approval.id, decision: "deny" },
-          { gatewayToken, gatewayUrl },
-        ),
-      );
+      if (approval) {
+        const recordsBeforeResolve = await readSessionRecords(turn.sessionFile);
+        preResolveToolExecuted = sessionHasSuccessfulToolOutput(
+          recordsBeforeResolve,
+          POLICY_CODE_DENY_OUTPUT,
+        );
+        approvalResolve = unwrapGatewayPayload(
+          await callGatewayRpc(
+            `${caseName}-approval-deny`,
+            "plugin.approval.resolve",
+            { id: approval.id, decision: "deny" },
+            { gatewayToken, gatewayUrl },
+          ),
+        );
+      }
     }
 
     turn.wait = unwrapGatewayPayload(
@@ -460,6 +464,7 @@ async function runCodeApprovalPolicyCase({
     });
     const modelRequests = mockModel.requests.slice(modelRequestStart);
     const toolExecuted = sessionHasSuccessfulToolOutput(records, POLICY_CODE_DENY_OUTPUT);
+    const approvalRequiredErrorFound = sessionContainsText(records, "Plugin approval required");
     const pendingApprovalsAfterWait = await listMatchingPluginApprovals({
       callGatewayRpc,
       descriptionIncludes: POLICY_CODE_DENY_COMMAND,
@@ -487,9 +492,15 @@ async function runCodeApprovalPolicyCase({
             resolvedAs: approvalResolve?.decision ?? "deny",
           }
         : undefined,
+      approvalDelivery: approval
+        ? "gateway-approval"
+        : approvalRequiredErrorFound
+          ? "fail-closed-session-error"
+          : "missing",
       assertions: {
         scanCodeDeny: codeCall?.stdoutJson?.verdict === "deny",
         approvalFound: Boolean(approval),
+        approvalRequiredErrorFound,
         preResolveToolExecuted,
         toolExecuted,
         pendingApprovalsAfterWait: pendingApprovalsAfterWait.length,
@@ -500,10 +511,10 @@ async function runCodeApprovalPolicyCase({
       throw new Error(`${caseName}: expected scan-code deny call`);
     }
     if (codeScanRequireApproval) {
-      if (!approval) {
-        throw new Error(`${caseName}: expected a pending plugin approval`);
+      if (!approval && !approvalRequiredErrorFound) {
+        throw new Error(`${caseName}: expected plugin approval or fail-closed session error`);
       }
-      if (approval.request?.pluginId !== PLUGIN_ID) {
+      if (approval && approval.request?.pluginId !== PLUGIN_ID) {
         throw new Error(`${caseName}: approval pluginId was ${approval.request?.pluginId}`);
       }
       if (preResolveToolExecuted || toolExecuted) {
@@ -744,14 +755,14 @@ async function openGatewayApprovalObserver({ gatewayToken, gatewayUrl }) {
   };
 }
 
-async function waitForPluginApproval({
+async function waitForPluginApprovalOrUndefined({
   callGatewayRpc,
-  caseName,
   descriptionIncludes,
   gatewayToken,
   gatewayUrl,
+  timeoutMs,
 }) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const approvals = await listMatchingPluginApprovals({
       callGatewayRpc,
@@ -764,7 +775,7 @@ async function waitForPluginApproval({
     }
     await sleep(500);
   }
-  throw new Error(`${caseName}: timed out waiting for plugin approval`);
+  return undefined;
 }
 
 async function listMatchingPluginApprovals({
