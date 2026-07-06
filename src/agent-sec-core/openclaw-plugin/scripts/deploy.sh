@@ -26,6 +26,7 @@ OPENCLAW_INSTALL_USED_UNSAFE=0
 OPENCLAW_INSTALL_REQUIRES_UNSAFE=0
 OPENCLAW_INSPECT_HELP=""
 OPENCLAW_INSPECT_SUPPORTS_RUNTIME=0
+VERIFY_RUNTIME_TMPDIR=""
 
 # Default PLUGIN_DIR: resolve relative to this script's location (scripts/ -> parent)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +49,15 @@ die() {
     echo "ERROR: $*" >&2
     exit 1
 }
+
+cleanup_verify_runtime_tmpdir() {
+    if [[ -n "${VERIFY_RUNTIME_TMPDIR:-}" ]]; then
+        rm -rf "$VERIFY_RUNTIME_TMPDIR" || true
+        VERIFY_RUNTIME_TMPDIR=""
+    fi
+}
+
+trap cleanup_verify_runtime_tmpdir EXIT
 
 extract_openclaw_version() {
     local raw="$1"
@@ -198,6 +208,7 @@ configure_conversation_access() {
 verify_runtime_loaded() {
     local inspect_args=("plugins" "inspect" "$PLUGIN_ID" "--json")
     local inspect_label="openclaw plugins inspect ${PLUGIN_ID} --json"
+    local inspect_tmpdir
     local inspect_stdout
     local inspect_stderr
     local inspect_json
@@ -210,10 +221,13 @@ verify_runtime_loaded() {
         inspect_label="openclaw plugins inspect ${PLUGIN_ID} --runtime --json"
     fi
 
-    inspect_stdout="$(mktemp)"
-    inspect_stderr="$(mktemp)"
-    inspect_json="$(mktemp)"
-    jq_stderr="$(mktemp)"
+    cleanup_verify_runtime_tmpdir
+    inspect_tmpdir="$(mktemp -d)"
+    VERIFY_RUNTIME_TMPDIR="$inspect_tmpdir"
+    inspect_stdout="$inspect_tmpdir/inspect.stdout"
+    inspect_stderr="$inspect_tmpdir/inspect.stderr"
+    inspect_json="$inspect_tmpdir/inspect.json"
+    jq_stderr="$inspect_tmpdir/jq.stderr"
 
     if ! openclaw_cli "${inspect_args[@]}" >"$inspect_stdout" 2>"$inspect_stderr"; then
         print_inspect_debug "$inspect_label" "$inspect_stdout" "$inspect_stderr" "$jq_stderr"
@@ -235,6 +249,8 @@ verify_runtime_loaded() {
         printf '%s\n' "$runtime_inspect_json" | jq -r '.diagnostics[]?.message' >&2
         die "插件已安装，但 ${inspect_label} 状态为 ${runtime_status}，未达到 loaded。请运行: ${inspect_label}"
     fi
+
+    cleanup_verify_runtime_tmpdir
 }
 
 extract_json_object_from_output() {

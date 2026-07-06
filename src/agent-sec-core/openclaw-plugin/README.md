@@ -254,6 +254,20 @@ directly. The same values can be provided with
 `AGENT_SEC_OPENCLAW_PILOT_AGENT_SEC_DAEMON`. Use `--workdir <dir>` to keep
 logs and artifacts in a stable directory.
 
+Optional pilot arguments:
+
+| Option | Purpose |
+|--------|---------|
+| `--workdir <dir>` | Store isolated OpenClaw state, daemon data, logs, and `pilot-result.json` under a stable directory. |
+| `--openclaw-bin <path>` | Use a specific OpenClaw executable or `openclaw.mjs`. |
+| `--agent-sec-cli <path>` | Use a specific installed `agent-sec-cli` binary. |
+| `--agent-sec-daemon <path>` | Use a specific installed `agent-sec-daemon` binary. |
+| `--port <port>` | Bind Gateway to an explicit port. Without this, the runner picks a local port and retries initial startup if that port is claimed before Gateway binds. |
+| `--gateway-timeout-ms <ms>` | Override the Gateway health wait budget. |
+| `--gateway-token <token>` | Override the generated local Gateway token. |
+| `--skip-gateway` | Stop after install/runtime inspection and skip Gateway traffic plus policy matrix probes. |
+| `--skip-failure-probes` | Skip direct hook fail-open probes for missing, broken, invalid, and slow CLI behavior. |
+
 The pilot runner does not control unsafe-install behavior. It calls `deploy.sh`
 directly and records the actual install command path through the deploy
 stdout/stderr logs.

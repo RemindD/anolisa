@@ -177,7 +177,8 @@ function buildAgentSecCliWrapper(target, commandName) {
       : { command: "uv", prefixArgs: ["run", "--project", target.project, commandName] };
   return `#!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
-const { appendFileSync, readFileSync } = require("node:fs");
+const { appendFileSync, mkdirSync, readFileSync } = require("node:fs");
+const { dirname } = require("node:path");
 
 const command = ${JSON.stringify(commandSpec.command)};
 const prefixArgs = ${JSON.stringify(commandSpec.prefixArgs)};
@@ -234,6 +235,7 @@ function writeCallLog(entry) {
   const file = process.env.AGENT_SEC_OPENCLAW_PILOT_CLI_LOG;
   if (!file) return;
   try {
+    mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify({
       ts: new Date().toISOString(),
       ...entry,

@@ -206,12 +206,20 @@ export function createPilotHarness({
       { cwd: pluginRoot, env },
     );
     processRef.gatewayPort = gatewayPort;
-    const health = await waitForGatewayHealth(`ws://127.0.0.1:${gatewayPort}`, {
-      env,
-      processRef,
-      token: gatewayToken,
-      timeoutMs: gatewayTimeoutMs,
-    });
+    let health;
+    try {
+      health = await waitForGatewayHealth(`ws://127.0.0.1:${gatewayPort}`, {
+        env,
+        processRef,
+        token: gatewayToken,
+        timeoutMs: gatewayTimeoutMs,
+      });
+    } catch (error) {
+      if (error && typeof error === "object") {
+        error.gatewayProcess = processRef;
+      }
+      throw error;
+    }
     return { process: processRef, health };
   }
 
@@ -331,7 +339,14 @@ export function createPilotHarness({
     stepName,
     method,
     params,
-    { gatewayToken, gatewayUrl, maxAttempts = 3, retryDelayBaseMs = 2_000, timeoutMs },
+    {
+      env = gatewayCommandEnv,
+      gatewayToken,
+      gatewayUrl,
+      maxAttempts = 3,
+      retryDelayBaseMs = 2_000,
+      timeoutMs,
+    },
   ) {
     const stepTimeoutMs = timeoutMs ?? defaultCommandTimeoutMs;
     let lastStep;
@@ -357,7 +372,7 @@ export function createPilotHarness({
           "--params",
           JSON.stringify(params ?? {}),
         ],
-        { env: gatewayCommandEnv, timeoutMs: stepTimeoutMs + 5_000 },
+        { env, timeoutMs: stepTimeoutMs + 5_000 },
       );
       if (step.exitCode === 0) {
         return parseJsonFromOutput(step.stdout);

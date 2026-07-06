@@ -393,15 +393,10 @@ async function capturePluginHooks({ pluginConfig, pluginRoot }) {
 }
 
 async function invokeCapturedHookCase(capture, testCase) {
-  // Some failure probes need a temporary PATH. Restore process.env after each
-  // case because plugin code reads env at hook invocation time.
-  const previousEnv = process.env;
-  if (testCase.env) {
-    process.env = { ...testCase.env };
-  }
   const startedAt = Date.now();
   const matchingHooks = capture.hooks.filter((hook) => hook.hookName === testCase.hookName);
   const results = [];
+  const restoreEnv = testCase.env ? applyProcessEnvOverlay(testCase.env) : undefined;
   try {
     for (const hook of matchingHooks) {
       const hookStartedAt = Date.now();
@@ -427,9 +422,7 @@ async function invokeCapturedHookCase(capture, testCase) {
       }
     }
   } finally {
-    if (testCase.env) {
-      process.env = previousEnv;
-    }
+    restoreEnv?.();
   }
   return {
     name: testCase.name,
@@ -437,6 +430,33 @@ async function invokeCapturedHookCase(capture, testCase) {
     matchedHandlers: matchingHooks.length,
     durationMs: Date.now() - startedAt,
     results,
+  };
+}
+
+function applyProcessEnvOverlay(env) {
+  // Failure probes need a temporary PATH because plugin code reads process.env
+  // at hook invocation time. Mutate keys in place instead of replacing the
+  // global object so modules holding a process.env reference stay valid.
+  const previous = new Map();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(
+      key,
+      Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined,
+    );
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = String(value);
+    }
+  }
+  return () => {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   };
 }
 

@@ -66,7 +66,12 @@ export async function startMockModelServer({ logsDir, registerServer }) {
     requestsLog,
     server,
   };
-  registerServer?.(ref);
+  try {
+    registerServer?.(ref);
+  } catch (error) {
+    await closeHttpServer(server);
+    throw error;
+  }
   return ref;
 }
 
@@ -206,6 +211,18 @@ async function readRequestJson(req) {
   }
   const text = Buffer.concat(chunks).toString("utf8");
   return text ? JSON.parse(text) : {};
+}
+
+function closeHttpServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function respondMockChatCompletion(res, body) {

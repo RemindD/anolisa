@@ -99,6 +99,9 @@ function parseStableVersion(version) {
 }
 
 export async function findFreePort() {
+  // This returns a candidate port only: the socket must be closed before the
+  // OpenClaw CLI can bind it, so callers that start long-lived processes should
+  // retry when startup logs show EADDRINUSE.
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.listen(0, "127.0.0.1", () => {

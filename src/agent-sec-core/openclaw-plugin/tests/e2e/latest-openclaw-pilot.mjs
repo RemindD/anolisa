@@ -9,6 +9,7 @@ import {
   extractVersion,
   findFreePort,
   parseJsonFromOutput,
+  readTextIfExists,
 } from "./pilot/common.mjs";
 import { parseArgs, printHelp, resolveOpenClawBin } from "./pilot/args.mjs";
 import { formatError, serializeError } from "./pilot/errors.mjs";
@@ -45,6 +46,7 @@ const startedServers = [];
 const result = {
   schemaVersion: 1,
   task: "PILOT-LATEST-OPENCLAW-E2E",
+  pilotRunId: undefined,
   status: "running",
   startedAt: new Date().toISOString(),
   finishedAt: undefined,
@@ -58,6 +60,7 @@ const result = {
   steps: [],
   daemonHealth: undefined,
   gatewayHealth: undefined,
+  gatewayStartAttempts: [],
   install: {},
   mockModel: undefined,
   runtimeInspect: undefined,
@@ -113,6 +116,9 @@ async function runPilot() {
     : process.env.AGENT_SEC_OPENCLAW_PILOT_WORKDIR
       ? path.resolve(process.env.AGENT_SEC_OPENCLAW_PILOT_WORKDIR)
       : await fs.mkdtemp(path.join(os.tmpdir(), "agentsec-openclaw-pilot-"));
+  const pilotRunId = `${new Date()
+    .toISOString()
+    .replace(/[^0-9A-Za-z_.-]/gu, "-")}-${process.pid}`;
   const logsDir = path.join(workdir, "logs");
   const artifactsDir = path.join(workdir, "artifacts");
   const binDir = path.join(workdir, "bin");
@@ -123,9 +129,10 @@ async function runPilot() {
   const xdgCacheHome = path.join(workdir, "xdg-cache");
   const daemonSocket = path.join(workdir, "agent-sec-daemon.sock");
   const openclawConfigPath = path.join(openclawStateDir, "openclaw.json");
-  const agentSecCliCallsLog = path.join(logsDir, "agent-sec-cli-calls.jsonl");
-  const agentSecCliOverrideFile = path.join(workdir, "agent-sec-cli-overrides.json");
+  const agentSecCliCallsLog = path.join(logsDir, `agent-sec-cli-calls-${pilotRunId}.jsonl`);
+  const agentSecCliOverrideFile = path.join(workdir, `agent-sec-cli-overrides-${pilotRunId}.json`);
 
+  result.pilotRunId = pilotRunId;
   result.workdir = workdir;
   result.artifactsDir = artifactsDir;
   result.logsDir = logsDir;
@@ -296,27 +303,71 @@ async function runPilot() {
     runRequiredStep,
   });
 
-  const gatewayPort = args.port ? Number(args.port) : await findFreePort();
-  const gatewayUrl = `ws://127.0.0.1:${gatewayPort}`;
+  const explicitGatewayPort = args.port ? Number(args.port) : undefined;
+  let gatewayPort = explicitGatewayPort ?? await findFreePort();
+  let gatewayUrl = buildGatewayUrl(gatewayPort);
+  result.paths.gatewayPort = gatewayPort;
   result.paths.gatewayUrl = gatewayUrl;
   let gatewayToken;
   let gatewayProcess;
+  const callGatewayRpcWithBaseEnv = (stepName, method, params, options = {}) =>
+    callGatewayRpc(stepName, method, params, { ...options, env: baseEnv });
+  const setGatewayPort = (port) => {
+    gatewayPort = port;
+    gatewayUrl = buildGatewayUrl(port);
+    result.paths.gatewayPort = gatewayPort;
+    result.paths.gatewayUrl = gatewayUrl;
+  };
   const restartGateway = async (reason) => {
     if (gatewayProcess) {
       await stopStartedProcess(gatewayProcess);
+      gatewayProcess = undefined;
     }
-    // Shared starter used for the initial Gateway process and any explicit
-    // restart probes that need a fresh runtime.
-    const started = await startOpenClawGateway({
-      env: baseEnv,
-      gatewayPort,
-      gatewayToken,
-      gatewayTimeoutMs: Number(args.gatewayTimeoutMs ?? DEFAULT_GATEWAY_TIMEOUT_MS),
-      reason,
-    });
-    gatewayProcess = started.process;
-    result.gatewayHealth = started.health;
-    return gatewayProcess;
+    const maxAttempts = !explicitGatewayPort && reason === "initial" ? 5 : 1;
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (attempt > 1) {
+        setGatewayPort(await findFreePort());
+      }
+      try {
+        // Shared starter used for the initial Gateway process and any explicit
+        // restart probes that need a fresh runtime.
+        const started = await startOpenClawGateway({
+          env: baseEnv,
+          gatewayPort,
+          gatewayToken,
+          gatewayTimeoutMs: Number(args.gatewayTimeoutMs ?? DEFAULT_GATEWAY_TIMEOUT_MS),
+          reason,
+        });
+        gatewayProcess = started.process;
+        result.gatewayHealth = started.health;
+        result.gatewayStartAttempts.push({
+          attempt,
+          port: gatewayPort,
+          reason,
+          status: "started",
+        });
+        return gatewayProcess;
+      } catch (error) {
+        lastError = error;
+        const portBindFailure = await isGatewayPortBindFailure(error);
+        result.gatewayStartAttempts.push({
+          attempt,
+          error: serializeError(error),
+          port: gatewayPort,
+          portBindFailure,
+          reason,
+          status: "failed",
+        });
+        if (error?.gatewayProcess) {
+          await stopStartedProcess(error.gatewayProcess).catch(() => {});
+        }
+        if (!portBindFailure || attempt === maxAttempts) {
+          throw error;
+        }
+      }
+    }
+    throw lastError;
   };
 
   if (!args.skipGateway) {
@@ -354,7 +405,7 @@ async function runPilot() {
     // plugin hooks, agent-sec-cli, tool execution, and observability output.
     result.gatewayTrafficProbe = await runGatewayTrafficProbe({
       assertProcessStillRunning,
-      callGatewayRpc,
+      callGatewayRpc: callGatewayRpcWithBaseEnv,
       dataDir,
       gatewayToken,
       gatewayUrl,
@@ -368,7 +419,7 @@ async function runPilot() {
     // strategy (hot reload for verified hosts, Gateway restart for older hosts),
     // then assert behavior from session/model/approval evidence.
     result.policyMatrix = await runGatewayPolicyMatrix({
-      callGatewayRpc,
+      callGatewayRpc: callGatewayRpcWithBaseEnv,
       cliLogPath: agentSecCliCallsLog,
       env: baseEnv,
       gatewayToken,
@@ -410,6 +461,19 @@ async function runPilot() {
 function detectDeployUsedUnsafeInstallFlag(deployResult) {
   const output = `${deployResult.stdout}\n${deployResult.stderr}`;
   return output.includes("首次安装将使用 legacy --dangerously-force-unsafe-install");
+}
+
+function buildGatewayUrl(port) {
+  return `ws://127.0.0.1:${port}`;
+}
+
+async function isGatewayPortBindFailure(error) {
+  const processRef = error?.gatewayProcess;
+  const logText = processRef
+    ? `${await readTextIfExists(processRef.stdoutLog)}\n${await readTextIfExists(processRef.stderrLog)}`
+    : "";
+  const text = `${error?.message ?? ""}\n${logText}`;
+  return /EADDRINUSE|address already in use|listen .*127\.0\.0\.1/iu.test(text);
 }
 
 async function extractPackedPluginPackage({ artifactsDir, env, packageArtifact, runRequiredStep }) {
