@@ -63,14 +63,30 @@ jobs:
             version: "2026.4.14"
             expected-version: "2026.4.14"
             expect-unsafe-install: "true"
+          - label: legacy-active
+            version: "2026.4.23"
+            expected-version: "2026.4.23"
+            expect-unsafe-install: ""
           - label: conversation-access
             version: "2026.4.24"
             expected-version: "2026.4.24"
             expect-unsafe-install: "true"
+          - label: model-call-telemetry
+            version: "2026.4.29"
+            expected-version: "2026.4.29"
+            expect-unsafe-install: ""
           - label: current-pinned
             version: "2026.5.7"
             expected-version: "2026.5.7"
             expect-unsafe-install: "true"
+          - label: supported-mid
+            version: "2026.5.28"
+            expected-version: "2026.5.28"
+            expect-unsafe-install: ""
+          - label: current-stable
+            version: "2026.6.10"
+            expected-version: "2026.6.10"
+            expect-unsafe-install: ""
           - label: latest
             version: "latest"
             expected-version: ""
