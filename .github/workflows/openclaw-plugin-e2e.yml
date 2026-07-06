@@ -3,15 +3,6 @@ name: OpenClaw Plugin E2E
 on:
   pull_request:
     paths:
-      - "src/agent-sec-core/agent-sec-cli/**"
-      - "src/agent-sec-core/openclaw-plugin/**"
-      - "src/agent-sec-core/scripts/ci/run-openclaw-plugin-e2e.sh"
-      - ".github/workflows/openclaw-plugin-e2e.yml"
-  push:
-    paths:
-      - "src/agent-sec-core/agent-sec-cli/**"
-      - "src/agent-sec-core/openclaw-plugin/**"
-      - "src/agent-sec-core/scripts/ci/run-openclaw-plugin-e2e.sh"
       - ".github/workflows/openclaw-plugin-e2e.yml"
   workflow_dispatch:
 
