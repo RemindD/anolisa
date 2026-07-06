@@ -7,16 +7,31 @@ import { serializeError } from "./errors.mjs";
 
 const DEFAULT_HOOK_TIMEOUT_MS = 35_000;
 
-export async function runHookProbe({ env, logsDir, pluginRoot, repoRoot, workdir, skipFailureProbes }) {
+export async function runHookProbe({
+  env,
+  logsDir,
+  openclawBin,
+  pluginRoot,
+  repoRoot,
+  workdir,
+  skipFailureProbes,
+}) {
   // Hook probe is supplemental coverage. It exercises direct plugin API handlers
   // and fail-open behavior that are hard to force through one Gateway chat turn.
   const probe = {
     mode: "openclaw-plugin-api-hook-probe",
     note:
       "This probe executes handlers registered by the plugin's OpenClaw plugin API entry. It is not a substitute for a model-driven gateway chat turn.",
+    importResolution: undefined,
     registeredHooks: [],
     logs: [],
     cases: [],
+  };
+  const importRoot = await prepareHookProbeImportRoot({ openclawBin, pluginRoot, workdir });
+  probe.importResolution = {
+    installedPluginRoot: pluginRoot,
+    importRoot: importRoot.root,
+    openclawPackageRoot: importRoot.openclawPackageRoot,
   };
   const capture = await capturePluginHooks({
     pluginConfig: {
@@ -28,7 +43,7 @@ export async function runHookProbe({ env, logsDir, pluginRoot, repoRoot, workdir
         "skill-ledger": { policy: "warn" },
       },
     },
-    pluginRoot,
+    pluginRoot: importRoot.root,
   });
   probe.registeredHooks = capture.hooks.map((hook) => ({
     hookName: hook.hookName,
@@ -270,6 +285,49 @@ sleep 20
   await fs.writeFile(probeFile, `${JSON.stringify(probe, null, 2)}\n`);
   probe.resultFile = probeFile;
   return probe;
+}
+
+async function prepareHookProbeImportRoot({ openclawBin, pluginRoot, workdir }) {
+  // Direct imports run outside the OpenClaw host. Build an isolated module root
+  // that uses the installed plugin bits plus the exact host SDK package under test.
+  const openclawPackageRoot = await resolveOpenClawPackageRoot(openclawBin);
+  const root = path.join(workdir, "hook-probe-import-root");
+  await fs.rm(root, { recursive: true, force: true });
+  await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+  await fs.cp(path.join(pluginRoot, "dist"), path.join(root, "dist"), { recursive: true });
+  await fs.copyFile(path.join(pluginRoot, "package.json"), path.join(root, "package.json"));
+  await fs.symlink(openclawPackageRoot, path.join(root, "node_modules", "openclaw"), "dir");
+  return { root, openclawPackageRoot };
+}
+
+async function resolveOpenClawPackageRoot(openclawBin) {
+  if (!openclawBin) {
+    throw new Error("hook probe requires the resolved OpenClaw binary path");
+  }
+
+  const realBin = await fs.realpath(openclawBin);
+  const stat = await fs.stat(realBin);
+  let current = stat.isDirectory() ? realBin : path.dirname(realBin);
+  for (let depth = 0; depth < 12; depth += 1) {
+    const packageName = await readPackageName(path.join(current, "package.json"));
+    if (packageName === "openclaw") {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  throw new Error(`unable to resolve OpenClaw package root from ${openclawBin} (${realBin})`);
+}
+
+async function readPackageName(packageJsonPath) {
+  try {
+    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+    return typeof packageJson.name === "string" ? packageJson.name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function assertHookProbe(probe) {

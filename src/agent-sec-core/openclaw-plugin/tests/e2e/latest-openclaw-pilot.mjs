@@ -161,10 +161,11 @@ async function runPilot() {
   // The wrappers make the test hermetic without hiding the real host behavior:
   // openclaw still comes from PATH/--openclaw-bin, while agent-sec-cli calls are
   // logged and only policy-marker inputs get deterministic deny overrides.
+  const openclawBin = resolveOpenClawBin(args.openclawBin);
   const wrapperTargets = await installWrappers({
     agentSecCliProject: AGENT_SEC_CLI_PROJECT,
     binDir,
-    openclawBin: resolveOpenClawBin(args.openclawBin),
+    openclawBin,
     agentSecCliBin: args.agentSecCli,
     agentSecDaemonBin: args.agentSecDaemon,
     pluginRoot: PLUGIN_ROOT,
@@ -218,7 +219,7 @@ async function runPilot() {
     ["pack", "--pack-destination", artifactsDir, "--json"],
     { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
-  result.install.packageArtifact = parseNpmPackArtifact(packResult.stdout, artifactsDir);
+  result.install.packageArtifact = await parseNpmPackArtifact(packResult.stdout, artifactsDir);
   result.install.packageRoot = await extractPackedPluginPackage({
     artifactsDir,
     env: baseEnv,
@@ -396,6 +397,7 @@ async function runPilot() {
   result.hookProbe = await runHookProbe({
     env: baseEnv,
     logsDir,
+    openclawBin,
     pluginRoot: result.install.installedPluginRoot,
     repoRoot: REPO_ROOT,
     workdir,

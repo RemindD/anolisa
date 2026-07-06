@@ -535,7 +535,7 @@ function summarizeRuntimeInspect(data) {
   };
 }
 
-function parseNpmPackArtifact(stdout, artifactsDir) {
+async function parseNpmPackArtifact(stdout, artifactsDir) {
   try {
     const parsed = JSON.parse(stdout);
     const first = Array.isArray(parsed) ? parsed[0] : parsed;
@@ -546,7 +546,23 @@ function parseNpmPackArtifact(stdout, artifactsDir) {
     // Fall through to a conservative filename search.
   }
   const match = stdout.match(/agent-sec-openclaw-plugin-[^\s]+\.tgz/u);
-  return match ? path.join(artifactsDir, match[0]) : undefined;
+  if (match) {
+    return path.join(artifactsDir, match[0]);
+  }
+
+  const files = await fs.readdir(artifactsDir);
+  const artifacts = files
+    .filter((file) => /^agent-sec-openclaw-plugin-[^\s/]+\.tgz$/u.test(file))
+    .sort();
+  if (artifacts.length === 1) {
+    return path.join(artifactsDir, artifacts[0]);
+  }
+  if (artifacts.length > 1) {
+    throw new Error(
+      `npm pack did not report an artifact and ${artifactsDir} contains multiple candidates: ${artifacts.join(", ")}`,
+    );
+  }
+  return undefined;
 }
 
 async function readJsonFileOrDefault(filePath, defaultValue) {

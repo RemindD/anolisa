@@ -311,7 +311,10 @@ write_summary() {
           livePolicyConfig: (.policyMatrix.livePolicyConfig // null),
           policyMatrix: [.policyMatrix.cases[]? | {name, passed, approvalDelivery, assertions}],
           observabilityCompatibility: (.gatewayTrafficProbe.observabilityCompatibility // null),
-          observabilityAssertions: .gatewayTrafficProbe.observability.assertions
+          observabilityAssertions: .gatewayTrafficProbe.observability.assertions,
+          hookProbeImportResolution: (.hookProbe.importResolution // null),
+          hookProbeRegisteredHooks: (.hookProbe.registeredHooks // [] | length),
+          hookProbeCases: (.hookProbe.cases // [] | length)
         }' "$result_file" > "$summary_json"
 
     {
