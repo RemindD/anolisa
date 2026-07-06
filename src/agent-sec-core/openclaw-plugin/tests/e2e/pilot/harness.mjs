@@ -484,7 +484,22 @@ async function approveLocalGatewayCliScopeUpgrade(env, result) {
   }
 
   const requestedScopes = mergeStringLists(...pendingEntries.map((request) => request.scopes));
-  const approvedScopes = mergeStringLists(device.approvedScopes, device.scopes, requestedScopes);
+  // Proactively grant all CLI default operator scopes so that subsequent
+  // gateway RPC calls (e.g. plugin.approval.list which needs operator.approvals)
+  // do not require further scope upgrades. The gateway reads pairing state from
+  // disk on each connection, so this takes effect immediately for the next call
+  // and persists across gateway restarts.
+  const approvedScopes = mergeStringLists(
+    device.approvedScopes,
+    device.scopes,
+    requestedScopes,
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    "operator.talk.secrets",
+  );
   device.scopes = approvedScopes;
   device.approvedScopes = approvedScopes;
   device.roles = mergeStringLists(device.roles, device.role, "operator");
