@@ -425,7 +425,7 @@ async function runPromptPolicyCase({
   if (promptCall?.stdoutJson?.verdict !== "deny") {
     throw new Error(`${caseName}: expected scan-prompt deny call`);
   }
-  assertGatewayWaitCompleted(caseName, turn);
+  assertGatewayWaitDidNotTimeout(caseName, turn);
   if (promptScanBlock) {
     if (reachedModel) {
       throw new Error(`${caseName}: model received a request even though promptScanBlock=true`);
@@ -615,7 +615,7 @@ async function runCodeApprovalPolicyCase({
     if (codeCall?.stdoutJson?.verdict !== "deny") {
       throw new Error(`${caseName}: expected scan-code deny call`);
     }
-    assertGatewayWaitCompleted(caseName, turn);
+    assertGatewayWaitDidNotTimeout(caseName, turn);
     if (codeScanRequireApproval) {
       if (
         !approval &&
@@ -833,10 +833,13 @@ function mockModelRequestContainsText(request, text) {
   return JSON.stringify(request?.body ?? {}).includes(text);
 }
 
-function assertGatewayWaitCompleted(caseName, turn) {
-  if (turn.wait?.status !== "ok") {
+function assertGatewayWaitDidNotTimeout(caseName, turn) {
+  const status = turn.wait?.status;
+  // Plugin-denied tool calls can end the turn with status=error; only a missing
+  // or timed-out wait result means the Gateway lane failed to reach a terminal state.
+  if (!status || status === "timeout") {
     throw new Error(
-      `${caseName}: gateway agent.wait did not complete; status=${String(turn.wait?.status ?? "missing")} runId=${turn.runId}`,
+      `${caseName}: gateway agent.wait did not complete; status=${String(status ?? "missing")} runId=${turn.runId}`,
     );
   }
 }
