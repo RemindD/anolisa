@@ -425,6 +425,7 @@ async function extractPackedPluginPackage({ artifactsDir, env, packageArtifact, 
     { cwd: artifactsDir, env, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   for (const requiredPath of [
+    path.join(packageRoot, "package.json"),
     path.join(packageRoot, "openclaw.plugin.json"),
     path.join(packageRoot, "dist", "index.js"),
     path.join(packageRoot, "scripts", "deploy.sh"),
@@ -435,5 +436,40 @@ async function extractPackedPluginPackage({ artifactsDir, env, packageArtifact, 
       throw new Error(`packed plugin artifact is missing ${requiredPath}`);
     }
   }
+  await assertPackedPluginEntrypoints(packageRoot);
   return packageRoot;
+}
+
+async function assertPackedPluginEntrypoints(packageRoot) {
+  const packageManifest = await readJsonFile(path.join(packageRoot, "package.json"));
+  const openclawManifest = await readJsonFile(path.join(packageRoot, "openclaw.plugin.json"));
+  const entrypointGroups = [
+    ["package.json openclaw.extensions", packageManifest?.openclaw?.extensions],
+    ["package.json openclaw.runtimeExtensions", packageManifest?.openclaw?.runtimeExtensions],
+    ["openclaw.plugin.json extensions", openclawManifest?.extensions],
+  ];
+  for (const [label, entries] of entrypointGroups) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      throw new Error(`packed plugin artifact is missing ${label}`);
+    }
+    for (const entry of entries) {
+      if (typeof entry !== "string" || entry.length === 0) {
+        throw new Error(`packed plugin artifact has invalid ${label} entry: ${JSON.stringify(entry)}`);
+      }
+      const entryPath = path.resolve(packageRoot, entry);
+      const relative = path.relative(packageRoot, entryPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error(`packed plugin artifact ${label} escapes package root: ${entry}`);
+      }
+      try {
+        await fs.access(entryPath);
+      } catch {
+        throw new Error(`packed plugin artifact ${label} points to missing file: ${entry}`);
+      }
+    }
+  }
+}
+
+async function readJsonFile(file) {
+  return JSON.parse(await fs.readFile(file, "utf8"));
 }

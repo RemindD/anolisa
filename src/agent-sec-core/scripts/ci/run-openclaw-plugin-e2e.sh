@@ -310,6 +310,7 @@ write_summary() {
           policyConfigApplication: (.policyMatrix.policyConfigApplication // null),
           livePolicyConfig: (.policyMatrix.livePolicyConfig // null),
           policyMatrix: [.policyMatrix.cases[]? | {name, passed, approvalDelivery, assertions}],
+          observabilityCompatibility: (.gatewayTrafficProbe.observabilityCompatibility // null),
           observabilityAssertions: .gatewayTrafficProbe.observability.assertions
         }' "$result_file" > "$summary_json"
 

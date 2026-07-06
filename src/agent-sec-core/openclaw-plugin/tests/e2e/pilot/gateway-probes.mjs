@@ -61,8 +61,8 @@ export async function runGatewayTrafficProbe({
       observability: observabilityPath,
     },
   };
-  const modelCallObservability = resolveModelCallObservabilityRequirement(runtimeInspect);
-  probe.observabilityCompatibility = modelCallObservability;
+  const observabilityRequirement = resolveObservabilityRequirement(runtimeInspect);
+  probe.observabilityCompatibility = observabilityRequirement;
 
   probe.rpc.createSession = unwrapGatewayPayload(
     await callGatewayRpc("gateway-sessions-create", "sessions.create", {
@@ -117,14 +117,9 @@ export async function runGatewayTrafficProbe({
     expectedToolCommand: "printf agent-sec-pilot-safe",
     expectedToolOutput: "agent-sec-pilot-safe",
     observabilityPath,
-    requiredHooks: [
-      "before_agent_run",
-      "before_tool_call",
-      "after_tool_call",
-      "after_agent_run",
-      ...(modelCallObservability.required ? ["before_llm_call", "after_llm_call"] : []),
-    ],
-    requireModelCalls: modelCallObservability.required,
+    requiredHooks: observabilityRequirement.requiredHooks,
+    requireFinalResponse: observabilityRequirement.conversation.required,
+    requireModelCalls: observabilityRequirement.modelCalls.required,
     runId,
     timeoutMs: 45_000,
   });
@@ -400,7 +395,10 @@ async function runPromptPolicyCase({
     inputIncludes: POLICY_PROMPT_DENY_MARKER,
   });
   const modelRequests = mockModel.requests.slice(modelRequestStart);
-  const reachedModel = modelRequests.length > 0;
+  const matchedPolicyModelRequests = modelRequests.filter((request) =>
+    mockModelRequestContainsText(request, POLICY_PROMPT_DENY_MARKER),
+  );
+  const reachedModel = matchedPolicyModelRequests.length > 0;
   const blockedTextFound = sessionContainsText(records, "[prompt-scan] 检测到安全风险");
   const modelReplyFound = sessionContainsText(records, POLICY_PROMPT_REACHED_MODEL_TEXT);
 
@@ -414,7 +412,8 @@ async function runPromptPolicyCase({
       sessionFile: turn.sessionFile,
       waitStatus: turn.wait?.status,
     },
-    modelRequestDelta: modelRequests.length,
+    allModelRequestDelta: modelRequests.length,
+    matchedPolicyRequestDelta: matchedPolicyModelRequests.length,
     assertions: {
       scanPromptDeny: promptCall?.stdoutJson?.verdict === "deny",
       reachedModel,
@@ -426,6 +425,7 @@ async function runPromptPolicyCase({
   if (promptCall?.stdoutJson?.verdict !== "deny") {
     throw new Error(`${caseName}: expected scan-prompt deny call`);
   }
+  assertGatewayWaitCompleted(caseName, turn);
   if (promptScanBlock) {
     if (reachedModel) {
       throw new Error(`${caseName}: model received a request even though promptScanBlock=true`);
@@ -537,6 +537,9 @@ async function runCodeApprovalPolicyCase({
       inputIncludes: POLICY_CODE_DENY_COMMAND,
     });
     const modelRequests = mockModel.requests.slice(modelRequestStart);
+    const matchedPolicyModelRequests = modelRequests.filter((request) =>
+      mockModelRequestContainsText(request, POLICY_CODE_DENY_MARKER),
+    );
     const toolExecuted = sessionHasSuccessfulToolOutput(records, POLICY_CODE_DENY_OUTPUT);
     const approvalRequiredErrorFound = sessionContainsText(records, "Plugin approval required");
     const approvalTimedOutFound = sessionContainsText(records, "Approval timed out");
@@ -562,7 +565,8 @@ async function runCodeApprovalPolicyCase({
         sessionFile: turn.sessionFile,
         waitStatus: turn.wait?.status,
       },
-      modelRequestDelta: modelRequests.length,
+      allModelRequestDelta: modelRequests.length,
+      matchedPolicyRequestDelta: matchedPolicyModelRequests.length,
       approval: approval
         ? {
             id: approval.id,
@@ -611,17 +615,18 @@ async function runCodeApprovalPolicyCase({
     if (codeCall?.stdoutJson?.verdict !== "deny") {
       throw new Error(`${caseName}: expected scan-code deny call`);
     }
-  if (codeScanRequireApproval) {
-    if (
-      !approval &&
-      !approvalRequiredErrorFound &&
-      !approvalTimedOutFound &&
-      !approvalUnavailableErrorFound
-    ) {
-      throw new Error(
-        `${caseName}: expected plugin approval, fail-closed session error, approval timeout, or approval-unavailable fail-closed result`,
-      );
-    }
+    assertGatewayWaitCompleted(caseName, turn);
+    if (codeScanRequireApproval) {
+      if (
+        !approval &&
+        !approvalRequiredErrorFound &&
+        !approvalTimedOutFound &&
+        !approvalUnavailableErrorFound
+      ) {
+        throw new Error(
+          `${caseName}: expected plugin approval, fail-closed session error, approval timeout, or approval-unavailable fail-closed result`,
+        );
+      }
       if (approval && approval.request?.pluginId !== PLUGIN_ID) {
         throw new Error(`${caseName}: approval pluginId was ${approval.request?.pluginId}`);
       }
@@ -822,6 +827,18 @@ function readConfigPath(config, pathValue) {
 
 function jsonValuesEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mockModelRequestContainsText(request, text) {
+  return JSON.stringify(request?.body ?? {}).includes(text);
+}
+
+function assertGatewayWaitCompleted(caseName, turn) {
+  if (turn.wait?.status !== "ok") {
+    throw new Error(
+      `${caseName}: gateway agent.wait did not complete; status=${String(turn.wait?.status ?? "missing")} runId=${turn.runId}`,
+    );
+  }
 }
 
 async function runGatewayPolicyTurn({ callGatewayRpc, caseName, gatewayToken, gatewayUrl, message }) {
@@ -1094,6 +1111,7 @@ async function waitForObservabilityHooks({
   expectedToolCommand,
   expectedToolOutput,
   observabilityPath,
+  requireFinalResponse,
   requiredHooks,
   requireModelCalls,
   runId,
@@ -1112,6 +1130,7 @@ async function waitForObservabilityHooks({
       expectedToolOutput,
       observabilityPath,
       records,
+      requireFinalResponse,
       requiredHooks,
       requireModelCalls,
     });
@@ -1130,6 +1149,7 @@ async function waitForObservabilityHooks({
     expectedToolOutput,
     observabilityPath,
     records,
+    requireFinalResponse,
     requiredHooks,
     requireModelCalls,
   });
@@ -1147,6 +1167,7 @@ function summarizeObservabilityEvidence({
   expectedToolOutput,
   observabilityPath,
   records,
+  requireFinalResponse,
   requiredHooks,
   requireModelCalls,
 }) {
@@ -1194,9 +1215,11 @@ function summarizeObservabilityEvidence({
       JSON.stringify(record?.metrics?.result ?? "").includes(expectedToolOutput),
     ),
     toolCallIdLinked: sharedToolCallIds.length > 0,
-    finalResponseRecorded: records
-      .filter((record) => record.hook === "after_agent_run")
-      .some((record) => JSON.stringify(record?.metrics ?? "").includes(expectedToolOutput)),
+    finalResponseRecorded:
+      !requireFinalResponse ||
+      records
+        .filter((record) => record.hook === "after_agent_run")
+        .some((record) => JSON.stringify(record?.metrics ?? "").includes(expectedToolOutput)),
   };
 
   return {
@@ -1218,27 +1241,57 @@ function summarizeObservabilityEvidence({
     },
     assertions,
     requirements: {
+      finalResponse: requireFinalResponse,
       modelCalls: requireModelCalls,
       hooks: requiredHooks,
     },
   };
 }
 
-function resolveModelCallObservabilityRequirement(runtimeInspect) {
+function resolveObservabilityRequirement(runtimeInspect) {
   const diagnostics = Array.isArray(runtimeInspect?.diagnostics) ? runtimeInspect.diagnostics : [];
+  const blockedConversationHooks = diagnostics
+    .map((diagnostic) => String(diagnostic?.message ?? ""))
+    .filter((message) =>
+      /typed hook "(llm_input|llm_output|agent_end)" blocked because non-bundled plugins must set plugins\.entries\.agent-sec\.hooks\.allowConversationAccess=true/u.test(
+        message,
+      ),
+    );
   const ignoredModelCallHooks = diagnostics
     .map((diagnostic) => String(diagnostic?.message ?? ""))
     .filter((message) => /unknown typed hook "model_call_(started|ended)" ignored/u.test(message));
-  if (ignoredModelCallHooks.length > 0) {
-    return {
-      required: false,
-      reason: "openclaw-runtime-ignores-model-call-hooks",
-      diagnostics: ignoredModelCallHooks,
-    };
+  const conversation = blockedConversationHooks.length > 0
+    ? {
+        required: false,
+        reason: "openclaw-runtime-blocks-conversation-hooks-without-allow-conversation-access",
+        diagnostics: blockedConversationHooks,
+      }
+    : {
+        required: true,
+        reason: "openclaw-runtime-allows-conversation-hooks",
+      };
+  const modelCalls = ignoredModelCallHooks.length > 0
+    ? {
+        required: false,
+        reason: "openclaw-runtime-ignores-model-call-hooks",
+        diagnostics: ignoredModelCallHooks,
+      }
+    : {
+        required: true,
+        reason: "openclaw-runtime-supports-model-call-hooks",
+      };
+  const requiredHooks = ["before_tool_call", "after_tool_call"];
+  if (conversation.required) {
+    requiredHooks.unshift("before_agent_run");
+    requiredHooks.push("after_agent_run");
+  }
+  if (modelCalls.required) {
+    requiredHooks.push("before_llm_call", "after_llm_call");
   }
   return {
-    required: true,
-    reason: "openclaw-runtime-supports-model-call-hooks",
+    conversation,
+    modelCalls,
+    requiredHooks,
   };
 }
 

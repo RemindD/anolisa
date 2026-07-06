@@ -24,7 +24,7 @@ The installable package declares the OpenClaw compatibility boundary in `package
 - `openclaw.compat.pluginApi: ">=2026.4.14"` declares the plugin SDK/runtime API floor used by OpenClaw install compatibility checks.
 - `peerDependencies.openclaw: ">=2026.4.14"` keeps npm peer metadata aligned with the OpenClaw installer contract.
 
-Package entrypoints follow the current OpenClaw plugin contract: `openclaw.extensions` points at the TypeScript source entry for checkout development, and `openclaw.runtimeExtensions` points at the built JavaScript entry used by installed packages. `openclaw.plugin.json` keeps its legacy `extensions` declaration pointed at the same built runtime entry for older manifest readers.
+Package entrypoints all point at the built JavaScript runtime entry. Legacy OpenClaw installers such as `2026.4.14` read `package.json` `openclaw.extensions` from the packed package and require every listed file to exist there, so `openclaw.extensions`, `openclaw.runtimeExtensions`, and `openclaw.plugin.json` `extensions` all reference `./dist/index.js`.
 
 ---
 
