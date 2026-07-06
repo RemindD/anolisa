@@ -21,6 +21,8 @@ import {
 import { summarizeMockModelRequests, waitForMockModelToolTurn } from "./mock-model.mjs";
 
 const CONFIG_HOT_RELOAD_SETTLE_MS = 3_000;
+const POLICY_CONFIG_HOT_RELOAD_IMPLEMENTATION_VERSION = "2026.5.2";
+const POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION = "2026.5.7";
 const POLICY_CONFIG_PATHS = {
   promptScanBlock: "plugins.entries.agent-sec.config.promptScanBlock",
   codeScanRequireApproval: "plugins.entries.agent-sec.config.codeScanRequireApproval",
@@ -143,6 +145,7 @@ export async function runGatewayPolicyMatrix({
   mockModel,
   openclawVersion,
   pluginRoot,
+  restartGateway,
   runRequiredStep,
 }) {
   // The matrix validates policy outcomes from Gateway/session/model evidence,
@@ -158,15 +161,9 @@ export async function runGatewayPolicyMatrix({
     },
     cases: [],
   };
-  const livePolicyConfig = resolveLivePolicyConfigSupport(openclawVersion);
-  matrix.livePolicyConfig = livePolicyConfig;
-  if (!livePolicyConfig.supported) {
-    return {
-      ...matrix,
-      skipped: true,
-      reason: livePolicyConfig.reason,
-    };
-  }
+  const policyConfigApplication = resolvePolicyConfigApplication(openclawVersion);
+  matrix.policyConfigApplication = policyConfigApplication;
+  matrix.livePolicyConfig = policyConfigApplication.livePolicyConfig;
 
   matrix.cases.push(
     await runPromptPolicyCase({
@@ -177,8 +174,10 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyConfigApplication,
       pluginRoot,
       promptScanBlock: false,
+      restartGateway,
       runRequiredStep,
     }),
   );
@@ -191,8 +190,10 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyConfigApplication,
       pluginRoot,
       promptScanBlock: true,
+      restartGateway,
       runRequiredStep,
     }),
   );
@@ -206,8 +207,10 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyConfigApplication,
       policyDebugLog,
       pluginRoot,
+      restartGateway,
       runRequiredStep,
     }),
   );
@@ -221,8 +224,10 @@ export async function runGatewayPolicyMatrix({
       gatewayToken,
       gatewayUrl,
       mockModel,
+      policyConfigApplication,
       policyDebugLog,
       pluginRoot,
+      restartGateway,
       runRequiredStep,
     }),
   );
@@ -230,18 +235,39 @@ export async function runGatewayPolicyMatrix({
   return matrix;
 }
 
-function resolveLivePolicyConfigSupport(openclawVersion) {
-  if (isOpenClawVersionLessThan(openclawVersion, "2026.5.7")) {
+function resolvePolicyConfigApplication(openclawVersion) {
+  const verifiedHotReload = !isOpenClawVersionLessThan(
+    openclawVersion,
+    POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION,
+  );
+  if (!verifiedHotReload) {
     return {
-      supported: false,
-      reason: "openclaw-version-requires-gateway-restart-for-plugin-policy-config",
+      mode: "gateway-restart",
+      reason: "agentsec-does-not-verify-plugin-policy-live-hot-reload-before-2026.5.7",
       openclawVersion,
-      minimumLivePolicyMatrixVersion: "2026.5.7",
+      implementationHotReloadVersion: POLICY_CONFIG_HOT_RELOAD_IMPLEMENTATION_VERSION,
+      verifiedHotReloadVersion: POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION,
+      livePolicyConfig: {
+        verifiedByAgentSec: false,
+        reason: "not-covered-by-agentsec-verified-live-hot-reload-baseline",
+        openclawVersion,
+        implementationHotReloadVersion: POLICY_CONFIG_HOT_RELOAD_IMPLEMENTATION_VERSION,
+        verifiedHotReloadVersion: POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION,
+      },
     };
   }
   return {
-    supported: true,
+    mode: "hot-reload",
+    reason: "agentsec-verified-plugin-policy-live-hot-reload-baseline",
     openclawVersion,
+    implementationHotReloadVersion: POLICY_CONFIG_HOT_RELOAD_IMPLEMENTATION_VERSION,
+    verifiedHotReloadVersion: POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION,
+    livePolicyConfig: {
+      verifiedByAgentSec: true,
+      openclawVersion,
+      implementationHotReloadVersion: POLICY_CONFIG_HOT_RELOAD_IMPLEMENTATION_VERSION,
+      verifiedHotReloadVersion: POLICY_CONFIG_VERIFIED_HOT_RELOAD_VERSION,
+    },
   };
 }
 
@@ -328,8 +354,10 @@ async function runPromptPolicyCase({
   gatewayToken,
   gatewayUrl,
   mockModel,
+  policyConfigApplication,
   pluginRoot,
   promptScanBlock,
+  restartGateway,
   runRequiredStep,
 }) {
   // promptScanBlock=false should still scan and return deny, but allow the turn
@@ -341,8 +369,10 @@ async function runPromptPolicyCase({
     env,
     gatewayToken,
     gatewayUrl,
+    policyConfigApplication,
     pluginRoot,
     promptScanBlock,
+    restartGateway,
     runRequiredStep,
   });
 
@@ -425,8 +455,10 @@ async function runCodeApprovalPolicyCase({
   gatewayToken,
   gatewayUrl,
   mockModel,
+  policyConfigApplication,
   policyDebugLog,
   pluginRoot,
+  restartGateway,
   runRequiredStep,
 }) {
   // codeScanRequireApproval controls whether a deny scan requires operator
@@ -440,8 +472,10 @@ async function runCodeApprovalPolicyCase({
     env,
     gatewayToken,
     gatewayUrl,
+    policyConfigApplication,
     pluginRoot,
     promptScanBlock: true,
+    restartGateway,
     runRequiredStep,
   });
 
@@ -615,8 +649,10 @@ async function applyAgentSecPolicyConfig({
   env,
   gatewayToken,
   gatewayUrl,
+  policyConfigApplication,
   pluginRoot,
   promptScanBlock,
+  restartGateway,
   runRequiredStep,
 }) {
   const configPath = env?.OPENCLAW_CONFIG_PATH;
@@ -662,12 +698,39 @@ async function applyAgentSecPolicyConfig({
     ],
     { cwd: pluginRoot, env },
   );
-  const settle = await waitForGatewayConfigSettle({ changedPaths });
   if (changedPaths.length === 0) {
-    return settle;
+    return {
+      changedPaths,
+      mode: policyConfigApplication.mode,
+      skipped: true,
+      reason: "policy config already matched requested values",
+    };
   }
+  if (policyConfigApplication.mode === "gateway-restart") {
+    if (typeof restartGateway !== "function") {
+      throw new Error(
+        `${caseName}: restartGateway callback is required for policy config restart mode`,
+      );
+    }
+    const startedAtMs = Date.now();
+    await restartGateway(`policy-${slugify(caseName)}`);
+    return {
+      changedPaths,
+      mode: policyConfigApplication.mode,
+      reason: policyConfigApplication.reason,
+      restartMs: Date.now() - startedAtMs,
+      gatewayReady: await waitForGatewayReadyAfterConfig({
+        callGatewayRpc,
+        caseName,
+        gatewayToken,
+        gatewayUrl,
+      }),
+    };
+  }
+  const settle = await waitForGatewayConfigSettle({ changedPaths });
   return {
     ...settle,
+    mode: policyConfigApplication.mode,
     gatewayReady: await waitForGatewayReadyAfterConfig({
       callGatewayRpc,
       caseName,

@@ -307,6 +307,7 @@ write_summary() {
           resultFile: $resultFile,
           policyMatrixSkipped: (.policyMatrix.skipped // false),
           policyMatrixSkipReason: (.policyMatrix.reason // null),
+          policyConfigApplication: (.policyMatrix.policyConfigApplication // null),
           livePolicyConfig: (.policyMatrix.livePolicyConfig // null),
           policyMatrix: [.policyMatrix.cases[]? | {name, passed, approvalDelivery, assertions}],
           observabilityAssertions: .gatewayTrafficProbe.observability.assertions

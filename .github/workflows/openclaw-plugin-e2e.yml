@@ -59,31 +59,31 @@ jobs:
       fail-fast: false
       matrix:
         openclaw:
-          - label: min-supported
+          - label: "2026.4.14"
             version: "2026.4.14"
             expected-version: "2026.4.14"
             expect-unsafe-install: "true"
-          - label: legacy-active
+          - label: "2026.4.23"
             version: "2026.4.23"
             expected-version: "2026.4.23"
             expect-unsafe-install: ""
-          - label: conversation-access
+          - label: "2026.4.24"
             version: "2026.4.24"
             expected-version: "2026.4.24"
             expect-unsafe-install: "true"
-          - label: model-call-telemetry
+          - label: "2026.4.29"
             version: "2026.4.29"
             expected-version: "2026.4.29"
             expect-unsafe-install: ""
-          - label: current-pinned
+          - label: "2026.5.7"
             version: "2026.5.7"
             expected-version: "2026.5.7"
             expect-unsafe-install: "true"
-          - label: supported-mid
+          - label: "2026.5.28"
             version: "2026.5.28"
             expected-version: "2026.5.28"
             expect-unsafe-install: ""
-          - label: current-stable
+          - label: "2026.6.10"
             version: "2026.6.10"
             expected-version: "2026.6.10"
             expect-unsafe-install: ""

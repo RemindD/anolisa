@@ -219,6 +219,13 @@ async function runPilot() {
     { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   result.install.packageArtifact = parseNpmPackArtifact(packResult.stdout, artifactsDir);
+  result.install.packageRoot = await extractPackedPluginPackage({
+    artifactsDir,
+    env: baseEnv,
+    packageArtifact: result.install.packageArtifact,
+    runRequiredStep,
+  });
+  result.install.packageDeployScript = path.join(result.install.packageRoot, "scripts", "deploy.sh");
 
   const daemon = startProcess("agent-sec-daemon", "agent-sec-daemon", ["serve", "--socket", daemonSocket], {
     cwd: REPO_ROOT,
@@ -229,12 +236,15 @@ async function runPilot() {
     timeoutMs: 30_000,
   });
 
-  await runRequiredStep("jq-version", "jq", ["--version"], { cwd: PLUGIN_ROOT, env: baseEnv });
+  await runRequiredStep("jq-version", "jq", ["--version"], {
+    cwd: result.install.packageRoot,
+    env: baseEnv,
+  });
   const deployResult = await runRequiredStep(
     "openclaw-plugin-deploy",
     "bash",
-    [path.join(PLUGIN_ROOT, "scripts", "deploy.sh"), PLUGIN_ROOT],
-    { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
+    [result.install.packageDeployScript, result.install.packageRoot],
+    { cwd: result.install.packageRoot, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   result.install.deployStdoutLog = deployResult.stdoutLog;
   result.install.deployStderrLog = deployResult.stderrLog;
@@ -250,7 +260,7 @@ async function runPilot() {
       "true",
       "--strict-json",
     ],
-    { cwd: PLUGIN_ROOT, env: baseEnv },
+    { cwd: result.install.packageRoot, env: baseEnv },
   );
   await runRequiredStep(
     "openclaw-config-skill-ledger-warn",
@@ -262,7 +272,7 @@ async function runPilot() {
       '"warn"',
       "--strict-json",
     ],
-    { cwd: PLUGIN_ROOT, env: baseEnv },
+    { cwd: result.install.packageRoot, env: baseEnv },
   );
 
   // The mock model is only responsible for deterministic tool-turn behavior;
@@ -281,7 +291,7 @@ async function runPilot() {
   await configureGatewayPilotModel({
     env: baseEnv,
     mockModel,
-    pluginRoot: PLUGIN_ROOT,
+    pluginRoot: result.install.packageRoot,
     runRequiredStep,
   });
 
@@ -319,7 +329,7 @@ async function runPilot() {
     "openclaw-plugin-inspect-help",
     "openclaw",
     ["plugins", "inspect", "--help"],
-    { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
+    { cwd: result.install.packageRoot, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   const runtimeInspectArgs = inspectHelp.stdout.includes("--runtime")
     ? ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"]
@@ -328,13 +338,15 @@ async function runPilot() {
     "openclaw-plugin-runtime-inspect",
     "openclaw",
     runtimeInspectArgs,
-    { cwd: PLUGIN_ROOT, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
+    { cwd: result.install.packageRoot, env: baseEnv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
   );
   const runtimeInspectJson = parseJsonFromOutput(runtimeInspect.stdout);
   assertRuntimeLoaded(runtimeInspectJson);
   result.runtimeInspect = summarizeRuntimeInspect(runtimeInspectJson);
   result.runtimeInspect.args = runtimeInspectArgs;
   result.runtimeInspect.rawLog = runtimeInspect.stdoutLog;
+  result.install.installedPluginRoot =
+    result.runtimeInspect.plugin?.rootDir ?? result.install.packageRoot;
 
   if (!args.skipGateway) {
     // Happy-path probe: verify one full model-driven Gateway turn reaches the
@@ -351,8 +363,9 @@ async function runPilot() {
       runtimeInspect: result.runtimeInspect,
     });
     assertGatewayTrafficProbe(result.gatewayTrafficProbe);
-    // Policy matrix: mutate plugin config in-place, let Gateway hot reload
-    // settle, then assert behavior from session/model/approval evidence.
+    // Policy matrix: mutate plugin config, apply it with the version-appropriate
+    // strategy (hot reload for verified hosts, Gateway restart for older hosts),
+    // then assert behavior from session/model/approval evidence.
     result.policyMatrix = await runGatewayPolicyMatrix({
       callGatewayRpc,
       cliLogPath: agentSecCliCallsLog,
@@ -362,7 +375,8 @@ async function runPilot() {
       logsDir,
       mockModel,
       openclawVersion: result.versions.openclaw,
-      pluginRoot: PLUGIN_ROOT,
+      pluginRoot: result.install.packageRoot,
+      restartGateway,
       runRequiredStep,
     });
     assertPolicyMatrix(result.policyMatrix);
@@ -382,7 +396,7 @@ async function runPilot() {
   result.hookProbe = await runHookProbe({
     env: baseEnv,
     logsDir,
-    pluginRoot: PLUGIN_ROOT,
+    pluginRoot: result.install.installedPluginRoot,
     repoRoot: REPO_ROOT,
     workdir,
     skipFailureProbes: args.skipFailureProbes,
@@ -394,4 +408,32 @@ async function runPilot() {
 function detectDeployUsedUnsafeInstallFlag(deployResult) {
   const output = `${deployResult.stdout}\n${deployResult.stderr}`;
   return output.includes("首次安装将使用 legacy --dangerously-force-unsafe-install");
+}
+
+async function extractPackedPluginPackage({ artifactsDir, env, packageArtifact, runRequiredStep }) {
+  if (!packageArtifact) {
+    throw new Error("npm pack did not report an agent-sec plugin artifact");
+  }
+  const extractDir = path.join(artifactsDir, "packed-plugin");
+  const packageRoot = path.join(extractDir, "package");
+  await fs.rm(extractDir, { recursive: true, force: true });
+  await fs.mkdir(extractDir, { recursive: true });
+  await runRequiredStep(
+    "agent-sec-plugin-extract-pack",
+    "tar",
+    ["-xzf", packageArtifact, "-C", extractDir],
+    { cwd: artifactsDir, env, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS },
+  );
+  for (const requiredPath of [
+    path.join(packageRoot, "openclaw.plugin.json"),
+    path.join(packageRoot, "dist", "index.js"),
+    path.join(packageRoot, "scripts", "deploy.sh"),
+  ]) {
+    try {
+      await fs.access(requiredPath);
+    } catch {
+      throw new Error(`packed plugin artifact is missing ${requiredPath}`);
+    }
+  }
+  return packageRoot;
 }
