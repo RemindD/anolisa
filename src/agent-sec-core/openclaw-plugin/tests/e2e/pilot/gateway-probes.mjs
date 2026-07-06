@@ -782,7 +782,7 @@ async function waitForGatewayReadyAfterConfig({
         `${caseName}-gateway-ready-${attempt}`,
         "health",
         {},
-        { gatewayToken, gatewayUrl, timeoutMs: 5_000 },
+        { gatewayToken, gatewayUrl, maxAttempts: 1, retryDelayBaseMs: 0, timeoutMs: 5_000 },
       );
       // A successful Gateway RPC proves the restarted or hot-reloaded runtime is
       // accepting operator traffic again. The policy cases below prove config use.

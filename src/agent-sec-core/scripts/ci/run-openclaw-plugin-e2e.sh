@@ -314,7 +314,12 @@ write_summary() {
           observabilityAssertions: .gatewayTrafficProbe.observability.assertions,
           hookProbeImportResolution: (.hookProbe.importResolution // null),
           hookProbeRegisteredHooks: (.hookProbe.registeredHooks // [] | length),
-          hookProbeCases: (.hookProbe.cases // [] | length)
+          hookProbeCases: (.hookProbe.cases // [] | length),
+          slowestSteps: ([
+            .steps[]?
+            | select(.durationMs != null)
+            | {name, durationMs, exitCode, timedOut}
+          ] | sort_by(.durationMs) | reverse | .[:12])
         }' "$result_file" > "$summary_json"
 
     {

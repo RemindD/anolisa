@@ -80,6 +80,7 @@ export function createPilotHarness({
         clearTimeout(timer);
         stdoutStream.end();
         stderrStream.end();
+        const finishedAt = new Date().toISOString();
         resolve({
           name,
           command,
@@ -88,7 +89,8 @@ export function createPilotHarness({
           signal: undefined,
           timedOut,
           startedAt,
-          finishedAt: new Date().toISOString(),
+          finishedAt,
+          durationMs: Date.parse(finishedAt) - Date.parse(startedAt),
           stdout: Buffer.concat(stdoutChunks).toString("utf8"),
           stderr: String(error),
           stdoutLog,
@@ -99,6 +101,7 @@ export function createPilotHarness({
         clearTimeout(timer);
         stdoutStream.end();
         stderrStream.end();
+        const finishedAt = new Date().toISOString();
         resolve({
           name,
           command,
@@ -107,7 +110,8 @@ export function createPilotHarness({
           signal: signal ?? undefined,
           timedOut,
           startedAt,
-          finishedAt: new Date().toISOString(),
+          finishedAt,
+          durationMs: Date.parse(finishedAt) - Date.parse(startedAt),
           stdout: Buffer.concat(stdoutChunks).toString("utf8"),
           stderr: Buffer.concat(stderrChunks).toString("utf8"),
           stdoutLog,
@@ -125,6 +129,7 @@ export function createPilotHarness({
       timedOut: step.timedOut,
       startedAt: step.startedAt,
       finishedAt: step.finishedAt,
+      durationMs: step.durationMs,
       stdoutLog,
       stderrLog,
     });
@@ -322,9 +327,13 @@ export function createPilotHarness({
     }
   }
 
-  async function callGatewayRpc(stepName, method, params, { gatewayToken, gatewayUrl, timeoutMs }) {
+  async function callGatewayRpc(
+    stepName,
+    method,
+    params,
+    { gatewayToken, gatewayUrl, maxAttempts = 3, retryDelayBaseMs = 2_000, timeoutMs },
+  ) {
     const stepTimeoutMs = timeoutMs ?? defaultCommandTimeoutMs;
-    const maxAttempts = 3;
     let lastStep;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const attemptStepName = attempt === 1 ? stepName : `${stepName}-retry-${attempt}`;
@@ -360,7 +369,7 @@ export function createPilotHarness({
       if (!approvedPairingUpgrade && (!isTransientGatewayCallFailure(step) || attempt === maxAttempts)) {
         break;
       }
-      await sleep(2_000 * attempt);
+      await sleep(retryDelayBaseMs * attempt);
     }
     throw new StepError(stepName, `gateway RPC ${method} failed`, lastStep);
   }
