@@ -268,7 +268,7 @@ export function createPilotHarness({
           `${JSON.stringify({
             id: "pilot-daemon-health",
             method: "daemon.health",
-            caller: "pilot-latest-openclaw-e2e",
+            caller: "openclaw-plugin-e2e-pilot",
           })}\n`,
         );
       });

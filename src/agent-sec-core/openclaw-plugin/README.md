@@ -51,7 +51,7 @@ openclaw-plugin/
 │           ├── helpers.ts      #     generic parsing helpers
 │           └── types.ts        #     shared observability types
 ├── tests/                      # Test utilities (not compiled into dist/)
-│   ├── e2e/                    # Latest OpenClaw pilot runner
+│   ├── e2e/                    # OpenClaw plugin E2E pilot runner
 │   ├── test-harness.ts         # Mock OpenClaw API for local testing
 │   ├── smoke-test.ts           # Smoke test for all capabilities
 │   └── unit/                   # Unit tests
@@ -230,16 +230,16 @@ Runs against the real `agent-sec-cli` binary:
 AGENT_SEC_LIVE=1 npm run smoke
 ```
 
-### Latest OpenClaw Pilot E2E
+### OpenClaw Plugin E2E Pilot
 
-`npm run e2e:latest-openclaw` is the reusable pilot entry for
-`PILOT-LATEST-OPENCLAW-E2E`. It uses isolated state directories, builds and
+`npm run e2e:openclaw` is the reusable pilot entry for
+`OPENCLAW-PLUGIN-E2E-PILOT`. It uses isolated state directories, builds and
 packs this plugin, starts `agent-sec-daemon`, installs the plugin into the
 selected OpenClaw runtime, starts a local Gateway, verifies runtime plugin
 loading, and writes structured evidence to `pilot-result.json`.
 
 ```bash
-npm run e2e:latest-openclaw -- \
+npm run e2e:openclaw -- \
   --openclaw-bin /path/to/openclaw \
   --agent-sec-cli /path/to/agent-sec-cli \
   --agent-sec-daemon /path/to/agent-sec-daemon

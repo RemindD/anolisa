@@ -265,7 +265,7 @@ run_pilot() {
     run mkdir -p "$result_dir"
     run mkdir -p "$pilot_workdir"
     run chmod 700 "$pilot_workdir"
-    run npm run e2e:latest-openclaw --prefix "$plugin_root" -- \
+    run npm run e2e:openclaw --prefix "$plugin_root" -- \
         --openclaw-bin "$OPENCLAW_BIN" \
         --agent-sec-cli "$AGENT_SEC_CLI_BIN" \
         --agent-sec-daemon "$AGENT_SEC_DAEMON_BIN" \

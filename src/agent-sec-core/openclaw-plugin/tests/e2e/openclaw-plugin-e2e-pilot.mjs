@@ -45,7 +45,7 @@ const startedServers = [];
 // task evidence, so keep it stable and append-only when possible.
 const result = {
   schemaVersion: 1,
-  task: "PILOT-LATEST-OPENCLAW-E2E",
+  task: "OPENCLAW-PLUGIN-E2E-PILOT",
   pilotRunId: undefined,
   status: "running",
   startedAt: new Date().toISOString(),
@@ -130,7 +130,7 @@ async function runPilot() {
   const daemonSocket = path.join(workdir, "agent-sec-daemon.sock");
   const openclawConfigPath = path.join(openclawStateDir, "openclaw.json");
   const agentSecCliCallsLog = path.join(logsDir, `agent-sec-cli-calls-${pilotRunId}.jsonl`);
-  const agentSecCliOverrideFile = path.join(workdir, `agent-sec-cli-overrides-${pilotRunId}.json`);
+  const agentSecCliOverrideFile = path.join(workdir, "agent-sec-cli-overrides.json");
 
   result.pilotRunId = pilotRunId;
   result.workdir = workdir;

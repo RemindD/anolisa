@@ -35,7 +35,7 @@ export function parseArgs(argv) {
 }
 
 export function printHelp() {
-  console.log(`Usage: npm run e2e:latest-openclaw -- [options]
+  console.log(`Usage: npm run e2e:openclaw -- [options]
 
 Options:
   --workdir <dir>              Keep all state, logs, and artifacts under dir.
