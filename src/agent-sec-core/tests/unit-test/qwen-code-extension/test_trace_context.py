@@ -1,9 +1,15 @@
 """Contract tests for the shared Qwen Code trace-context helper."""
 
 import ast
-import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
+
+from standalone_hook_test_loader import (
+    load_module_from_path,
+    load_standalone_hook,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _HOOKS_DIR = _ROOT / "qwen-code-extension" / "hooks"
@@ -17,18 +23,7 @@ _CONSUMERS = (
 )
 
 
-def _load_helper():
-    spec = importlib.util.spec_from_file_location(
-        "qwen_trace_context_helper", _HELPER_PATH
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-trace_context_helper = _load_helper()
+trace_context_helper = load_module_from_path("qwen_trace_context_helper", _HELPER_PATH)
 
 
 def test_trace_context_normalizes_identifiers_and_uses_canonical_precedence(
@@ -85,6 +80,22 @@ def test_with_trace_context_inserts_one_compact_top_level_argument():
         "session_id": "session-1",
     }
     assert command[3:] == ["scan-pii", "--stdin"]
+
+
+def test_hook_loader_isolates_and_restores_foreign_sibling_modules(monkeypatch):
+    foreign_trace_context = ModuleType("trace_context")
+    foreign_pii_text = ModuleType("pii_text")
+    monkeypatch.setitem(sys.modules, "trace_context", foreign_trace_context)
+    monkeypatch.setitem(sys.modules, "pii_text", foreign_pii_text)
+
+    hook = load_standalone_hook(
+        "qwen_observability_isolation_probe",
+        _HOOKS_DIR / "observability_hook.py",
+    )
+
+    assert hook.trace_context({})["agent_name"] == "qwen-code"
+    assert sys.modules["trace_context"] is foreign_trace_context
+    assert sys.modules["pii_text"] is foreign_pii_text
 
 
 def test_all_qwen_hooks_import_the_shared_trace_context_helper():
