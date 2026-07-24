@@ -126,6 +126,21 @@ def test_pre_tool_use_prefers_tool_call_id_and_hashes_parameters():
     }
 
 
+def test_observability_metadata_uses_bounded_shared_trace_context():
+    record = _record(
+        _base(
+            "PreToolUse",
+            tool_name="run_shell_command",
+            tool_input={"command": "pwd"},
+            session_id="s" * 300,
+            tool_call_id="t" * 300,
+        )
+    )
+
+    assert record["metadata"]["sessionId"] == "s" * 256
+    assert record["metadata"]["toolCallId"] == "t" * 256
+
+
 def test_post_tool_use_maps_nested_exit_code_and_result():
     tool_response = {
         "llmContent": "ok",
