@@ -235,6 +235,21 @@ agent-sec-cli harden --downstream-help
 
 Interactive event review tool for auditing Agent behavior.
 
+The OpenClaw, Hermes, cosh, Qwen Code, Qoder, and Codex integrations enable
+their observability hooks by default. To disable hook recording, set
+`OBSERVABILITY_HOOK_ENABLED=false` before starting the host and restart the host
+after changing it. The variable accepts only `true` / `false` (ignoring case and
+surrounding whitespace); an unset or invalid value keeps recording enabled.
+
+For OpenClaw and Hermes, the existing observability capability `enabled` setting
+is an independent gate. Either switch can disable recording;
+`OBSERVABILITY_HOOK_ENABLED=true` does not override a capability disabled in
+plugin configuration.
+
+```bash
+export OBSERVABILITY_HOOK_ENABLED=false
+```
+
 ```bash
 # Open interactive TUI (requires interactive terminal)
 agent-sec-cli observability review

@@ -74,6 +74,7 @@ codex plugin marketplace remove agent-sec
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `OBSERVABILITY_HOOK_ENABLED` | `true` | 仅显式设为 `false` 时关闭 Observability hook；修改后需重启 Codex |
 | `CODE_SCANNER_MODE` | `observe` | 代码扫描透出模式：`observe`(仅观察记录，不拦截) / `deny`(检测到风险时强制拦截) |
 | `CODE_SCANNER_TIMEOUT` | `10` | 代码扫描 agent-sec-cli 超时秒数 |
 | `PROMPT_SCANNER_MODE` | `observe` | 提示词注入检测透出模式：`observe`(仅观察记录，不拦截) / `deny`(检测到注入时拦截 prompt) |

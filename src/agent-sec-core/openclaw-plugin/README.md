@@ -339,6 +339,12 @@ The `observability` capability is enabled by default and invokes:
 agent-sec-cli observability record --format json --stdin
 ```
 
+Set `OBSERVABILITY_HOOK_ENABLED=false` before starting the OpenClaw gateway to
+disable all observability hook work without changing plugin configuration. An
+unset or invalid value keeps it enabled; restart the gateway after changing the
+variable. Setting `capabilities.observability.enabled` to `false` also disables
+the capability, so either setting can turn observability off.
+
 Each hook emits one JSON record with `hook`, `observedAt`, `metadata`, and hook-specific `metrics`. The plugin registers OpenClaw hook names, but sends the generic `agent-sec-cli` hook name in `payload.hook`. Failures, missing CLI, malformed output, and timeouts are fail-open and never block OpenClaw behavior.
 
 OpenClaw runtimes that expose `model_call_started` and `model_call_ended` provide model-call telemetry. Older runtimes load the plugin but skip unknown telemetry sources. Newer OpenClaw versions may provide richer fields on those hooks; the plugin sends whichever accepted metrics are present.

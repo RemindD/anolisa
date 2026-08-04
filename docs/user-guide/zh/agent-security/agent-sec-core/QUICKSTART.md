@@ -232,6 +232,19 @@ agent-sec-cli harden --downstream-help
 
 交互式事件审阅工具，用于审计 Agent 行为。
 
+OpenClaw、Hermes、cosh、Qwen Code、Qoder 和 Codex 集成默认启用 Observability hook。
+若需停止 hook 记录，请在启动宿主前设置 `OBSERVABILITY_HOOK_ENABLED=false`；修改后需重启
+宿主进程。该变量仅接受 `true` / `false`（忽略大小写和首尾空白）；未设置或值无效时保持
+默认开启。
+
+对于 OpenClaw 和 Hermes，原有 Observability capability 的 `enabled` 配置仍是独立开关。
+任一开关关闭都会停止记录；`OBSERVABILITY_HOOK_ENABLED=true` 不会覆盖插件配置中已关闭的
+capability。
+
+```bash
+export OBSERVABILITY_HOOK_ENABLED=false
+```
+
 ```bash
 # 打开交互式 TUI（需要交互终端）
 agent-sec-cli observability review

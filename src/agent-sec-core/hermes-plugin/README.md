@@ -94,6 +94,11 @@ timeout = 5
 `timeout` 控制 `agent-sec-cli observability record` 子进程。CLI 失败、超时、invalid record
 或缺少必需 metadata 都是 fail-open。
 
+Observability hook 默认开启。启动 Hermes 前设置
+`OBSERVABILITY_HOOK_ENABLED=false` 可关闭记录而无需修改 `config.toml`；未设置或值无效时
+保持开启。修改环境变量后需重启 Hermes。`enabled = false` 仍会直接跳过 capability 注册，
+两种开关任一关闭都会停止 Observability CLI 调用。
+
 ## 可用 Hook 列表
 
 Hermes 支持的 hook 及其回调签名：
