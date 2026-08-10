@@ -134,7 +134,7 @@ agent-sec-core/
 └── README_zh.md
 ```
 
-## Observability Hook 开关
+## Observability Hook 配置
 
 OpenClaw、Hermes、cosh、Qwen Code、Qoder 和 Codex 集成默认都会启用
 Observability hook。若需关闭，请在启动对应宿主前设置：
@@ -145,6 +145,9 @@ export OBSERVABILITY_HOOK_ENABLED=false
 
 该变量仅接受 `true` / `false`（忽略大小写和首尾空白）；未设置或值无效时保持默认开启。
 修改后需重启对应宿主进程。
+
+`OBSERVABILITY_TIMEOUT` 控制每次本地 PII 脱敏和 Observability 数据写入 CLI 调用的超时秒数。
+默认值为 `5`；未设置、空值、非法值或非正数同样使用 `5`。
 
 对于 OpenClaw 和 Hermes，原有 Observability capability 的 `enabled` 配置仍是独立开关。
 任一开关关闭都会停止记录；将该环境变量设为 `true`，不会重新启用已在插件配置中关闭的

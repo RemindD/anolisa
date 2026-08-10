@@ -134,7 +134,7 @@ agent-sec-core/
 └── README_zh.md
 ```
 
-## Observability Hook Toggle
+## Observability Hook Configuration
 
 The OpenClaw, Hermes, cosh, Qwen Code, Qoder, and Codex integrations enable
 their observability hooks by default. To disable them, set this variable before
@@ -147,6 +147,10 @@ export OBSERVABILITY_HOOK_ENABLED=false
 The variable accepts only `true` / `false` (ignoring case and surrounding
 whitespace). An unset or invalid value keeps the hook enabled. Restart the host
 after changing it.
+
+`OBSERVABILITY_TIMEOUT` sets the timeout in seconds for each local PII
+redaction and observability record CLI call. It defaults to `5`; an unset,
+empty, invalid, or non-positive value also uses `5`.
 
 For OpenClaw and Hermes, the existing observability capability `enabled` setting
 remains an independent gate. Either switch can disable recording; setting this

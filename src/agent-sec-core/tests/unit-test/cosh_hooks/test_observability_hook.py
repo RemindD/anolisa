@@ -18,6 +18,19 @@ observability_hook = load_standalone_hook("cosh_observability_hook", _COSH_HOOK)
 _TS = "2026-05-13T10:00:00Z"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, 5), ("", 5), ("invalid", 5), ("0", 5), ("-1", 5), ("7", 7)],
+)
+def test_observability_timeout_environment(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("OBSERVABILITY_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("OBSERVABILITY_TIMEOUT", value)
+
+    assert observability_hook._read_cli_timeout_seconds() == expected
+
+
 def _json_size_bytes(value):
     return len(
         json.dumps(
@@ -510,12 +523,14 @@ def test_extension_registers_observability_hook_for_supported_events():
 
     for event_name in expected_events:
         entries = config["hooks"].get(event_name, [])
-        commands = [
-            hook["command"]
+        observability_hooks = [
+            hook
             for entry in entries
             for hook in entry.get("hooks", [])
             if hook.get("name") == "observability-hook"
         ]
-        assert commands == [
-            "python3 ${extensionPath}/hooks/observability_hook.py",
-        ]
+        assert len(observability_hooks) == 1
+        assert observability_hooks[0]["command"] == (
+            "python3 ${extensionPath}/hooks/observability_hook.py"
+        )
+        assert observability_hooks[0]["timeout"] == 10000

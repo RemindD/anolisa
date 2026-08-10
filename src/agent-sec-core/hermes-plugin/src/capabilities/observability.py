@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -14,6 +15,17 @@ from .base import AgentSecCoreCapability
 
 logger = logging.getLogger("agent-sec-core")
 _LOG_DETAIL_MAX_CHARS = 1000
+
+
+def _read_observability_timeout(default: float) -> float:
+    raw_timeout = os.environ.get("OBSERVABILITY_TIMEOUT")
+    if raw_timeout is None:
+        return default
+    try:
+        timeout = int(raw_timeout)
+    except ValueError:
+        return default
+    return timeout if timeout > 0 else default
 
 
 def _log_detail(value: Any) -> str:
@@ -42,6 +54,7 @@ class ObservabilityCapability(AgentSecCoreCapability):
 
     def _on_register(self, config: dict) -> None:
         self._hook_enabled = env_flag_enabled("OBSERVABILITY_HOOK_ENABLED", True)
+        self._timeout = _read_observability_timeout(self._timeout)
 
     def get_hooks_define(self) -> dict[str, Callable]:
         return {
