@@ -20,7 +20,17 @@ _TS = "2026-05-13T10:00:00Z"
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(None, 5), ("", 5), ("invalid", 5), ("0", 5), ("-1", 5), ("7", 7)],
+    [
+        (None, 5),
+        ("", 5),
+        ("invalid", 5),
+        ("0", 5),
+        ("-1", 5),
+        ("3", 3),
+        ("5", 5),
+        ("7", 5),
+        ("999999", 5),
+    ],
 )
 def test_observability_timeout_environment(monkeypatch, value, expected):
     if value is None:
@@ -511,17 +521,17 @@ def test_main_reports_observability_cli_timeout(monkeypatch, capsys):
 
 def test_extension_registers_observability_hook_for_supported_events():
     config = json.loads((_COSH_EXTENSION_DIR / "cosh-extension.json").read_text())
-    expected_events = {
-        "UserPromptSubmit",
-        "BeforeModel",
-        "AfterModel",
-        "PreToolUse",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Stop",
+    expected_timeouts = {
+        "UserPromptSubmit": 15000,
+        "BeforeModel": 20000,
+        "AfterModel": 10000,
+        "PreToolUse": 10000,
+        "PostToolUse": 10000,
+        "PostToolUseFailure": 10000,
+        "Stop": 10000,
     }
 
-    for event_name in expected_events:
+    for event_name, expected_timeout in expected_timeouts.items():
         entries = config["hooks"].get(event_name, [])
         observability_hooks = [
             hook
@@ -533,4 +543,4 @@ def test_extension_registers_observability_hook_for_supported_events():
         assert observability_hooks[0]["command"] == (
             "python3 ${extensionPath}/hooks/observability_hook.py"
         )
-        assert observability_hooks[0]["timeout"] == 10000
+        assert observability_hooks[0]["timeout"] == expected_timeout

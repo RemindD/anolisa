@@ -24,7 +24,17 @@ def _fixed_timestamp(monkeypatch):
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(None, 5), ("", 5), ("invalid", 5), ("0", 5), ("-1", 5), ("7", 7)],
+    [
+        (None, 5),
+        ("", 5),
+        ("invalid", 5),
+        ("0", 5),
+        ("-1", 5),
+        ("3", 3),
+        ("5", 5),
+        ("7", 5),
+        ("999999", 5),
+    ],
 )
 def test_observability_timeout_environment(monkeypatch, value, expected):
     if value is None:

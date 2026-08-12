@@ -21,6 +21,7 @@ from pii_text import json_dumps as _json_dumps
 from pii_text import text_sha256, value_to_text
 
 _DEFAULT_CLI_TIMEOUT_SECONDS = 5
+_MAX_CLI_TIMEOUT_SECONDS = 5
 
 
 def _read_cli_timeout_seconds() -> int:
@@ -30,7 +31,9 @@ def _read_cli_timeout_seconds() -> int:
         )
     except (TypeError, ValueError):
         return _DEFAULT_CLI_TIMEOUT_SECONDS
-    return timeout if timeout > 0 else _DEFAULT_CLI_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return _DEFAULT_CLI_TIMEOUT_SECONDS
+    return min(timeout, _MAX_CLI_TIMEOUT_SECONDS)
 
 
 _CLI_TIMEOUT_SECONDS = _read_cli_timeout_seconds()

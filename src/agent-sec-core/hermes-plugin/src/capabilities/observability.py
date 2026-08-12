@@ -15,17 +15,21 @@ from .base import AgentSecCoreCapability
 
 logger = logging.getLogger("agent-sec-core")
 _LOG_DETAIL_MAX_CHARS = 1000
+_MAX_OBSERVABILITY_TIMEOUT_SECONDS = 5.0
 
 
 def _read_observability_timeout(default: float) -> float:
+    bounded_default = min(default, _MAX_OBSERVABILITY_TIMEOUT_SECONDS)
     raw_timeout = os.environ.get("OBSERVABILITY_TIMEOUT")
     if raw_timeout is None:
-        return default
+        return bounded_default
     try:
         timeout = int(raw_timeout)
     except ValueError:
-        return default
-    return timeout if timeout > 0 else default
+        return bounded_default
+    if timeout <= 0:
+        return bounded_default
+    return min(timeout, _MAX_OBSERVABILITY_TIMEOUT_SECONDS)
 
 
 def _log_detail(value: Any) -> str:

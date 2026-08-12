@@ -18,6 +18,7 @@ from typing import Any, Callable
 from hook_config import env_flag_enabled
 
 _DEFAULT_CLI_TIMEOUT_SECONDS = 5
+_MAX_CLI_TIMEOUT_SECONDS = 5
 
 
 def _read_cli_timeout_seconds() -> int:
@@ -27,7 +28,9 @@ def _read_cli_timeout_seconds() -> int:
         )
     except (TypeError, ValueError):
         return _DEFAULT_CLI_TIMEOUT_SECONDS
-    return timeout if timeout > 0 else _DEFAULT_CLI_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return _DEFAULT_CLI_TIMEOUT_SECONDS
+    return min(timeout, _MAX_CLI_TIMEOUT_SECONDS)
 
 
 _CLI_TIMEOUT_SECONDS = _read_cli_timeout_seconds()

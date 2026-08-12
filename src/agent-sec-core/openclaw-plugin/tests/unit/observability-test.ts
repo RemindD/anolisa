@@ -277,7 +277,7 @@ describe("observability", () => {
   });
 
   it("uses the observability timeout for redaction and record calls", async () => {
-    process.env.OBSERVABILITY_TIMEOUT = "7";
+    process.env.OBSERVABILITY_TIMEOUT = "3";
     mockCli();
     const { api, hooks } = createMockApi();
     observability.register(api);
@@ -287,7 +287,23 @@ describe("observability", () => {
     hook.handler(beforeToolCallEvent(), { sessionId: "session-001" });
     await flushObservabilityWork();
 
-    assert.deepEqual(capturedTimeouts, [7000, 7000]);
+    assert.deepEqual(capturedTimeouts, [3000, 3000]);
+  });
+
+  it("caps the observability timeout", async () => {
+    mockCli();
+    const { api, hooks } = createMockApi();
+    observability.register(api);
+    const hook = hooks.find((item) => item.hookName === "before_tool_call");
+    assert.ok(hook);
+
+    for (const value of ["7", "999999"]) {
+      capturedTimeouts = [];
+      process.env.OBSERVABILITY_TIMEOUT = value;
+      hook.handler(beforeToolCallEvent(), { sessionId: "session-001" });
+      await flushObservabilityWork();
+      assert.deepEqual(capturedTimeouts, [5000, 5000]);
+    }
   });
 
   it("falls back to the default observability timeout for invalid values", async () => {

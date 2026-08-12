@@ -215,6 +215,7 @@ const OBSERVABILITY_SENSITIVE_KEYS = new Set([
 ]);
 const DROP = Symbol("drop-sensitive-observability-field");
 const DEFAULT_OBSERVABILITY_TIMEOUT_SECONDS = 5;
+const MAX_OBSERVABILITY_TIMEOUT_SECONDS = 5;
 
 function observabilityTimeoutMs(): number {
   const rawTimeout = process.env.OBSERVABILITY_TIMEOUT;
@@ -225,7 +226,7 @@ function observabilityTimeoutMs(): number {
   if (!Number.isSafeInteger(seconds) || seconds <= 0) {
     return DEFAULT_OBSERVABILITY_TIMEOUT_SECONDS * 1000;
   }
-  return seconds * 1000;
+  return Math.min(seconds, MAX_OBSERVABILITY_TIMEOUT_SECONDS) * 1000;
 }
 
 async function redactTextForObservability(

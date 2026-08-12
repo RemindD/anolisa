@@ -150,7 +150,8 @@ after changing it.
 
 `OBSERVABILITY_TIMEOUT` sets the timeout in seconds for each local PII
 redaction and observability record CLI call. It defaults to `5`; an unset,
-empty, invalid, or non-positive value also uses `5`.
+empty, invalid, or non-positive value also uses `5`. Every integration caps
+larger values at `5`.
 
 For OpenClaw and Hermes, the existing observability capability `enabled` setting
 remains an independent gate. Either switch can disable recording; setting this

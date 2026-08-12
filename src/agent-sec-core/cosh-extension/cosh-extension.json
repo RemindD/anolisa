@@ -85,7 +85,7 @@
             "name": "observability-hook",
             "command": "python3 ${extensionPath}/hooks/observability_hook.py",
             "description": "Records cosh hook observability metrics.",
-            "timeout": 10000
+            "timeout": 15000
           }
         ]
       }
@@ -98,7 +98,7 @@
             "name": "observability-hook",
             "command": "python3 ${extensionPath}/hooks/observability_hook.py",
             "description": "Records cosh hook observability metrics.",
-            "timeout": 10000
+            "timeout": 20000
           }
         ]
       }
