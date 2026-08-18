@@ -425,6 +425,8 @@ agent-sec-cli capabilities --agent hermes --capability pii-check --output json
 
 Supported capability names are fixed: `code-scan`, `prompt-scan`, `pii-check`, `skill-ledger`, and `observability`. Plugin-specific IDs such as `scan-code` or `pii-scan-user-input` are not accepted as CLI filters.
 
+For `observability`, the view applies `OBSERVABILITY_TIMEOUT` consistently across all six integrations: it defaults to `5` seconds, falls back to `5` for invalid or non-positive values, and caps larger values at `5`. A lower Hermes timeout from plugin configuration remains outside this environment-only view.
+
 Table output is limited to `CAPABILITY`, `ENABLED`, `MODE`, `SCAN_MODE`, `TIMEOUT(s)`, and `DIAGNOSTICS`. JSON output keeps the same user-facing fields and sanitized `env` entries containing only `effective` and `default` values. Neither output format exposes hook matcher lists, source labels, Agent config contents, config paths, or raw environment variable values. Diagnostics identify the invalid setting and fallback behavior without echoing the original value.
 
 ## Audit Log
