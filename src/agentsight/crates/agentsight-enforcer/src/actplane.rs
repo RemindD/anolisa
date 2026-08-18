@@ -47,6 +47,75 @@ struct PreparedBinding {
     compiled: Compiled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeDeltaSummary {
+    byte_len: usize,
+    updates: u32,
+    rules: u32,
+    first_update_op: Option<u8>,
+    first_update_match: Option<u8>,
+    first_update_target_len: Option<usize>,
+    first_update_add: Option<u64>,
+    first_update_del: Option<u64>,
+    first_update_gates: Option<u64>,
+    first_update_invals: Option<u64>,
+}
+
+fn native_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let value = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_ne_bytes(value.try_into().ok()?))
+}
+
+fn native_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    let value = bytes.get(offset..offset.checked_add(8)?)?;
+    Some(u64::from_ne_bytes(value.try_into().ok()?))
+}
+
+fn summarize_runtime_delta(bytes: &[u8]) -> Option<RuntimeDeltaSummary> {
+    const CONFIG_HEADER_LEN: usize = 8;
+    const UPDATE_OP_OFFSET: usize = CONFIG_HEADER_LEN;
+    const UPDATE_MATCH_OFFSET: usize = UPDATE_OP_OFFSET + 1;
+    const UPDATE_TARGET_OFFSET: usize = UPDATE_OP_OFFSET + 2;
+    const UPDATE_TARGET_LEN: usize = 64;
+    const UPDATE_ADD_OFFSET: usize = UPDATE_OP_OFFSET + 96;
+    const UPDATE_DEL_OFFSET: usize = UPDATE_OP_OFFSET + 104;
+    const UPDATE_GATES_OFFSET: usize = UPDATE_OP_OFFSET + 112;
+    const UPDATE_INVALS_OFFSET: usize = UPDATE_OP_OFFSET + 120;
+
+    let updates = native_u32(bytes, 0)?;
+    let rules = native_u32(bytes, 4)?;
+    let first_update = if updates > 0 {
+        let target = bytes.get(UPDATE_TARGET_OFFSET..UPDATE_TARGET_OFFSET + UPDATE_TARGET_LEN)?;
+        Some((
+            *bytes.get(UPDATE_OP_OFFSET)?,
+            *bytes.get(UPDATE_MATCH_OFFSET)?,
+            target
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(target.len()),
+            native_u64(bytes, UPDATE_ADD_OFFSET)?,
+            native_u64(bytes, UPDATE_DEL_OFFSET)?,
+            native_u64(bytes, UPDATE_GATES_OFFSET)?,
+            native_u64(bytes, UPDATE_INVALS_OFFSET)?,
+        ))
+    } else {
+        None
+    };
+
+    Some(RuntimeDeltaSummary {
+        byte_len: bytes.len(),
+        updates,
+        rules,
+        first_update_op: first_update.map(|value| value.0),
+        first_update_match: first_update.map(|value| value.1),
+        first_update_target_len: first_update.map(|value| value.2),
+        first_update_add: first_update.map(|value| value.3),
+        first_update_del: first_update.map(|value| value.4),
+        first_update_gates: first_update.map(|value| value.5),
+        first_update_invals: first_update.map(|value| value.6),
+    })
+}
+
 struct RuntimeState {
     bindings: Mutex<HashMap<u32, ActiveBinding>>,
     events: EventHub,
@@ -211,6 +280,11 @@ impl ActPlaneBackend {
                 )
             })?;
         let id = runtime_domain.unwrap_or_else(|| domain_id(request.binding_id));
+        let delta_summary = summarize_runtime_delta(&compiled.bytes);
+        eprintln!(
+            "agentsight-enforcer actplane_delta stage=prepared binding_id={} policy_id={} root_pid={} domain_id={} label=0x{label:x} summary={delta_summary:?}",
+            request.binding_id, request.policy_id, request.root_pid, id
+        );
         self.engine
             .seed_label_in_domain(request.root_pid, id, label)
             .map_err(|error| kernel_error("seed target process domain", error))?;
@@ -238,10 +312,29 @@ impl ActPlaneBackend {
                 cleanup,
             ));
         }
+        let control_domain = self.reload.domain_for_pid(control_pid);
+        let target_domain = self.reload.domain_for_pid(request.root_pid);
+        eprintln!(
+            "agentsight-enforcer actplane_delta stage=state_bound binding_id={} control_pid={} control_domain={control_domain:?} root_pid={} target_domain={target_domain:?} scope_id={} authority_mask=0x{:x} target_mask=0x{:x} gate_mask=0x{:x} label_mask=0x{:x}",
+            request.binding_id,
+            control_pid,
+            request.root_pid,
+            control_state.scope_id,
+            control_state.authority_mask,
+            control_state.target_mask,
+            control_state.gate_mask,
+            control_state.label_mask,
+        );
         if let Err(error) = self
             .reload
             .append_policy_delta(control_pid, id, &compiled.bytes)
         {
+            let control_domain = self.reload.domain_for_pid(control_pid);
+            let target_domain = self.reload.domain_for_pid(request.root_pid);
+            eprintln!(
+                "agentsight-enforcer actplane_delta stage=append_failed binding_id={} control_pid={} control_domain={control_domain:?} root_pid={} target_domain={target_domain:?} domain_id={} summary={delta_summary:?} error={error}",
+                request.binding_id, control_pid, request.root_pid, id
+            );
             let cleanup = self.cleanup_binding(&request, id);
             return Err(kernel_error_with_cleanup(
                 "append policy delta",
@@ -249,6 +342,10 @@ impl ActPlaneBackend {
                 cleanup,
             ));
         }
+        eprintln!(
+            "agentsight-enforcer actplane_delta stage=append_succeeded binding_id={} control_pid={} root_pid={} domain_id={} summary={delta_summary:?}",
+            request.binding_id, control_pid, request.root_pid, id
+        );
         if let Err(error) = self.engine.unbind_pid_from_domain(control_pid, id) {
             let cleanup = self.cleanup_binding(&request, id);
             return Err(kernel_error_with_cleanup(
@@ -1109,6 +1206,45 @@ mod tests {
     use super::*;
 
     const _: fn(&PinnedEngine) -> std::io::Result<usize> = PinnedEngine::drain_pending_events;
+
+    #[test]
+    fn runtime_delta_summary_decodes_header_and_first_update_without_target_contents() {
+        let mut bytes = vec![0u8; 8 + 144];
+        bytes[0..4].copy_from_slice(&1u32.to_ne_bytes());
+        bytes[4..8].copy_from_slice(&0u32.to_ne_bytes());
+        bytes[8] = 2;
+        bytes[9] = 1;
+        bytes[10..15].copy_from_slice(b"/safe");
+        bytes[104..112].copy_from_slice(&0x10u64.to_ne_bytes());
+        bytes[112..120].copy_from_slice(&0x20u64.to_ne_bytes());
+        bytes[120..128].copy_from_slice(&0x40u64.to_ne_bytes());
+        bytes[128..136].copy_from_slice(&0x80u64.to_ne_bytes());
+
+        assert_eq!(
+            summarize_runtime_delta(&bytes),
+            Some(RuntimeDeltaSummary {
+                byte_len: 152,
+                updates: 1,
+                rules: 0,
+                first_update_op: Some(2),
+                first_update_match: Some(1),
+                first_update_target_len: Some(5),
+                first_update_add: Some(0x10),
+                first_update_del: Some(0x20),
+                first_update_gates: Some(0x40),
+                first_update_invals: Some(0x80),
+            })
+        );
+    }
+
+    #[test]
+    fn runtime_delta_summary_rejects_truncated_input() {
+        assert_eq!(summarize_runtime_delta(&[]), None);
+
+        let mut header_only = vec![0u8; 8];
+        header_only[0..4].copy_from_slice(&1u32.to_ne_bytes());
+        assert_eq!(summarize_runtime_delta(&header_only), None);
+    }
 
     fn active_binding() -> ActiveBinding {
         ActiveBinding {

@@ -1,0 +1,10 @@
+{
+  "operationId": "policy-high-delete-op-1",
+  "state": "ABSENT",
+  "policyId": "high-sensitive-read",
+  "revision": null,
+  "payloadDigest": null,
+  "validation": null,
+  "staticCompile": null,
+  "error": null
+}

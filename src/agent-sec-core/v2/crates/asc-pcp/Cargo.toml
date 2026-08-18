@@ -1,0 +1,20 @@
+[package]
+name = "asc-pcp"
+description = "AgentSecCore policy control point and AgentSight reconciliation client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+asc-policy-engine = { path = "../asc-policy-engine" }
+asc-policy-types = { path = "../asc-policy-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true }
+
+[lints]
+workspace = true

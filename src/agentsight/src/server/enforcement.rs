@@ -5,10 +5,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use actix_web::{HttpResponse, delete, get, post, web};
+use actix_web::{HttpResponse, delete, get, post, put, web};
 use agentsight_enforcement_protocol::{
     ApplyCredentialPolicy, ApplyPolicy, Binding, BindingState, CredentialExfiltrationPolicy,
     DestinationScope, HealthStatus, PolicyMode,
+};
+use asc_policy_types::Validate;
+use asc_policy_types::protocol::ProtocolError;
+use asc_policy_types::reconcile::{
+    ReconcileBindingRequest, ReconcileBindingResponse, ReconcilePolicyRequest,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -16,7 +21,8 @@ use uuid::Uuid;
 
 use super::AppState;
 use crate::enforcement::{
-    EnforcementCoordinatorError, canonical_policy_file, read_process_start_time,
+    BindingPlan, CanonicalError, EnforcementCoordinatorError, canonical_policy_file,
+    read_process_start_time, read_runtime_target_identity,
 };
 
 /// Bounded evidence list query.
@@ -159,6 +165,58 @@ pub(super) async fn apply_credential_binding(
     run_binding(move || coordinator.apply_credential_policy(request)).await
 }
 
+/// Reconciles one immutable Canonical Policy IR revision.
+#[put("/enforcement/v1/policies")]
+pub(super) async fn reconcile_v1_policy(
+    data: web::Data<AppState>,
+    body: web::Json<ReconcilePolicyRequest>,
+) -> HttpResponse {
+    let Some(coordinator) = data.enforcement.clone() else {
+        return unavailable();
+    };
+    let request = body.into_inner();
+    match web::block(move || coordinator.canonical().reconcile_policy(request)).await {
+        Ok(Ok(response)) => HttpResponse::Ok().json(response),
+        Ok(Err(error)) => canonical_error(error),
+        Err(error) => blocking_error(error),
+    }
+}
+
+/// Maps and installs one Canonical binding for a verified running process.
+#[put("/enforcement/v1/bindings")]
+pub(super) async fn reconcile_v1_binding(
+    data: web::Data<AppState>,
+    body: web::Json<ReconcileBindingRequest>,
+) -> HttpResponse {
+    let Some(coordinator) = data.enforcement.clone() else {
+        return unavailable();
+    };
+    let request = body.into_inner();
+    if let Err(error) = validate_v1_target(&request) {
+        return canonical_error(error);
+    }
+    match web::block(
+        move || -> Result<ReconcileBindingResponse, V1BindingError> {
+            match coordinator.canonical().plan_binding(request)? {
+                BindingPlan::Complete(response) => Ok(response),
+                BindingPlan::Install(plan) => {
+                    let acknowledgement = coordinator.apply(plan.apply_policy.clone())?;
+                    Ok(coordinator
+                        .canonical()
+                        .complete_binding(plan, acknowledgement)?)
+                }
+            }
+        },
+    )
+    .await
+    {
+        Ok(Ok(response)) => HttpResponse::Ok().json(response),
+        Ok(Err(V1BindingError::Canonical(error))) => canonical_error(error),
+        Ok(Err(V1BindingError::Enforcement(error))) => v1_coordinator_error(error),
+        Err(error) => blocking_error(error),
+    }
+}
+
 fn unix_epoch_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -285,6 +343,98 @@ fn validate_target_identity(root_pid: i32, expected_start_time: u64) -> Result<(
         ));
     }
     Ok(())
+}
+
+fn validate_v1_target(request: &ReconcileBindingRequest) -> Result<(), CanonicalError> {
+    request
+        .validate()
+        .map_err(|error| CanonicalError::Invalid {
+            path: error.path,
+            message: error.message,
+        })?;
+    let ReconcileBindingRequest::Ready(ready) = request else {
+        return Ok(());
+    };
+    let pid =
+        i32::try_from(ready.identity.root_process.pid).map_err(|_| CanonicalError::Invalid {
+            path: "identity.rootProcess.pid".into(),
+            message: "PID exceeds the AgentSight process identity range".into(),
+        })?;
+    let actual = read_runtime_target_identity(pid).map_err(|error| CanonicalError::Invalid {
+        path: "identity.rootProcess".into(),
+        message: error.to_string(),
+    })?;
+    let expected = &ready.identity;
+    let namespaces = &ready.scope.namespaces;
+    if actual.start_time_ticks != expected.root_process.start_time_ticks
+        || actual.cgroup_id != expected.cgroup_id
+        || actual.pid_namespace_id != namespaces.pid_namespace_id
+        || actual.mount_namespace_id != namespaces.mount_namespace_id
+        || actual.network_namespace_id != namespaces.network_namespace_id
+    {
+        return Err(CanonicalError::Invalid {
+            path: "identity".into(),
+            message:
+                "process start time, cgroup, or namespace identity does not match the live target"
+                    .into(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum V1BindingError {
+    #[error(transparent)]
+    Canonical(#[from] CanonicalError),
+    #[error(transparent)]
+    Enforcement(#[from] EnforcementCoordinatorError),
+}
+
+fn canonical_error(error: CanonicalError) -> HttpResponse {
+    let status = match error {
+        CanonicalError::Invalid { .. } => actix_web::http::StatusCode::BAD_REQUEST,
+        CanonicalError::PolicyNotFound(_) => actix_web::http::StatusCode::NOT_FOUND,
+        CanonicalError::OperationConflict(_)
+        | CanonicalError::OperationInProgress(_)
+        | CanonicalError::RevisionConflict(_)
+        | CanonicalError::PreconditionFailed(_)
+        | CanonicalError::PolicyInUse(_) => actix_web::http::StatusCode::CONFLICT,
+        CanonicalError::BindingRemovalUnsupported | CanonicalError::InvalidAcknowledgement => {
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        }
+        CanonicalError::Poisoned | CanonicalError::Internal(_) | CanonicalError::Store(_) => {
+            actix_web::http::StatusCode::SERVICE_UNAVAILABLE
+        }
+    };
+    let protocol_error = error.protocol_error();
+    log::error!("Canonical enforcement request failed: {error}");
+    HttpResponse::build(status).json(protocol_error)
+}
+
+fn v1_coordinator_error(error: EnforcementCoordinatorError) -> HttpResponse {
+    let (status, code, retryable) = match &error {
+        EnforcementCoordinatorError::Client(crate::enforcement::EnforcementError::Remote {
+            code,
+            ..
+        }) if matches!(code.as_str(), "compile_failure" | "stale_process") => (
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY,
+            code.clone(),
+            false,
+        ),
+        _ => (
+            actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+            "ENFORCEMENT_UNAVAILABLE".into(),
+            true,
+        ),
+    };
+    log::error!("Canonical binding installation failed: {error}");
+    HttpResponse::build(status).json(ProtocolError {
+        code,
+        message: "the enforcement backend did not acknowledge the Canonical binding".into(),
+        retryable,
+        state_changed: true,
+        reconcile_action: Some("GET /api/enforcement/v1/state".into()),
+    })
 }
 
 fn build_file_binding(request: FileBindingRequest) -> Result<ApplyPolicy, String> {

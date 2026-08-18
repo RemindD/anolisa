@@ -268,6 +268,8 @@ fn configure_routes(cfg: &mut web::ServiceConfig) {
                 .service(enforcement::apply_binding)
                 .service(enforcement::apply_file_binding)
                 .service(enforcement::apply_credential_binding)
+                .service(enforcement::reconcile_v1_policy)
+                .service(enforcement::reconcile_v1_binding)
                 .service(enforcement::list_bindings)
                 .service(enforcement::detach_binding)
                 .service(enforcement::list_violations)
@@ -521,7 +523,7 @@ pub async fn run_server(
     let server = match HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
-            .allowed_methods(vec!["GET", "DELETE", "POST", "OPTIONS"])
+            .allowed_methods(vec!["GET", "DELETE", "POST", "PUT", "OPTIONS"])
             .allowed_headers(vec!["Content-Type", "Authorization"])
             .max_age(3600);
 

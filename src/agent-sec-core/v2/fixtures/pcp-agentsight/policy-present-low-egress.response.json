@@ -1,0 +1,23 @@
+{
+  "operationId": "policy-low-op-1",
+  "state": "AVAILABLE",
+  "policyId": "low-sensitivity-egress",
+  "revision": 1,
+  "payloadDigest": null,
+  "validation": {
+    "status": "VALID",
+    "diagnostics": []
+  },
+  "staticCompile": {
+    "stage": "DEFERRED_TO_BINDING",
+    "compilerVersion": "agentsight-ir-v1",
+    "diagnostics": [
+      {
+        "code": "TARGET_MAPPING_DEFERRED",
+        "path": "payload.rules[0]",
+        "message": "direct information flow receives its final target mapping at binding time"
+      }
+    ]
+  },
+  "error": null
+}

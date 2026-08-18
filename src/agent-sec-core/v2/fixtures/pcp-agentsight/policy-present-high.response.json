@@ -1,0 +1,17 @@
+{
+  "operationId": "policy-high-op-1",
+  "state": "AVAILABLE",
+  "policyId": "high-sensitive-read",
+  "revision": 1,
+  "payloadDigest": null,
+  "validation": {
+    "status": "VALID",
+    "diagnostics": []
+  },
+  "staticCompile": {
+    "stage": "DEFERRED_TO_BINDING",
+    "compilerVersion": "agentsight-ir-v1",
+    "diagnostics": []
+  },
+  "error": null
+}

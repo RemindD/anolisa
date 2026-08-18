@@ -1,0 +1,61 @@
+{
+  "operationId": "binding-low-op-1",
+  "state": "REJECTED",
+  "bindingId": "binding-low-1",
+  "bindingRevision": null,
+  "executionDomainId": "domain-demo-2",
+  "identityEpoch": 1,
+  "effectivePolicy": {
+    "policyId": "low-sensitivity-egress",
+    "revision": 1,
+    "profileId": "agentseccore-canonical-ir/v1alpha1-demo1"
+  },
+  "scopeDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+  "scopeState": "VERIFIED",
+  "mappingDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+  "mappings": [
+    {
+      "bindingId": "binding-low-1",
+      "policyId": "low-sensitivity-egress",
+      "policyRevision": 1,
+      "targetId": "actplane-v1",
+      "policyRelation": "unsupported",
+      "mappingDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "capabilitySnapshotDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "rules": [
+        {
+          "ruleId": "deny-direct-low-sensitive-egress",
+          "relation": "unsupported",
+          "atoms": [
+            {
+              "expressionPath": "when.atom",
+              "relation": "unsupported",
+              "diagnostics": [
+                {
+                  "code": "UNSUPPORTED_DIRECT_FLOW",
+                  "path": "when.atom",
+                  "message": "target cannot reliably establish direct information flow"
+                }
+              ]
+            }
+          ],
+          "diagnostics": []
+        }
+      ],
+      "guarantees": {
+        "relation": "exact",
+        "diagnostics": []
+      }
+    }
+  ],
+  "targetDigests": [],
+  "pepInstances": [],
+  "effectiveAt": null,
+  "error": {
+    "code": "UNSUPPORTED_SEMANTICS",
+    "message": "target actplane-v1 cannot enforce direct information flow for this binding",
+    "retryable": false,
+    "stateChanged": false,
+    "reconcileAction": null
+  }
+}

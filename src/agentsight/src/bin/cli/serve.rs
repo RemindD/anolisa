@@ -44,6 +44,7 @@ impl ServeCommand {
                 .unwrap_or_else(GenAISqliteStore::default_path);
 
             let server_config = super::load_server_config(&self.config);
+            server_config.apply_verbose();
             let auth_config = server_config.server_auth;
             let retention_days = server_config.retention_days;
 

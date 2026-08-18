@@ -1,0 +1,55 @@
+{
+  "operationId": "binding-low-op-1",
+  "desiredState": "READY",
+  "bindingId": "binding-low-1",
+  "runId": "run-demo-2",
+  "effectivePolicy": {
+    "policyId": "low-sensitivity-egress",
+    "revision": 1,
+    "profileId": "agentseccore-canonical-ir/v1alpha1-demo1"
+  },
+  "identity": {
+    "executionDomainId": "domain-demo-2",
+    "identityEpoch": 1,
+    "rootProcess": {
+      "pid": 4343,
+      "startTimeTicks": 987655
+    },
+    "cgroupId": 20002
+  },
+  "scope": {
+    "processes": {
+      "membership": "execution_domain",
+      "includeRoot": true,
+      "includeExistingMembers": false,
+      "includeFutureMembers": true,
+      "preserveAcrossExec": true,
+      "nestedExecutionDomains": "inherit"
+    },
+    "namespaces": {
+      "pidNamespaceId": 31001,
+      "mountNamespaceId": 31002,
+      "networkNamespaceId": 31003,
+      "onChange": "deny"
+    },
+    "lifetime": {
+      "activateAt": "binding_ready",
+      "expiresAt": null,
+      "endCondition": "execution_domain_drained"
+    }
+  },
+  "scopeDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+  "runtimeContext": {
+    "baselineId": "image:demo-v1",
+    "runtimeProfileDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "approval": {
+    "allowNarrower": false,
+    "approvalRef": null,
+    "expectedMappingDigest": null
+  },
+  "precondition": {
+    "expectedBindingRevision": null,
+    "capabilitySnapshotDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

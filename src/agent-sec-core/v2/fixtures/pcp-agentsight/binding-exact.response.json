@@ -1,0 +1,51 @@
+{
+  "operationId": "binding-high-op-1",
+  "state": "BINDING_READY",
+  "bindingId": "binding-high-1",
+  "bindingRevision": 1,
+  "executionDomainId": "domain-demo-1",
+  "identityEpoch": 1,
+  "effectivePolicy": {
+    "policyId": "high-sensitive-read",
+    "revision": 1,
+    "profileId": "agentseccore-canonical-ir/v1alpha1-demo1"
+  },
+  "scopeDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "scopeState": "VERIFIED",
+  "mappingDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "mappings": [
+    {
+      "bindingId": "binding-high-1",
+      "policyId": "high-sensitive-read",
+      "policyRevision": 1,
+      "targetId": "mock-pep-v1",
+      "policyRelation": "exact",
+      "mappingDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "capabilitySnapshotDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "rules": [
+        {
+          "ruleId": "deny-high-sensitive-read",
+          "relation": "exact",
+          "atoms": [
+            {
+              "expressionPath": "when.atom",
+              "relation": "exact",
+              "diagnostics": []
+            }
+          ],
+          "diagnostics": []
+        }
+      ],
+      "guarantees": {
+        "relation": "exact",
+        "diagnostics": []
+      }
+    }
+  ],
+  "targetDigests": [
+    "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  ],
+  "pepInstances": ["mock-pep-1"],
+  "effectiveAt": "2026-08-19T10:00:00Z",
+  "error": null
+}

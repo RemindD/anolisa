@@ -1,6 +1,7 @@
 //! Validates process and file targets before building enforcement requests.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Errors that prevent a process or file from being used in an enforcement policy.
@@ -12,8 +13,20 @@ pub(crate) enum TargetValidationError {
     ProcessIo { pid: i32, source: std::io::Error },
     #[error("invalid /proc/{0}/stat start time")]
     InvalidStat(i32),
+    #[error("PID {0} does not use a readable unified cgroup")]
+    InvalidCgroup(i32),
     #[error("invalid policy file {path}: {message}")]
     InvalidPath { path: PathBuf, message: String },
+}
+
+/// Kernel-backed identity values used to verify a Canonical binding target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeTargetIdentity {
+    pub(crate) start_time_ticks: u64,
+    pub(crate) cgroup_id: u64,
+    pub(crate) pid_namespace_id: u64,
+    pub(crate) mount_namespace_id: u64,
+    pub(crate) network_namespace_id: u64,
 }
 
 /// Reads the Linux process start time after excluding protected service processes.
@@ -45,6 +58,39 @@ pub(crate) fn read_process_start_time(pid: i32) -> Result<u64, TargetValidationE
         .ok_or(TargetValidationError::InvalidStat(pid))?
         .parse()
         .map_err(|_| TargetValidationError::InvalidStat(pid))
+}
+
+/// Reads the process and namespace identities that AgentSight can verify locally.
+pub(crate) fn read_runtime_target_identity(
+    pid: i32,
+) -> Result<RuntimeTargetIdentity, TargetValidationError> {
+    let start_time_ticks = read_process_start_time(pid)?;
+    let namespace_inode = |name: &str| {
+        fs::metadata(format!("/proc/{pid}/ns/{name}"))
+            .map(|metadata| metadata.ino())
+            .map_err(|source| TargetValidationError::ProcessIo { pid, source })
+    };
+    let cgroup = fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .map_err(|source| TargetValidationError::ProcessIo { pid, source })?;
+    let relative = cgroup
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .ok_or(TargetValidationError::InvalidCgroup(pid))?
+        .trim_start_matches('/');
+    if relative.split('/').any(|component| component == "..") {
+        return Err(TargetValidationError::InvalidCgroup(pid));
+    }
+    let cgroup_id = fs::metadata(Path::new("/sys/fs/cgroup").join(relative))
+        .map(|metadata| metadata.ino())
+        .map_err(|source| TargetValidationError::ProcessIo { pid, source })?;
+
+    Ok(RuntimeTargetIdentity {
+        start_time_ticks,
+        cgroup_id,
+        pid_namespace_id: namespace_inode("pid")?,
+        mount_namespace_id: namespace_inode("mnt")?,
+        network_namespace_id: namespace_inode("net")?,
+    })
 }
 
 /// Resolves an existing regular file that is safe to embed in the policy lexer.
@@ -164,5 +210,23 @@ mod tests {
             canonical_policy_file(file.path()).unwrap(),
             file.path().canonicalize().unwrap()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_a_live_child_runtime_identity() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture process should start");
+        let identity = read_runtime_target_identity(child.id() as i32)
+            .expect("child identity should be readable");
+        assert!(identity.start_time_ticks > 0);
+        assert!(identity.cgroup_id > 0);
+        assert!(identity.pid_namespace_id > 0);
+        assert!(identity.mount_namespace_id > 0);
+        assert!(identity.network_namespace_id > 0);
+        child.kill().expect("fixture process should stop");
+        child.wait().expect("fixture process should be reaped");
     }
 }

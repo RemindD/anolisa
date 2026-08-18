@@ -180,6 +180,11 @@ impl EnforcementStore {
                 request_json TEXT NOT NULL,
                 state TEXT NOT NULL,
                 updated_at_ns INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS enforcement_canonical_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                state_json TEXT NOT NULL,
+                updated_at_ns INTEGER NOT NULL
              );",
         )?;
         migrate_legacy_violation_timestamps(&mut connection)?;
@@ -267,6 +272,32 @@ impl EnforcementStore {
             bindings.push(serde_json::from_str(&row?)?);
         }
         Ok(bindings)
+    }
+
+    pub(crate) fn canonical_state_json(&self) -> Result<Option<String>, EnforcementStoreError> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT state_json FROM enforcement_canonical_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn replace_canonical_state_json(
+        &self,
+        state_json: &str,
+    ) -> Result<(), EnforcementStoreError> {
+        self.connection()?.execute(
+            "INSERT INTO enforcement_canonical_state(singleton, state_json, updated_at_ns)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET
+                state_json=excluded.state_json,
+                updated_at_ns=excluded.updated_at_ns",
+            params![state_json, sqlite_i64(now_ns())],
+        )?;
+        Ok(())
     }
 
     /// Inserts a violation once by event ID.

@@ -1,0 +1,70 @@
+{
+  "service": {
+    "ready": true,
+    "apiVersion": "agentsight.enforcement/v1",
+    "agentSightInstanceId": "agentsight-demo-1"
+  },
+  "capabilitySnapshot": {
+    "schemaVersion": "v1",
+    "snapshotDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "matrix": [
+      {
+        "targetId": "mock-pep-v1",
+        "profileId": "agentseccore-canonical-ir/v1alpha1-demo1",
+        "atomKinds": ["resource_operation"],
+        "resourceKinds": ["file"],
+        "resourceOperations": ["read", "namespace_mutation"],
+        "flowPropagations": [],
+        "expressionKinds": ["atom"],
+        "fileResolutions": [
+          {
+            "type": "path_entry"
+          },
+          {
+            "type": "final_object",
+            "followFinalSymlink": true,
+            "matchHardlinkIdentity": true
+          }
+        ],
+        "decisionTimings": ["pre_effect"],
+        "evidence": ["rule_matched", "operation_denied", "effect_receipt"],
+        "obligations": ["audit", "emit_receipt"],
+        "remediations": ["none"],
+        "activation": ["post_attach_allowed"],
+        "runtimeFailurePolicies": ["fail_closed"],
+        "updateFailurePolicies": ["keep_last_known_good"],
+        "supportLevel": "exact",
+        "limitations": ["mock capability for control-plane contract tests"]
+      }
+    ]
+  },
+  "operations": [
+    {
+      "operationId": "policy-high-op-1",
+      "resource": "policy",
+      "policyState": "AVAILABLE",
+      "bindingState": null,
+      "error": null
+    }
+  ],
+  "policies": [
+    {
+      "operationId": "policy-high-op-1",
+      "state": "AVAILABLE",
+      "policyId": "high-sensitive-read",
+      "revision": 1,
+      "payloadDigest": null,
+      "validation": {
+        "status": "VALID",
+        "diagnostics": []
+      },
+      "staticCompile": {
+        "stage": "DEFERRED_TO_BINDING",
+        "compilerVersion": "agentsight-ir-v1",
+        "diagnostics": []
+      },
+      "error": null
+    }
+  ],
+  "bindings": []
+}

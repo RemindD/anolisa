@@ -13,7 +13,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::store::credential_binding_matches_request;
-use super::{EnforcementClient, EnforcementError, EnforcementStore, EnforcementStoreError};
+use super::{
+    CanonicalPolicyController, EnforcementClient, EnforcementError, EnforcementStore,
+    EnforcementStoreError,
+};
 
 mod reconciliation;
 mod transition;
@@ -369,6 +372,7 @@ pub enum EnforcementCoordinatorError {
 pub struct EnforcementCoordinator {
     client: EnforcementClient,
     store: EnforcementStore,
+    canonical: CanonicalPolicyController,
     ingestion_readiness: IngestionReadiness,
     lifecycle: Arc<Mutex<()>>,
 }
@@ -378,10 +382,15 @@ impl EnforcementCoordinator {
     pub fn new(client: EnforcementClient, store: EnforcementStore) -> Self {
         Self {
             client,
+            canonical: CanonicalPolicyController::new(store.clone()),
             store,
             ingestion_readiness: IngestionReadiness::new(),
             lifecycle: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub(crate) fn canonical(&self) -> &CanonicalPolicyController {
+        &self.canonical
     }
 
     /// Bounds foreground ownership across health, apply, post-apply health, and scheduling slack.

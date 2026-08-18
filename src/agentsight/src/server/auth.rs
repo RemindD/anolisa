@@ -364,6 +364,10 @@ fn normalize_path(mut path: String) -> String {
 
 fn is_enforcement_mutation_path(method: &actix_web::http::Method, path: &str) -> bool {
     match *method {
+        actix_web::http::Method::PUT => matches!(
+            path,
+            "/api/enforcement/v1/policies" | "/api/enforcement/v1/bindings"
+        ),
         actix_web::http::Method::POST => {
             matches!(
                 path,

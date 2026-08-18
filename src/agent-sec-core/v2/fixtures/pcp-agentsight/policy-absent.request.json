@@ -1,0 +1,9 @@
+{
+  "operationId": "policy-high-delete-op-1",
+  "desiredState": "ABSENT",
+  "policyId": "high-sensitive-read",
+  "precondition": {
+    "expectedCurrentRevision": 1,
+    "expectedPayloadDigest": null
+  }
+}
