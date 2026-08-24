@@ -95,8 +95,18 @@ healthcheck 通过 raw package 的 `agent-sec-python` 调用 UDS `daemon.health`
 Ollama entrypoint：
 
 1. 启动 `ollama serve` 并等待 HTTP server ready；
-2. 执行 `ollama run modelscope.cn/ANOLISA/Qwen3Guard-Gen-0.6B-GGUF ""`，完成模型拉取和预热；
-3. 持续等待 server 进程，并转发 Pod 的终止信号。
+2. 若模型不存在，执行
+   `ollama pull modelscope.cn/ANOLISA/Warden-Gen-0.6B-GGUF`；
+3. 用临时 Modelfile 原地执行 `ollama create`，把 `OLLAMA_NUM_CTX` 写入模型的
+   `num_ctx` 参数；
+4. 执行 `ollama run modelscope.cn/ANOLISA/Warden-Gen-0.6B-GGUF ""`
+   完成模型预热；
+5. 持续等待 server 进程，并转发 Pod 的终止信号。
+
+镜像默认设置 `OLLAMA_NUM_CTX=4096`、`OLLAMA_NUM_PARALLEL=1`、
+`OLLAMA_KV_CACHE_TYPE=q8_0`。`OLLAMA_NUM_CTX` 必须为正整数；它不是直接交给 Ollama
+server 的全局 context 变量，而是由 entrypoint 写成模型级 `PARAMETER num_ctx`，避免
+模型自带 Modelfile 参数覆盖全局设置。已有模型 layer 会复用，warm volume 不会再次下载。
 
 Ollama 只监听 Pod 共享 loopback 的 `127.0.0.1:11434`，Chart 不创建 Service。
 Rust model-service 默认也使用 `http://localhost:11434`。当前 Qoder hook 在 caller

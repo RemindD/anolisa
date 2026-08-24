@@ -19,6 +19,14 @@ The Ollama model service is available inside this Pod at:
 The configured prompt-scan model is:
   {{ .Values.ollama.model }}
 
+{{ if (get (.Values.skillfs | default dict) "enabled") }}
+SkillFS is enabled as a native sidecar. Its propagated view is mounted at:
+  /var/lib/skillfs/shared/mount/skills
+
+The SkillFS control socket is:
+  {{ printf "%s/skillfs/control.sock" (trimSuffix "/" .Values.runtime.mountPath) }}
+{{ end }}
+
 {{ if .Values.persistence.enabled }}
 The shared persistent data directory is:
   {{ include "agent-sec-sidecar.dataPath" . }}

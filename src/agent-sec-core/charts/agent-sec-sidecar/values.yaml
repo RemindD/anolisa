@@ -13,7 +13,7 @@ modelService:
 cli:
   image:
     repository: jinli-acs-registry.cn-hangzhou.cr.aliyuncs.com/acs/agent-sec-qodercli
-    tag: "0.10.2"
+    tag: "warden-l2-smoke-20260824"
     pullPolicy: IfNotPresent
   # Qoder CLI is an interactive foreground TUI, so keep stdin and a TTY open.
   stdin: true
@@ -77,19 +77,78 @@ daemon:
       timeoutSeconds: 2
       failureThreshold: 3
 
+# SkillFS requires Kubernetes native sidecars, a privileged container,
+# /dev/fuse, and bidirectional mount propagation.
+skillfs:
+  enabled: false
+  image:
+    repository: anolisa-registry-vpc.cn-hangzhou.cr.aliyuncs.com/anolisa-agent-sec-core-e2e/skillfs
+    tag: ""
+    digest: sha256:1c602790929facd6edb38927cc3094792c2730ef7751abad9d6bdd813f0dce61
+    pullPolicy: IfNotPresent
+  prepare:
+    # The bootstrap script only needs bash and coreutils; it does not depend on
+    # the daemon or SkillFS binaries.
+    image:
+      repository: alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4
+      tag: latest
+      digest: ""
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        add:
+          - CHOWN
+          - DAC_OVERRIDE
+          - FOWNER
+        drop:
+          - ALL
+      privileged: false
+      runAsGroup: 0
+      runAsNonRoot: false
+      runAsUser: 0
+      seccompProfile:
+        type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 1
+      memory: 2Gi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  securityContext:
+    privileged: true
+    runAsGroup: 10001
+    runAsNonRoot: true
+    runAsUser: 10001
+  startupProbe:
+    periodSeconds: 2
+    timeoutSeconds: 4
+    failureThreshold: 150
+
 ollama:
   enabled: true
   image:
     repository: jinli-acs-registry.cn-hangzhou.cr.aliyuncs.com/acs/agent-sec-ollama
-    tag: "0.32.1"
+    tag: "warden-skillfs-smoke-20260824"
     pullPolicy: IfNotPresent
-  model: modelscope.cn/ANOLISA/Qwen3Guard-Gen-0.6B-GGUF
+  model: modelscope.cn/ANOLISA/Warden-Gen-0.6B-GGUF
   host: 127.0.0.1:11434
   keepAlive: "-1"
-  # Quantized KV cache keeps the model's 32K context within the default
-  # 2-vCPU/4-GiB ACS Pod. Ollama requires Flash Attention for KV quantization.
+  # The entrypoint re-creates the local model tag with num_ctx=4096 because a
+  # Modelfile parameter takes precedence over Ollama's global context setting.
+  # Render OLLAMA_FLASH_ATTENTION=1 because the KV cache is quantized.
   flashAttention: true
-  kvCacheType: q4_0
+  kvCacheType: q8_0
+  numParallel: 1
+  numCtx: 4096
   startupTimeoutSeconds: 60
   persistentPaths:
     homeRelativePath: ollama-home
@@ -165,9 +224,9 @@ podLabels: {}
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 20001
-  runAsGroup: 20001
-  fsGroup: 20001
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
   fsGroupChangePolicy: OnRootMismatch
   seccompProfile:
     type: RuntimeDefault

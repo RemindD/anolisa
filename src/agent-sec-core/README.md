@@ -271,6 +271,11 @@ with `--model` or `PROMPT_SCANNER_L2_MODEL` (`--model` wins). Only one backend
 runs at a time and each needs its own `ollama pull`. `warmup` checks that Ollama
 can serve the selected model; it never downloads models automatically.
 
+The bundled Helm chart selects that Warden model for its local Ollama
+sidecar, sets `OLLAMA_NUM_PARALLEL=1`, and applies `OLLAMA_NUM_CTX=4096` as the
+model-level `num_ctx` parameter during entrypoint startup. The standalone CLI
+default remains Qwen3Guard.
+
 Details: [Prompt Scanner User Guide](../../docs/user-guide/en/agent-security/agent-sec-core/prompt-scanner.md).
 
 ## Code Scanner
@@ -385,6 +390,14 @@ Authentication key paths must be absolute and refer to regular, non-symlink
 files owned by the effective user, with no group or other permission bits. The
 raw key file must contain 32–4096 bytes. See the Skill Ledger user guide for the
 full two-key deployment and container volume requirements.
+
+The bundled Helm chart can deploy the current authenticated SkillFS smoke
+topology with `skillfs.enabled=true`. It runs a one-shot Alinux 4 prepare
+container before a restartable SkillFS native sidecar, keeps both generated
+keys on a memory-backed volume mounted read-only by long-running containers,
+and uses numeric UID/GID `10001` throughout. See the
+[chart deployment guide](charts/agent-sec-sidecar/README.md) for the Kubernetes
+and `/dev/fuse` prerequisites.
 
 The bundled Qoder CLI plugin registers a `PreToolUse` hook for the `Skill`
 tool. It resolves user Skills from `~/.qoder/skills/` before project Skills

@@ -323,6 +323,17 @@ skillfs mount /path/to/skills /mnt/skillfs \
   --trusted-peer-key-file "$AGENT_SEC_SKILLFS_CONTROL_AUTH_KEY_FILE"
 ```
 
+The bundled Helm chart exposes the currently validated joint-deployment smoke
+topology behind `skillfs.enabled=true`. It requires Kubernetes 1.29 or newer, a
+namespace that permits privileged containers, `/dev/fuse`, and bidirectional
+mount propagation. A regular init container generates the two Pod-scoped keys
+before the restartable SkillFS native sidecar starts; daemon and SkillFS
+restarts reuse those keys from read-only mounts. The current prepare script also
+seeds a smoke Skill and `pass_warn_only` Ledger configuration, so this option is
+for validating the current ACS topology rather than general Skill source
+provisioning. See the
+[Helm chart guide](../../../../../src/agent-sec-core/charts/agent-sec-sidecar/README.md).
+
 The control and notify variables may point to the same key file, but separate
 direction-specific keys are recommended. The control key is loaded on the first
 resolve and cached for that resolver client's lifetime; it is not hot-reloaded.

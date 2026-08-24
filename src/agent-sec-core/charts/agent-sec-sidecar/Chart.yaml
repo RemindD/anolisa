@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agent-sec-sidecar
-description: Deploy agent-sec-cli, agent-sec-daemon, and Ollama in one Pod
+description: Deploy agent-sec-cli, agent-sec-daemon, SkillFS, and Ollama in one Pod
 type: application
 version: 0.3.0
 appVersion: "0.10.1"

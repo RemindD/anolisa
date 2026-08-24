@@ -308,6 +308,14 @@ skillfs mount /path/to/skills /mnt/skillfs \
   --trusted-peer-key-file "$AGENT_SEC_SKILLFS_CONTROL_AUTH_KEY_FILE"
 ```
 
+仓库内置 Helm Chart 通过 `skillfs.enabled=true` 提供当前已验证的联合部署 smoke 拓扑。
+该模式要求 Kubernetes 1.29 或更高版本、namespace 允许 privileged container、节点提供
+`/dev/fuse`，并允许 bidirectional mount propagation。regular init container 在可独立重启
+的 SkillFS native sidecar 启动前生成两个 Pod 级 key；daemon 或 SkillFS 重启时继续从只读
+挂载复用这些 key。当前 prepare 脚本还会写入 smoke Skill 和 `pass_warn_only` Ledger 配置，
+因此该开关用于验证当前 ACS 拓扑，而不是通用 Skill source provisioning。详见
+[Helm Chart 指南](../../../../../src/agent-sec-core/charts/agent-sec-sidecar/README.md)。
+
 control 与 notify 环境变量可以指向同一个 key 文件，但推荐为两个方向使用独立 key。
 control key 在第一次 resolve 时加载，并缓存到该 resolver client 生命周期结束；不支持
 热更新。daemon 在 bind socket 前加载 notify key，因此非法 notify key 会阻止 daemon 启动。

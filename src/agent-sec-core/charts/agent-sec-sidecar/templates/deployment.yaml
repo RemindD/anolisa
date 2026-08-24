@@ -1,6 +1,13 @@
 {{- include "agent-sec-sidecar.validateValues" . }}
 {{- $dataAccessConfig := include "agent-sec-sidecar.effectiveDataAccessModes" . | fromJson }}
 {{- $dataAccessModes := get $dataAccessConfig "accessModes" }}
+{{- $skillfs := .Values.skillfs | default dict }}
+{{- $skillfsEnabled := get $skillfs "enabled" | default false }}
+{{- $persistentRoot := trimSuffix "/" .Values.persistence.mountPath }}
+{{- $xdgConfigHome := ternary (printf "%s/.config" $persistentRoot) "/config" .Values.persistence.enabled }}
+{{- $xdgDataHome := ternary (printf "%s/.local/share" $persistentRoot) "/data/xdg" .Values.persistence.enabled }}
+{{- $skillLedgerConfigDir := printf "%s/agent-sec/skill-ledger" $xdgConfigHome }}
+{{- $skillLedgerDataDir := printf "%s/agent-sec/skill-ledger" $xdgDataHome }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,6 +54,140 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $skillfsEnabled }}
+      shareProcessNamespace: true
+      initContainers:
+        - name: prepare
+          image: {{ include "agent-sec-sidecar.skillfsPrepareImage" . | quote }}
+          imagePullPolicy: {{ .Values.skillfs.prepare.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+          args:
+            - |
+              install -d -m 0750 /var/lib/skillfs/source
+              install -d -m 0750 /var/lib/skillfs/shared/mount
+              install -d -m 0700 /run/anolisa/skillfs
+              install -d -m 0700 {{ $skillLedgerConfigDir | quote }}
+              install -d -m 0700 {{ $skillLedgerDataDir | quote }} /data/diagnostics
+              chmod 0700 /run/anolisa/skillfs
+              chmod 0700 {{ $skillLedgerConfigDir | quote }} {{ $skillLedgerDataDir | quote }} /data/diagnostics
+              printf '%s\n' \
+                'root:x:0:0:root:/root:/bin/bash' \
+                'skillfs:x:10001:10001:SkillFS runtime:/nonexistent:/usr/sbin/nologin' \
+                > /identity/passwd
+              printf '%s\n' \
+                'root:x:0:' \
+                'skillfs:x:10001:' \
+                > /identity/group
+              chmod 0644 /identity/passwd /identity/group
+              printf '%s\n' \
+                '{' \
+                '  "activationPolicy": "pass_warn_only",' \
+                '  "enableDefaultSkillDirs": false,' \
+                '  "managedSkillDirs": []' \
+                '}' \
+                > {{ printf "%s/config.json" $skillLedgerConfigDir | quote }}
+              chmod 0600 {{ printf "%s/config.json" $skillLedgerConfigDir | quote }}
+              head -c 32 /dev/urandom > /private-auth/control.key
+              head -c 32 /dev/urandom > /private-auth/notify.key
+              chmod 0400 /private-auth/control.key /private-auth/notify.key
+              chown -R 10001:10001 \
+                /var/lib/skillfs/source \
+                /var/lib/skillfs/shared/mount \
+                /run/anolisa/skillfs \
+                {{ $skillLedgerConfigDir | quote }} \
+                {{ $skillLedgerDataDir | quote }} \
+                /data/diagnostics
+              chown 10001:10001 /private-auth/control.key /private-auth/notify.key
+          securityContext:
+            {{- toYaml .Values.skillfs.prepare.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.skillfs.prepare.resources | nindent 12 }}
+          volumeMounts:
+            - name: skillfs-source
+              mountPath: /var/lib/skillfs/source
+            - name: skillfs-shared
+              mountPath: /var/lib/skillfs/shared
+            - name: runtime
+              mountPath: /run/anolisa
+            - name: skillfs-auth
+              mountPath: /private-auth
+            - name: skillfs-config
+              mountPath: /config
+            - name: skillfs-data
+              mountPath: /data
+            - name: skillfs-identity
+              mountPath: /identity
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath | quote }}
+            {{- end }}
+        - name: skillfs
+          restartPolicy: Always
+          image: {{ include "agent-sec-sidecar.skillfsImage" . | quote }}
+          imagePullPolicy: {{ .Values.skillfs.image.pullPolicy }}
+          env:
+            - name: SKILLFS_SOURCE
+              value: /var/lib/skillfs/source
+            - name: SKILLFS_MOUNTPOINT
+              value: /var/lib/skillfs/shared/mount
+            - name: SKILLFS_DISCOVER_ROOT
+              value: /var/lib/skillfs/shared/mount/skills
+            - name: SKILLFS_EXTRA_ARGS
+              value: >-
+                --security --activation-mode file --activation-reload-mode poll
+                --notify-socket {{ include "agent-sec-sidecar.socketPath" . }}
+                --notify-auth-key-file /run/anolisa/auth/notify.key
+                --control-socket {{ printf "%s/skillfs/control.sock" (trimSuffix "/" .Values.runtime.mountPath) }}
+                --trusted-peer-key-file /run/anolisa/auth/control.key
+            - name: RUST_LOG
+              value: info
+          securityContext:
+            {{- toYaml .Values.skillfs.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.skillfs.resources | nindent 12 }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -ec
+                - |
+                  awk -v target="$SKILLFS_MOUNTPOINT" '
+                    $5 == target {
+                      for (i = 7; i <= NF; i++) {
+                        if ($i == "-" && $(i + 1) ~ /^fuse/) { found = 1 }
+                      }
+                    }
+                    END { exit(found ? 0 : 1) }
+                  ' /proc/self/mountinfo
+            periodSeconds: {{ .Values.skillfs.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.skillfs.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.skillfs.startupProbe.failureThreshold }}
+          volumeMounts:
+            - name: skillfs-source
+              mountPath: /var/lib/skillfs/source
+            - name: skillfs-shared
+              mountPath: /var/lib/skillfs/shared
+              mountPropagation: Bidirectional
+            - name: runtime
+              mountPath: {{ .Values.runtime.mountPath | quote }}
+            - name: skillfs-auth
+              mountPath: /run/anolisa/auth
+              readOnly: true
+            - name: fuse-device
+              mountPath: /dev/fuse
+            - name: skillfs-identity
+              mountPath: /etc/passwd
+              subPath: passwd
+              readOnly: true
+            - name: skillfs-identity
+              mountPath: /etc/group
+              subPath: group
+              readOnly: true
+      {{- end }}
       containers:
         - name: agent-sec-cli
           image: "{{ .Values.cli.image.repository }}:{{ .Values.cli.image.tag | default .Chart.AppVersion }}"
@@ -70,6 +211,8 @@ spec:
               value: {{ .Values.modelService.baseUrl | quote }}
             - name: AGENT_SEC_MODEL_SERVICE_TIMEOUT
               value: {{ .Values.modelService.timeoutSeconds | quote }}
+            - name: PROMPT_SCANNER_L2_MODEL
+              value: {{ .Values.ollama.model | quote }}
             {{- if .Values.persistence.enabled }}
             - name: AGENT_SEC_DATA_DIR
               value: {{ include "agent-sec-sidecar.dataPath" . | quote }}
@@ -92,6 +235,11 @@ spec:
           volumeMounts:
             - name: runtime
               mountPath: {{ .Values.runtime.mountPath | quote }}
+            {{- if $skillfsEnabled }}
+            - name: skillfs-shared
+              mountPath: /var/lib/skillfs/shared
+              mountPropagation: HostToContainer
+            {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: {{ .Values.persistence.mountPath | quote }}
@@ -113,23 +261,43 @@ spec:
             {{- if .Values.persistence.enabled }}
             - name: AGENT_SEC_DATA_DIR
               value: {{ include "agent-sec-sidecar.dataPath" . | quote }}
+            {{- else if $skillfsEnabled }}
+            - name: AGENT_SEC_DATA_DIR
+              value: /data/diagnostics
+            {{- end }}
+            {{- if $skillfsEnabled }}
+            - name: AGENT_SEC_SKILLFS_CONTROL_SOCKET
+              value: {{ printf "%s/skillfs/control.sock" (trimSuffix "/" .Values.runtime.mountPath) | quote }}
+            - name: AGENT_SEC_SKILLFS_CONTROL_AUTH_KEY_FILE
+              value: /run/anolisa/auth/control.key
+            - name: AGENT_SEC_SKILLFS_NOTIFY_AUTH_KEY_FILE
+              value: /run/anolisa/auth/notify.key
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
             - name: HOME
               value: {{ .Values.persistence.mountPath | quote }}
             - name: XDG_CACHE_HOME
               value: {{ printf "%s/cache" (trimSuffix "/" .Values.persistence.mountPath) | quote }}
             - name: XDG_CONFIG_HOME
-              value: {{ printf "%s/config" (trimSuffix "/" .Values.persistence.mountPath) | quote }}
+              value: {{ $xdgConfigHome | quote }}
             - name: XDG_DATA_HOME
-              value: {{ printf "%s/data" (trimSuffix "/" .Values.persistence.mountPath) | quote }}
+              value: {{ $xdgDataHome | quote }}
             {{- else }}
             - name: HOME
               value: /tmp/agent-sec-home
             - name: XDG_CACHE_HOME
               value: /tmp/agent-sec-cache
+            {{- if $skillfsEnabled }}
+            - name: XDG_CONFIG_HOME
+              value: /config
+            - name: XDG_DATA_HOME
+              value: /data/xdg
+            {{- else }}
             - name: XDG_CONFIG_HOME
               value: /tmp/agent-sec-config
             - name: XDG_DATA_HOME
               value: /tmp/agent-sec-data
+            {{- end }}
             {{- end }}
             - name: AGENT_SEC_MODEL_SERVICE_BACKEND
               value: {{ .Values.modelService.backend | quote }}
@@ -147,6 +315,21 @@ spec:
           volumeMounts:
             - name: runtime
               mountPath: {{ .Values.runtime.mountPath | quote }}
+            {{- if $skillfsEnabled }}
+            - name: skillfs-source
+              mountPath: /var/lib/skillfs/source
+            - name: skillfs-shared
+              mountPath: /var/lib/skillfs/shared
+              mountPropagation: HostToContainer
+            - name: skillfs-auth
+              mountPath: /run/anolisa/auth
+              readOnly: true
+            - name: skillfs-config
+              mountPath: /config
+              readOnly: true
+            - name: skillfs-data
+              mountPath: /data
+            {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: {{ .Values.persistence.mountPath | quote }}
@@ -194,6 +377,10 @@ spec:
               value: {{ ternary "1" "0" .Values.ollama.flashAttention | quote }}
             - name: OLLAMA_KV_CACHE_TYPE
               value: {{ .Values.ollama.kvCacheType | quote }}
+            - name: OLLAMA_NUM_PARALLEL
+              value: {{ .Values.ollama.numParallel | quote }}
+            - name: OLLAMA_NUM_CTX
+              value: {{ .Values.ollama.numCtx | quote }}
             - name: OLLAMA_MODEL
               value: {{ .Values.ollama.model | quote }}
             - name: OLLAMA_STARTUP_TIMEOUT_SECONDS
@@ -257,6 +444,25 @@ spec:
           {{- end }}
         {{- end }}
       volumes:
+        {{- if $skillfsEnabled }}
+        - name: skillfs-source
+          emptyDir: {}
+        - name: skillfs-shared
+          emptyDir: {}
+        - name: skillfs-auth
+          emptyDir:
+            medium: Memory
+        - name: skillfs-config
+          emptyDir: {}
+        - name: skillfs-data
+          emptyDir: {}
+        - name: skillfs-identity
+          emptyDir: {}
+        - name: fuse-device
+          hostPath:
+            path: /dev/fuse
+            type: CharDevice
+        {{- end }}
         - name: runtime
           {{- if eq .Values.runtime.volume.type "emptyDir" }}
           emptyDir:

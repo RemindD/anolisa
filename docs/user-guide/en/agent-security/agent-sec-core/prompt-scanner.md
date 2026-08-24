@@ -79,6 +79,21 @@ host's environment and read the `PROMPT_SCANNER_L2_MODEL` entry under `env`. It
 reports the default backend when the variable is unset, and adds a diagnostic
 when the configured name is not one the engine supports.
 
+### Helm Ollama sidecar
+
+The bundled `agent-sec-sidecar` chart uses the Warden model above for its
+internal Ollama service. It passes the same `ollama.model` value to the Agent
+CLI container as `PROMPT_SCANNER_L2_MODEL`, so the scanner requests the model
+that the sidecar actually loads.
+
+The chart defaults `ollama.numCtx` to `4096`, `ollama.numParallel` to `1`, and
+`ollama.kvCacheType` to `q8_0`. On startup, the entrypoint pulls a missing model,
+then re-creates the local tag from its existing layers with
+`PARAMETER num_ctx 4096`. A model-level Modelfile parameter overrides Ollama's
+global context setting, so this step—not `OLLAMA_CONTEXT_LENGTH`—makes
+`OLLAMA_NUM_CTX` effective. Override these values in Helm when a different
+context or KV-cache trade-off is required.
+
 ## Verdicts
 
 The scanner aggregates layer results into one verdict:

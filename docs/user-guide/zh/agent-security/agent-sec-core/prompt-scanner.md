@@ -73,6 +73,18 @@ L2 同一时刻只跑一个后端，不做级联或投票。
 下的 `PROMPT_SCANNER_L2_MODEL` 条目：变量未设置时它会上报默认后端；若配的模型名
 不在引擎支持范围内，还会附一条 diagnostic。
 
+### Helm Ollama sidecar
+
+内置 `agent-sec-sidecar` Chart 的本地 Ollama 服务默认使用上述 Warden 模型。Chart
+同时把 `ollama.model` 作为 `PROMPT_SCANNER_L2_MODEL` 注入 Agent CLI container，保证
+scanner 请求的模型与 sidecar 实际拉取、预热的模型一致。
+
+Chart 默认设置 `ollama.numCtx=4096`、`ollama.numParallel=1` 和
+`ollama.kvCacheType=q8_0`。entrypoint 启动时先拉取缺失模型，再复用已有 layer 原地重建
+本地 tag，并写入 `PARAMETER num_ctx 4096`。模型级 Modelfile 参数会覆盖 Ollama 的全局
+context 设置，因此必须通过这一步才能让 `OLLAMA_NUM_CTX` 生效，不能只设置
+`OLLAMA_CONTEXT_LENGTH`。需要其他 context 或 KV cache 取舍时，可覆盖对应 Helm 值。
+
 ## Verdict
 
 Scanner 将各层结果聚合为一个 verdict：

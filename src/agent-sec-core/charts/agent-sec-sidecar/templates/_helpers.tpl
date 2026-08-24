@@ -47,6 +47,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Pinned SkillFS image used by the native sidecar.
+*/}}
+{{- define "agent-sec-sidecar.skillfsImage" -}}
+{{- if .Values.skillfs.image.digest -}}
+{{- printf "%s@%s" .Values.skillfs.image.repository .Values.skillfs.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.skillfs.image.repository .Values.skillfs.image.tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Bootstrap image used by the one-shot SkillFS prepare container.
+*/}}
+{{- define "agent-sec-sidecar.skillfsPrepareImage" -}}
+{{- if .Values.skillfs.prepare.image.digest -}}
+{{- printf "%s@%s" .Values.skillfs.prepare.image.repository .Values.skillfs.prepare.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.skillfs.prepare.image.repository .Values.skillfs.prepare.image.tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Absolute socket path injected into both containers.
 */}}
 {{- define "agent-sec-sidecar.socketPath" -}}
@@ -145,6 +167,8 @@ Reject volume configurations that cannot preserve Pod-local UDS semantics.
 */}}
 {{- define "agent-sec-sidecar.validateValues" -}}
 {{- $volumeType := .Values.runtime.volume.type -}}
+{{- $skillfs := .Values.skillfs | default dict -}}
+{{- $skillfsEnabled := get $skillfs "enabled" | default false -}}
 {{- $persistence := .Values.persistence | default dict -}}
 {{- $persistenceMountPath := get $persistence "mountPath" -}}
 {{- $dataRelativePath := get $persistence "dataRelativePath" -}}
@@ -163,8 +187,56 @@ Reject volume configurations that cannot preserve Pod-local UDS semantics.
 {{- if not (has .Values.ollama.kvCacheType (list "f16" "q8_0" "q4_0")) -}}
 {{- fail "ollama.kvCacheType must be one of: f16, q8_0, q4_0" -}}
 {{- end -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.ollama.numParallel)) -}}
+{{- fail "ollama.numParallel must be a positive integer" -}}
+{{- end -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.ollama.numCtx)) -}}
+{{- fail "ollama.numCtx must be a positive integer" -}}
+{{- end -}}
 {{- if not (has $volumeType (list "emptyDir" "persistentVolumeClaim")) -}}
 {{- fail "runtime.volume.type must be emptyDir or persistentVolumeClaim" -}}
+{{- end -}}
+{{- if $skillfsEnabled -}}
+{{- if not (semverCompare ">=1.29.0-0" .Capabilities.KubeVersion.Version) -}}
+{{- fail "skillfs.enabled requires Kubernetes >= 1.29 for native sidecars" -}}
+{{- end -}}
+{{- if ne (int .Values.podSecurityContext.runAsUser) 10001 -}}
+{{- fail "skillfs.enabled requires podSecurityContext.runAsUser=10001 while the prepare script uses fixed ownership" -}}
+{{- end -}}
+{{- if ne (int .Values.podSecurityContext.runAsGroup) 10001 -}}
+{{- fail "skillfs.enabled requires podSecurityContext.runAsGroup=10001 while the prepare script uses fixed ownership" -}}
+{{- end -}}
+{{- if ne (int .Values.podSecurityContext.fsGroup) 10001 -}}
+{{- fail "skillfs.enabled requires podSecurityContext.fsGroup=10001 while the prepare script uses fixed ownership" -}}
+{{- end -}}
+{{- range $name, $context := dict "cli.securityContext" .Values.cli.securityContext "daemon.securityContext" .Values.daemon.securityContext "skillfs.securityContext" .Values.skillfs.securityContext -}}
+{{- if and (hasKey $context "runAsUser") (ne (int $context.runAsUser) 10001) -}}
+{{- fail (printf "%s.runAsUser must be 10001 when skillfs is enabled" $name) -}}
+{{- end -}}
+{{- if and (hasKey $context "runAsGroup") (ne (int $context.runAsGroup) 10001) -}}
+{{- fail (printf "%s.runAsGroup must be 10001 when skillfs is enabled" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.skillfs.securityContext.privileged -}}
+{{- fail "skillfs.securityContext.privileged must be true for /dev/fuse and bidirectional mount propagation" -}}
+{{- end -}}
+{{- if ne $volumeType "emptyDir" -}}
+{{- fail "skillfs.enabled requires runtime.volume.type=emptyDir for Pod-local authenticated sockets" -}}
+{{- end -}}
+{{- range $name, $image := dict "skillfs.image" .Values.skillfs.image "skillfs.prepare.image" .Values.skillfs.prepare.image -}}
+{{- if empty $image.repository -}}
+{{- fail (printf "%s.repository must not be empty" $name) -}}
+{{- end -}}
+{{- if and $image.tag $image.digest -}}
+{{- fail (printf "%s must set either tag or digest, not both" $name) -}}
+{{- end -}}
+{{- if and (empty $image.tag) (empty $image.digest) -}}
+{{- fail (printf "%s must set tag or digest" $name) -}}
+{{- end -}}
+{{- if and $image.digest (not (regexMatch "^sha256:[a-f0-9]{64}$" $image.digest)) -}}
+{{- fail (printf "%s.digest must be a sha256 digest" $name) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if not (hasPrefix "/" .Values.runtime.mountPath) -}}
 {{- fail "runtime.mountPath must be an absolute path" -}}

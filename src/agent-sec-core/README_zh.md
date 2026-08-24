@@ -260,6 +260,10 @@ L2 分类器默认使用 ModelScope 上的
 后端都需各自执行 `ollama pull`。`warmup` 只检查 Ollama 能否提供当前选定的模型，
 不会自动下载模型。
 
+内置 Helm Chart 的本地 Ollama sidecar 默认选择上述 Warden 模型，设置
+`OLLAMA_NUM_PARALLEL=1`，并在 entrypoint 启动时把 `OLLAMA_NUM_CTX=4096` 写成模型级
+`num_ctx` 参数。独立 CLI 的默认模型仍是 Qwen3Guard。
+
 详见 [Prompt Scanner 用户使用指南](../../docs/user-guide/zh/agent-security/agent-sec-core/prompt-scanner.md)。
 
 ## Code Scanner
@@ -368,6 +372,12 @@ HMAC；daemon 的其他 method 继续兼容现有明文协议。
 认证 key 路径必须是绝对路径，并指向 effective user 所有的普通非 symlink 文件，且不得
 设置任何 group/other 权限位。key 文件原始长度必须为 32–4096 bytes。完整的双 key 部署和
 容器卷要求见 Skill Ledger 用户手册。
+
+仓库内置 Helm Chart 可通过 `skillfs.enabled=true` 部署当前带认证的 SkillFS smoke
+拓扑。Chart 先运行一次性 Alinux 4 prepare container，再启动可独立重启的 SkillFS native
+sidecar；两个生成的 key 保存在 memory-backed volume 中，长期运行的 container 仅以只读
+方式挂载，并统一使用数字 UID/GID `10001`。Kubernetes 和 `/dev/fuse` 前置条件见
+[Chart 部署指南](charts/agent-sec-sidecar/README.md)。
 
 内置 Qoder CLI plugin 为 `Skill` tool 注册 `PreToolUse` hook。hook 先从
 `~/.qoder/skills/` 解析用户级 Skill，再从 `<cwd>/.qoder/skills/` 解析项目级
