@@ -42,6 +42,9 @@ mod path_prompt_tests;
 #[allow(dead_code)]
 #[path = "question/public.rs"]
 mod question;
+#[cfg(test)]
+#[path = "ui/question_presentation_tests.rs"]
+mod question_presentation_tests;
 #[path = "raw_input/public.rs"]
 pub mod raw_input;
 #[cfg(test)]
