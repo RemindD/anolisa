@@ -14,6 +14,7 @@ members = [
     "crates/daemon/asc-daemon-protocol",
     "crates/daemon/asc-daemon-client",
     "crates/daemon/asc-daemon-core",
+    "tests/e2e",
 ]
 
 [workspace.package]

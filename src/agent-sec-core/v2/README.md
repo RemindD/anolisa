@@ -283,5 +283,13 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+The process-level Policy CRUD suite under [`tests/e2e`](tests/e2e/README.md)
+starts the real `asc-daemon` and drives it exclusively through the real
+`asc-cli` binary with a file-backed SQLite database. Run it directly with:
+
+```bash
+cargo test -p asc-e2e-tests --test policy_crud
+```
+
 The canonical method inventory and request examples live in
 `fixtures/daemon/policy-methods.json`.

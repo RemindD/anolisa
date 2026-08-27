@@ -155,6 +155,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-e2e-tests"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "asc-foundation-types"
 version = "0.1.0"
 dependencies = [
