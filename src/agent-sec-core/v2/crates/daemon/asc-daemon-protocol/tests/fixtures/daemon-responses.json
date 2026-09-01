@@ -1,0 +1,22 @@
+[
+  {
+    "name": "list-policies-success",
+    "response": {
+      "requestId": "request-policy-list",
+      "result": {
+        "items": [],
+        "total": 0
+      }
+    }
+  },
+  {
+    "name": "policy-not-found",
+    "response": {
+      "requestId": "request-policy-get",
+      "error": {
+        "code": "not_found",
+        "message": "requested policy resource was not found"
+      }
+    }
+  }
+]
