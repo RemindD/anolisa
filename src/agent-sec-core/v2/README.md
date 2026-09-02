@@ -1,10 +1,18 @@
-# AgentSecCore V2 Policy foundation and PAP
+# AgentSecCore V2 Policy foundation, PAP, and daemon request slice
 
 This workspace slice contains the dependency-light contracts and Policy
-Administration Point used by later AgentSecCore V2 Policy and daemon work
-packages. It deliberately contains no daemon process, persistence
-implementation, concrete Policy compiler, Policy runtime, reconciliation
-worker, outbox, or target Adapter.
+Administration Point plus the local-peer request path from daemon protocol
+to PAP. It deliberately contains no socket listener, persistence
+implementation, concrete production Policy compiler, Policy runtime,
+reconciliation worker, outbox, or target Adapter.
+
+This in-process PAP slice is not a drop-in replacement for the supported V1
+daemon socket and must not be registered there yet. TODO(daemon-transport-compat):
+implement or version the V1 envelope, caller, timeout, request-ID, and unknown
+field behavior before socket integration. TODO(daemon-process-health): add
+`daemon.health` only with its complete compatible payload and conformance
+fixtures. TODO(daemon-otel): add W3C carriers only together with extraction and
+context attachment around application dispatch.
 
 The current crates are:
 
@@ -13,6 +21,52 @@ The current crates are:
   backend-independent IR, and target Adapter contracts.
 - `asc-pap`: transport-independent Policy/Scope revision CRUD and Binding
   spec/lifecycle CRUD over explicit compiler and repository ports.
+- `asc-daemon-protocol`: strict PAP wire envelopes, method inventory, and
+  prepared Policy/Scope/Binding result contracts.
+- `asc-daemon-core`: trusted Principal authorization through a
+  `PolicyAdministration` implementation directly over the concrete `PapService`.
+- `asc-daemon`: temporary trusted-peer admission plus type-erased PAP handler
+  dispatch, DTO projection, and structured service error projection.
+
+The request-level integration test uses serialized Policy, Scope, and Binding
+CRUD protocol envelopes and the real `PapService`. Only its explicit
+`PapRepository` and `PolicyCompiler` ports are replaced with in-memory fakes.
+Socket framing, authentication binding, SQLite, and a production compiler
+remain later composition work.
+TODO(daemon-auth): before production use, replace temporary socket-peer
+admission with reviewed server-side authentication and role policy.
+
+## Daemon response contract
+
+Every decoded response contains a daemon-generated `requestId` and
+exactly one of `result` or `error`. Successful method results and structured
+errors are different wire shapes, so invalid combinations cannot be produced
+by the Rust type. For example:
+
+```json
+{"requestId":"request-policy-list","result":{"items":[],"total":0}}
+```
+
+```json
+{
+  "requestId": "request-policy-get",
+  "error": {
+    "code": "not_found",
+    "message": "requested policy resource was not found"
+  }
+}
+```
+
+The stable error-code registry accepts syntactically valid unregistered codes.
+Clients match on `error.code`; `error.message` is bounded, sanitized display
+text and is not a machine contract. Transport failures produce no
+`DaemonResponse`.
+
+The response has no generic `ok`, `data`, `stdout`, `stderr`, or
+`exitCode`. CLI rendering and process exit codes belong to `asc-cli`. Constant
+success dispositions such as `STORED` and `DELETED` are also omitted: the
+presence of `result` establishes success, while meaningful asynchronous state
+such as Binding `PENDING_APPLY` and `PENDING_DELETE` remains in the result.
 
 ## Binding spec and lifecycle boundary
 
@@ -99,9 +153,30 @@ its reconcile intent atomically; define the operation ordering/CAS token needed
 to reject stale results and ABA; then implement claim, retry, completion,
 failure, restart recovery, and cancellation using the transitions above.
 
-Daemon protocol, client, process, concrete persistence/compiler, and Policy
-runtime crates belong to later work packages and are intentionally absent from
-this slice.
+Each resource exposes separate `create` and `update` methods. A create request
+omits the server-generated resource identity; an update request requires it.
+The protocol does not multiplex those commands through `.put` or infer the
+operation from an optional identity. Policy and Scope use the same explicit
+`{create,update,get,list,delete}` inventory described here for Binding.
+
+The daemon protocol exposes the Binding desired-state boundary through five
+explicit allowlisted methods:
+
+| Method | Parameters | Result semantics |
+|---|---|---|
+| `policy.bindings.create` | exact Policy and Scope IDs/revisions | creates a server-identified immutable spec and returns its current `BindingView` |
+| `policy.bindings.update` | required `bindingId` plus exact Policy and Scope IDs/revisions | updates the existing identity and returns its current `BindingView` |
+| `policy.bindings.get` | `id` | returns the current immutable spec and lifecycle status |
+| `policy.bindings.list` | bounded `limit`/`offset` | returns current `BindingView` records and the unpaginated total |
+| `policy.bindings.delete` | `id` | records Delete intent and returns the resulting `BindingView` |
+
+`policy.bindings.delete` does not synchronously remove the immutable spec and
+does not claim target-side detach. Callers must interpret the returned `status`;
+without a reconciler, a newly accepted delete remains `PENDING_DELETE`.
+
+Daemon socket transport, client, process bootstrap, concrete
+persistence/compiler, and Policy runtime crates belong to later work packages
+and are intentionally absent from this slice.
 
 Run the branch-owned validation from this directory:
 
