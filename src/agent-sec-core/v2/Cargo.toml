@@ -6,6 +6,7 @@ members = [
     "apps/asc-daemon",
     "crates/daemon/asc-daemon-service",
     "crates/foundation/asc-foundation-types",
+    "crates/integrations/asc-agentsight-client",
     "crates/policy/adapters/asc-policy-adapter-agentsight",
     "crates/policy/asc-pap",
     "crates/policy/asc-policy-types",
@@ -21,6 +22,7 @@ publish = false
 
 [workspace.dependencies]
 actplane-ifc-compiler = { git = "https://github.com/eunomia-bpf/ActPlane.git", rev = "a62e5d9d96f91101cda019519053e950d532380a" }
+asc-agentsight-client = { path = "crates/integrations/asc-agentsight-client" }
 asc-daemon-service = { path = "crates/daemon/asc-daemon-service" }
 asc-foundation-types = { path = "crates/foundation/asc-foundation-types" }
 asc-pap = { path = "crates/policy/asc-pap" }
@@ -32,7 +34,9 @@ sha2 = "0.10"
 thiserror = "2"
 time = { version = "=0.3.44", features = ["parsing"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-uuid = { version = "1", features = ["v4"] }
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "v5"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
