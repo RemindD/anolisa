@@ -1,11 +1,12 @@
-# AgentSecCore V2 Policy foundation, PAP, and daemon service bring-up
+# AgentSecCore V2 Policy delivery building blocks
 
 This workspace slice contains the dependency-light contracts shared by later
 AgentSecCore V2 Policy and daemon work packages, the Policy Administration
 Point, the protocol-independent Unix-domain-socket service framework, and a
-runnable foreground process bootstrap. It deliberately contains no daemon wire
-protocol, persistence implementation, concrete Policy compiler, Policy runtime,
-reconciliation worker, outbox, or target Adapter.
+runnable foreground process bootstrap, plus the first AgentSight file-deletion
+Adapter and its independent deployment Client. It deliberately contains no
+daemon wire protocol, persistence implementation, concrete Policy compiler,
+Policy runtime, reconciliation worker, or outbox.
 
 The current crates are:
 
@@ -14,6 +15,11 @@ The current crates are:
   snapshots, backend-independent IR, and target Adapter contracts.
 - `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
   monotonic revisions over explicit compiler and repository ports.
+- `asc-policy-adapter-agentsight`: deterministic file-deletion and PID-Scope
+  translation into a compiler-checked AgentSight/ActPlane plan.
+- `asc-agentsight-client`: health-gated AgentSight apply/delete transport for
+  one configured endpoint, with process identity resolution and complete HTTP
+  fixtures. It does not depend on a reconciliation framework.
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
@@ -167,8 +173,8 @@ protocol-only error encoder implements `RejectionEncoder`. PAP becomes one
 registered method family inside the dispatcher; the service framework and
 rejection path remain independent of PAP, its compiler, and its repository.
 
-Daemon protocol, client, persistence, and Policy runtime crates belong to later
-work packages and are intentionally absent from this slice.
+Daemon wire protocol, persistence, reconciliation, and Policy runtime crates
+belong to later work packages and are intentionally absent from this slice.
 
 Run the branch-owned validation from this directory:
 
