@@ -3,6 +3,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "apps/asc-daemon",
+    "crates/daemon/asc-daemon-service",
     "crates/foundation/asc-foundation-types",
     "crates/policy/asc-pap",
     "crates/policy/asc-policy-types",
@@ -17,6 +19,7 @@ repository = "https://github.com/alibaba/anolisa"
 publish = false
 
 [workspace.dependencies]
+asc-daemon-service = { path = "crates/daemon/asc-daemon-service" }
 asc-foundation-types = { path = "crates/foundation/asc-foundation-types" }
 asc-pap = { path = "crates/policy/asc-pap" }
 asc-policy-types = { path = "crates/policy/asc-policy-types" }
@@ -26,6 +29,7 @@ sha2 = "0.10"
 thiserror = "2"
 time = { version = "=0.3.44", features = ["parsing"] }
 uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
