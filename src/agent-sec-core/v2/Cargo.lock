@@ -25,12 +25,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-cli"
+version = "0.1.0"
+dependencies = [
+ "asc-daemon-protocol",
+ "asc-foundation-types",
+ "asc-policy-types",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "asc-daemon"
 version = "0.1.0"
 dependencies = [
+ "asc-agentsight-client",
+ "asc-cli",
+ "asc-daemon-protocol",
  "asc-daemon-service",
+ "asc-pap",
+ "asc-policy-runtime",
+ "asc-policy-types",
+ "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "asc-daemon-protocol"
+version = "0.1.0"
+dependencies = [
+ "asc-agentsight-client",
+ "asc-daemon-service",
+ "asc-foundation-types",
+ "asc-pap",
+ "asc-policy-runtime",
+ "asc-policy-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -71,6 +105,20 @@ dependencies = [
  "asc-policy-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "asc-policy-runtime"
+version = "0.1.0"
+dependencies = [
+ "asc-agentsight-client",
+ "asc-foundation-types",
+ "asc-pap",
+ "asc-policy-adapter-agentsight",
+ "asc-policy-types",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

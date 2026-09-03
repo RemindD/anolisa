@@ -14,6 +14,7 @@ struct RunningBinary {
     child: Child,
     directory: PathBuf,
     socket_path: PathBuf,
+    token_file: PathBuf,
 }
 
 impl Drop for RunningBinary {
@@ -25,6 +26,7 @@ impl Drop for RunningBinary {
         if self.socket_path.exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }
+        let _ = std::fs::remove_file(&self.token_file);
         let _ = std::fs::remove_dir(&self.directory);
     }
 }
@@ -95,9 +97,13 @@ async fn binary_starts_in_foreground_and_sigterm_cleans_its_socket() {
     let directory = unique_directory();
     std::fs::create_dir(&directory).unwrap();
     let socket_path = directory.join("daemon.sock");
+    let token_file = directory.join("agentsight.token");
+    std::fs::write(&token_file, "test-token\n").unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_asc-daemon"))
         .args(["serve", "--socket"])
         .arg(&socket_path)
+        .arg("--agentsight-token-file")
+        .arg(&token_file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -107,6 +113,7 @@ async fn binary_starts_in_foreground_and_sigterm_cleans_its_socket() {
         child,
         directory,
         socket_path,
+        token_file,
     };
 
     wait_for_socket(&running.socket_path).await;

@@ -547,6 +547,31 @@ uplift。
 只证明旧方法的行为，不能自动成为全部 action 的默认值。未完成该 fixture 时，action
 handler target 视为尚未达到 contract freeze，不得由实现自行选择默认值。
 
+### 6.12 **[HISTORICAL][POC ONLY]** Policy 到 AgentSight 能力验证方法
+
+聚合验证分支为证明 PAP、daemon framework、Adapter 和 AgentSight Client 可以串联，临时
+注册以下四个开发方法：
+
+| method | params | 结果 |
+| --- | --- | --- |
+| `poc.policy.create` | `policyName`、`template` | `PreparedPolicy` |
+| `poc.scope.create` | `selector` | `PreparedScope` |
+| `poc.binding.create` | Policy/Scope ID 与 revision | 初始 `BindingView` |
+| `poc.binding.get` | `bindingId` | 当前 `BindingView` |
+
+这些方法不是 V1 compatibility surface，也不是已冻结的 V2 product protocol。POC request
+只接受 `method` 和 `params`，并禁止未知字段；因此它不声称兼容本文件第 3 节允许的 V1
+扩展字段。method 使用 `poc.` 前缀就是为了避免把临时 DTO 误认为产品承诺。框架仍从
+内核获取 peer credentials，但该 POC 尚未实现多 UID authorization 或 QueryScope。
+
+`poc.binding.create` 在 PAP 写入 `PENDING_APPLY` 后投递到进程内 bounded queue；返回的
+创建响应固定反映该初始状态。异步 worker 通过 revision/status CAS 进入 `APPLYING`，再
+结束于 `READY` 或 `APPLY_FAILED`。queue 与 Repository 均不持久化，且没有 retry、sweep、
+restart recovery、unknown-outcome recovery 或 delete reconciliation。对应完整 request
+fixtures 位于 `v2/fixtures/daemon/poc-*.request.json`。这些 fixture 只能作为本次能力验证
+输入；未来 V2 protocol Definition Review 必须用版本化 product fixture 替换，不能直接
+继承 `poc.*` 名称或 schema。
+
 ## 7. Canonical SecurityEvent envelope
 
 query method 返回的 event 具有以下稳定字段：

@@ -3,10 +3,13 @@
 [workspace]
 resolver = "3"
 members = [
+    "apps/asc-cli",
     "apps/asc-daemon",
     "crates/daemon/asc-daemon-service",
+    "crates/daemon/asc-daemon-protocol",
     "crates/foundation/asc-foundation-types",
     "crates/policy/asc-pap",
+    "crates/policy/asc-policy-runtime",
     "crates/integrations/asc-agentsight-client",
     "crates/policy/adapters/asc-policy-adapter-agentsight",
     "crates/policy/asc-policy-types",
@@ -23,9 +26,12 @@ publish = false
 [workspace.dependencies]
 actplane-ifc-compiler = { git = "https://github.com/eunomia-bpf/ActPlane.git", rev = "a62e5d9d96f91101cda019519053e950d532380a" }
 asc-agentsight-client = { path = "crates/integrations/asc-agentsight-client" }
+asc-cli = { path = "apps/asc-cli" }
 asc-daemon-service = { path = "crates/daemon/asc-daemon-service" }
+asc-daemon-protocol = { path = "crates/daemon/asc-daemon-protocol" }
 asc-foundation-types = { path = "crates/foundation/asc-foundation-types" }
 asc-pap = { path = "crates/policy/asc-pap" }
+asc-policy-runtime = { path = "crates/policy/asc-policy-runtime" }
 asc-policy-adapter-agentsight = { path = "crates/policy/adapters/asc-policy-adapter-agentsight" }
 asc-policy-types = { path = "crates/policy/asc-policy-types" }
 serde = { version = "1", features = ["derive"] }

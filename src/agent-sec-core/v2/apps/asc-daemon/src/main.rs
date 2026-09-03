@@ -1,9 +1,9 @@
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
-use asc_daemon::{
-    Cli, ParseOutcome, ProcessSignals, run_with_shutdown_timeout, serve_without_handlers,
-};
+use asc_agentsight_client::AgentSightClient;
+use asc_daemon::{Cli, ParseOutcome, ProcessSignals, run_with_shutdown_timeout, serve_policy_poc};
 use asc_daemon_service::ShutdownToken;
 
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -34,6 +34,17 @@ async fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    let client = match AgentSightClient::new_with_token_file(
+        &cli.policy.agentsight_url,
+        &cli.policy.agentsight_token_file,
+    ) {
+        Ok(client) => Arc::new(client),
+        Err(problem) => {
+            report_error(&problem);
+            return ExitCode::FAILURE;
+        }
+    };
+
     let signals = match ProcessSignals::install() {
         Ok(signals) => signals,
         Err(problem) => {
@@ -43,7 +54,7 @@ async fn run() -> ExitCode {
     };
     let shutdown = ShutdownToken::new();
     let signal_task = tokio::spawn(signals.request_shutdown(shutdown.clone()));
-    let result = serve_without_handlers(cli.bootstrap, shutdown).await;
+    let result = serve_policy_poc(cli.bootstrap, client, shutdown).await;
     signal_task.abort();
 
     match result {

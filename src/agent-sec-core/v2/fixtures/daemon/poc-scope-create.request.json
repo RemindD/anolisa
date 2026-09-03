@@ -1,0 +1,9 @@
+{
+  "method": "poc.scope.create",
+  "params": {
+    "selector": {
+      "kind": "pid",
+      "pid": 4242
+    }
+  }
+}

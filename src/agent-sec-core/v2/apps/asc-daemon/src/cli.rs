@@ -2,18 +2,42 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use asc_agentsight_client::{DEFAULT_AGENTSIGHT_BASE_URL, DEFAULT_AGENTSIGHT_TOKEN_FILE};
+
 use crate::BootstrapConfig;
 
-const HELP: &str = "Usage: asc-daemon [serve] --socket <ABSOLUTE_PATH>\n\
+const HELP: &str = "Usage: asc-daemon [serve] --socket <ABSOLUTE_PATH> [OPTIONS]\n\
 \n\
-Runs the protocol-independent AgentSecCore V2 UDS service.\n\
-This bring-up binary has no registered daemon methods yet.\n";
+Runs the AgentSecCore V2 Policy capability-validation POC.\n\
+Options:\n\
+  --agentsight-url <URL>          AgentSight API root\n\
+  --agentsight-token-file <PATH>  AgentSight Bearer token file\n";
 
 /// Parsed command-line configuration for the daemon process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cli {
     /// Bootstrap configuration selected by the explicit process invocation.
     pub bootstrap: BootstrapConfig,
+    /// POC `AgentSight` client configuration.
+    pub policy: PolicyPocConfig,
+}
+
+/// External endpoint configuration for the Policy POC worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyPocConfig {
+    /// `AgentSight` API root.
+    pub agentsight_url: String,
+    /// Bearer-token file read once during daemon startup.
+    pub agentsight_token_file: PathBuf,
+}
+
+impl Default for PolicyPocConfig {
+    fn default() -> Self {
+        Self {
+            agentsight_url: DEFAULT_AGENTSIGHT_BASE_URL.to_owned(),
+            agentsight_token_file: PathBuf::from(DEFAULT_AGENTSIGHT_TOKEN_FILE),
+        }
+    }
 }
 
 /// Successful command-line parse outcome.
@@ -43,6 +67,8 @@ impl Cli {
         let mut arguments = arguments.into_iter().map(Into::into);
         let _program = arguments.next();
         let mut socket_path = None;
+        let mut agentsight_url = None;
+        let mut agentsight_token_file = None;
         let mut command_seen = false;
 
         while let Some(argument) = arguments.next() {
@@ -64,6 +90,32 @@ impl Cli {
                 socket_path = Some(PathBuf::from(value));
                 continue;
             }
+            if argument == OsStr::new("--agentsight-url") {
+                if agentsight_url.is_some() {
+                    return Err(CliError::RepeatedAgentSightUrl);
+                }
+                let value = arguments
+                    .next()
+                    .ok_or(CliError::MissingAgentSightUrlValue)?;
+                if value.is_empty() {
+                    return Err(CliError::MissingAgentSightUrlValue);
+                }
+                agentsight_url = Some(value.to_string_lossy().into_owned());
+                continue;
+            }
+            if argument == OsStr::new("--agentsight-token-file") {
+                if agentsight_token_file.is_some() {
+                    return Err(CliError::RepeatedAgentSightTokenFile);
+                }
+                let value = arguments
+                    .next()
+                    .ok_or(CliError::MissingAgentSightTokenFileValue)?;
+                if value.is_empty() {
+                    return Err(CliError::MissingAgentSightTokenFileValue);
+                }
+                agentsight_token_file = Some(PathBuf::from(value));
+                continue;
+            }
 
             let mut rendered = String::new();
             write!(&mut rendered, "{}", argument.to_string_lossy())
@@ -75,8 +127,14 @@ impl Cli {
         if !socket_path.is_absolute() {
             return Err(CliError::RelativeSocket);
         }
+        let defaults = PolicyPocConfig::default();
         Ok(ParseOutcome::Serve(Self {
             bootstrap: BootstrapConfig::new(socket_path),
+            policy: PolicyPocConfig {
+                agentsight_url: agentsight_url.unwrap_or(defaults.agentsight_url),
+                agentsight_token_file: agentsight_token_file
+                    .unwrap_or(defaults.agentsight_token_file),
+            },
         }))
     }
 }
@@ -93,6 +151,18 @@ pub enum CliError {
     /// Supplying multiple socket paths is ambiguous.
     #[error("--socket may be specified only once")]
     RepeatedSocket,
+    /// `--agentsight-url` was not followed by a value.
+    #[error("--agentsight-url requires a value")]
+    MissingAgentSightUrlValue,
+    /// More than one `AgentSight` API root was supplied.
+    #[error("--agentsight-url may be specified only once")]
+    RepeatedAgentSightUrl,
+    /// `--agentsight-token-file` was not followed by a value.
+    #[error("--agentsight-token-file requires a value")]
+    MissingAgentSightTokenFileValue,
+    /// More than one `AgentSight` token file was supplied.
+    #[error("--agentsight-token-file may be specified only once")]
+    RepeatedAgentSightTokenFile,
     /// The service framework rejects relative daemon endpoints.
     #[error("--socket must be an absolute path")]
     RelativeSocket,
@@ -133,6 +203,28 @@ mod tests {
                 "/run/two.sock",
             ]),
             Err(CliError::RepeatedSocket)
+        );
+    }
+
+    #[test]
+    fn parses_explicit_agentsight_endpoint_and_token_file() {
+        let ParseOutcome::Serve(cli) = Cli::parse_from([
+            "asc-daemon",
+            "serve",
+            "--socket",
+            "/run/asc/daemon.sock",
+            "--agentsight-url",
+            "http://127.0.0.1:17396/api",
+            "--agentsight-token-file",
+            "/run/credentials/agentsight-token",
+        ])
+        .unwrap() else {
+            panic!("expected daemon configuration")
+        };
+        assert_eq!(cli.policy.agentsight_url, "http://127.0.0.1:17396/api");
+        assert_eq!(
+            cli.policy.agentsight_token_file,
+            PathBuf::from("/run/credentials/agentsight-token")
         );
     }
 }

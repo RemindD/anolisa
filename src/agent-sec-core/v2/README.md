@@ -4,9 +4,10 @@ This workspace slice contains the dependency-light contracts shared by later
 AgentSecCore V2 Policy and daemon work packages, the Policy Administration
 Point, the protocol-independent Unix-domain-socket service framework, and a
 runnable foreground process bootstrap, plus the first AgentSight file-deletion
-Adapter and its independent deployment Client. It deliberately contains no
-daemon wire protocol, persistence implementation, concrete Policy compiler,
-Policy runtime, reconciliation worker, or outbox.
+Adapter and its independent deployment Client. This branch additionally wires
+those parts into a deliberately non-durable capability-validation POC. It still
+contains no product daemon protocol, durable persistence, transactional outbox,
+restart recovery, retry loop, or general reconciliation framework.
 
 The current crates are:
 
@@ -15,6 +16,8 @@ The current crates are:
   snapshots, backend-independent IR, and target Adapter contracts.
 - `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
   monotonic revisions over explicit compiler and repository ports.
+- `asc-policy-runtime`: POC-only `prevent_file_deletion` compiler, serialized
+  in-memory Repository, and bounded single-consumer apply queue.
 - `asc-policy-adapter-agentsight`: deterministic file-deletion and PID-Scope
   translation into a compiler-checked AgentSight/ActPlane plan.
 - `asc-agentsight-client`: health-gated AgentSight apply/delete transport for
@@ -23,9 +26,14 @@ The current crates are:
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
+- `asc-daemon-protocol`: strict POC JSON adapter with four explicit `poc.*`
+  Policy methods and a protocol-only transport rejection encoder.
 - `asc-daemon`: foreground process/bootstrap that installs Unix signal handling,
   selects explicit transport limits, binds an explicitly supplied socket, and
-  runs `asc-daemon-service`.
+  composes PAP, the POC runtime, and the AgentSight Client over
+  `asc-daemon-service`.
+- `asc-cli`: minimal daemon-only Rust client for Policy create, Scope create,
+  Binding create, and Binding status reads.
 
 ## Current-record revision boundary
 
@@ -124,13 +132,20 @@ Binding and require the expected current status. Repository implementations
 must repeat the `APPLYING`/`DELETING` admission gate inside the atomic update so
 a worker claim cannot race a PAP pre-check.
 
-The shared state machine is defined and tested now, but the PAP-only phase
-implements no outbox, dispatcher, or reconciler. Therefore
-PAP writes only `PENDING_APPLY` and `PENDING_DELETE`; nothing in this phase
-advances them. TODO(policy-reconciliation): persist each accepted current
-Binding replacement and its reconcile intent atomically, then let the future
-Reconciler consume one complete `BindingView` whose embedded revision fences
-claim, retry, completion, failure, restart recovery, and cancellation.
+The `asc-pap` crate itself still implements no outbox, dispatcher, or
+reconciler: PAP writes only pending states. The capability-validation runtime
+adds a bounded in-memory queue after a successful Binding write. Its single
+worker reloads and revision-fences the current `BindingView`, claims
+`PENDING_APPLY`, translates it with the AgentSight Adapter, calls the Client,
+and records `READY` or `APPLY_FAILED`. Duplicate queue items are no-ops.
+
+This POC queue is intentionally not atomic with the Repository write and is
+lost on restart. It has no sweep, retry/backoff, unknown-outcome recovery,
+delete path, or Policy-update propagation. A queue admission failure is marked
+`APPLY_FAILED` in memory. TODO(policy-reconciliation): a product implementation
+must persist each accepted Binding replacement and its reconcile intent
+atomically, then use that durable record to fence claim, retry, completion,
+failure, restart recovery, and cancellation.
 
 `asc-daemon-service` is a `PARTIAL_MIGRATION` work package. It preserves the V1
 one-request-per-connection LF/EOF framing, bounded first-frame read, bounded
@@ -154,27 +169,52 @@ it cannot forcibly stop an application blocking call that ignores that signal.
 The framework also cannot prove that a concrete PAP/Repository avoids global
 locks; that remains a required direct-consumer concurrency test at integration.
 
-The current `asc-daemon` executable deliberately registers no wire methods. It
-can start and exercise the real UDS lifecycle, but it closes complete requests
-without a response until the daemon protocol is merged. Socket presence therefore
-does not mean application readiness. It also requires an explicit absolute socket
-path because packaging-owned system paths, singleton/stale-socket policy, runtime
-directory hardening, and readiness remain later process-integration work.
+The current `asc-daemon` executable registers only the four POC methods
+`poc.policy.create`, `poc.scope.create`, `poc.binding.create`, and
+`poc.binding.get`. These names and DTOs validate component composition; they are
+not the reviewed V2 product protocol and carry no compatibility commitment.
+The daemon still requires an explicit absolute socket path because
+packaging-owned system paths, singleton/stale-socket policy, runtime-directory
+hardening, authorization, and readiness remain later process-integration work.
 
-Run the independent transport process in the foreground:
+Run the POC daemon in the foreground:
 
 ```bash
-cargo run -p asc-daemon -- serve --socket /absolute/existing-directory/daemon.sock
+cargo run -p asc-daemon -- serve \
+  --socket /absolute/existing-directory/daemon.sock \
+  --agentsight-url http://127.0.0.1:7396/api \
+  --agentsight-token-file /path/to/agentsight.token
 ```
 
-After protocol integration, the existing daemon handler should implement
-`RequestDispatcher` directly and be injected by this bootstrap. A small
-protocol-only error encoder implements `RejectionEncoder`. PAP becomes one
-registered method family inside the dispatcher; the service framework and
-rejection path remain independent of PAP, its compiler, and its repository.
+Create and observe one supported Binding through the daemon-only Rust CLI:
 
-Daemon wire protocol, persistence, reconciliation, and Policy runtime crates
-belong to later work packages and are intentionally absent from this slice.
+```bash
+cargo run -p asc-cli -- --socket /absolute/existing-directory/daemon.sock \
+  policy create --name "protect files" \
+  --file fixtures/pap/prevent-file-deletion.json
+cargo run -p asc-cli -- --socket /absolute/existing-directory/daemon.sock \
+  scope create --pid 4242
+cargo run -p asc-cli -- --socket /absolute/existing-directory/daemon.sock \
+  binding create --policy-id <POLICY_ID> --policy-revision 1 \
+  --scope-id <SCOPE_ID> --scope-revision 1
+cargo run -p asc-cli -- --socket /absolute/existing-directory/daemon.sock \
+  binding get --binding-id <BINDING_ID>
+```
+
+The product-template fixture is copied unchanged from the earlier `pcp`
+prototype. Its old Canonical IR output is not reused: the current Adapter
+contract requires `ResourceOperation::Delete` plus `FileResolution::PathEntry`,
+where the older prototype emitted namespace mutation plus final-object
+resolution.
+
+`PapDispatcher` implements `RequestDispatcher` and is injected by the process
+bootstrap. `JsonRejectionEncoder` contains no PAP or Repository dependency, so
+the service framework and transport-rejection path remain independent.
+
+Product daemon wire protocol, durable persistence/reconciliation, and the
+production Policy compiler remain later work packages. The POC methods,
+in-memory Repository, and best-effort queue must not be promoted as completion
+evidence for those gaps.
 
 Run the branch-owned validation from this directory:
 

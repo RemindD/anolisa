@@ -1,6 +1,6 @@
 [package]
-name = "asc-daemon"
-description = "AgentSecCore V2 daemon process and composition root"
+name = "asc-policy-runtime"
+description = "POC Policy compiler, repository, and reconciliation runtime for AgentSecCore V2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,16 +10,14 @@ publish.workspace = true
 
 [dependencies]
 asc-agentsight-client = { workspace = true }
-asc-daemon-protocol = { workspace = true }
-asc-daemon-service = { workspace = true }
+asc-foundation-types = { workspace = true }
 asc-pap = { workspace = true }
-asc-policy-runtime = { workspace = true }
+asc-policy-adapter-agentsight = { workspace = true }
+asc-policy-types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-asc-cli = { workspace = true }
-asc-policy-types = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

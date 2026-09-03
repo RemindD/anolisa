@@ -1,11 +1,17 @@
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use asc_daemon_protocol::{JsonRejectionEncoder, PapDispatcher};
 use asc_daemon_service::{
     BindError, BoundUnixSocket, ConfigError, DispatchError, DispatchRequest, RejectedRequest,
     RejectionEncoder, RequestDispatcher, ResponseDisposition, ServeError, ServeReport,
     ServiceConfig, ShutdownToken, UnixService,
+};
+use asc_pap::PapService;
+use asc_policy_runtime::{
+    BindingDeploymentClient, InMemoryPapRepository, PocPolicyCompiler, reconciliation_queue,
 };
 
 const DEFAULT_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -91,6 +97,33 @@ pub async fn serve_without_handlers(
 ) -> Result<ServeReport, BootstrapError> {
     let handlers = Arc::new(NoRegisteredMethods);
     serve(config, handlers.clone(), handlers, shutdown).await
+}
+
+/// Composes the in-memory Policy POC and serves its four allowlisted methods.
+///
+/// The queue and Repository are process-local and deliberately disappear on
+/// restart. This entrypoint is capability-validation evidence, not a durable
+/// delivery implementation.
+///
+/// # Errors
+/// Returns the same transport/bootstrap failures as [`serve`].
+pub async fn serve_policy_poc<C>(
+    config: BootstrapConfig,
+    client: Arc<C>,
+    shutdown: ShutdownToken,
+) -> Result<ServeReport, BootstrapError>
+where
+    C: BindingDeploymentClient,
+{
+    let repository = Arc::new(InMemoryPapRepository::default());
+    let pap = PapService::new(Arc::clone(&repository), Arc::new(PocPolicyCompiler));
+    let capacity = NonZeroUsize::new(16).unwrap_or(NonZeroUsize::MIN);
+    let (queue, worker) = reconciliation_queue(capacity, Arc::clone(&repository), client);
+    let dispatcher = Arc::new(PapDispatcher::new(pap, repository, queue));
+    let worker = tokio::spawn(worker.run());
+    let result = serve(config, dispatcher, Arc::new(JsonRejectionEncoder), shutdown).await;
+    worker.abort();
+    result
 }
 
 struct NoRegisteredMethods;
