@@ -1,11 +1,11 @@
 # AgentSecCore V2 Policy and daemon foundations
 
 This workspace slice contains the dependency-light contracts, Policy
-Administration Point, protocol-independent Unix-domain-socket service framework,
-and runnable foreground process bootstrap used by later AgentSecCore V2 work
-packages. It deliberately contains no daemon wire protocol, concrete persistence
-or Policy compiler, Policy runtime, reconciliation worker, outbox, or target
-Adapter.
+Administration Point, first-version PAP daemon wire contract,
+protocol-independent Unix-domain-socket service framework, and runnable
+foreground process bootstrap used by later AgentSecCore V2 work packages. It
+deliberately contains no daemon protocol handler, concrete persistence or Policy
+compiler, Policy runtime, reconciliation worker, outbox, or target Adapter.
 
 The current crates are:
 
@@ -14,6 +14,9 @@ The current crates are:
   snapshots, backend-independent IR, and target Adapter contracts.
 - `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
   monotonic revisions over explicit compiler and repository ports.
+- `asc-daemon-protocol`: versioned request/response contracts and an explicit
+  allowlist for 15 Policy, Scope, and Binding administration methods. It defines
+  wire values only and does not authenticate callers or invoke PAP.
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
@@ -47,10 +50,11 @@ locks; that remains a required direct-consumer concurrency test at integration.
 
 The current `asc-daemon` executable deliberately registers no wire methods. It
 can start and exercise the real UDS lifecycle, but it closes complete requests
-without a response until the daemon protocol is merged. Socket presence therefore
-does not mean application readiness. It also requires an explicit absolute socket
-path because packaging-owned system paths, singleton/stale-socket policy, runtime
-directory hardening, and readiness remain later process-integration work.
+without a response until the protocol handler is merged. The presence of the
+protocol crate or socket therefore does not mean application readiness. The
+process also requires an explicit absolute socket path because packaging-owned
+system paths, singleton/stale-socket policy, runtime directory hardening, and
+readiness remain later process-integration work.
 
 Run the independent transport process in the foreground:
 
@@ -58,7 +62,7 @@ Run the independent transport process in the foreground:
 cargo run -p asc-daemon -- serve --socket /absolute/existing-directory/daemon.sock
 ```
 
-After protocol integration, the existing daemon handler should implement
+After handler integration, the daemon protocol adapter should implement
 `RequestDispatcher` directly and be injected by this bootstrap. A small
 protocol-only error encoder implements `RejectionEncoder`. PAP becomes one
 registered method family inside the dispatcher; the service framework and
@@ -169,7 +173,7 @@ Binding replacement and its reconcile intent atomically, then let the future
 Reconciler consume one complete `BindingView` whose embedded revision fences
 claim, retry, completion, failure, restart recovery, and cancellation.
 
-Daemon protocol, client, concrete persistence/compiler, Policy runtime,
+Daemon protocol handler/client, concrete persistence/compiler, Policy runtime,
 reconciliation worker, outbox, and target Adapter belong to later work packages
 and are intentionally absent from this slice.
 

@@ -12,6 +12,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-daemon-protocol"
+version = "0.1.0"
+dependencies = [
+ "asc-foundation-types",
+ "asc-policy-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "asc-daemon-service"
 version = "0.1.0"
 dependencies = [

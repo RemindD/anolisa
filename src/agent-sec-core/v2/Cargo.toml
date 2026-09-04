@@ -4,6 +4,7 @@
 resolver = "3"
 members = [
     "apps/asc-daemon",
+    "crates/daemon/asc-daemon-protocol",
     "crates/daemon/asc-daemon-service",
     "crates/foundation/asc-foundation-types",
     "crates/policy/asc-pap",
@@ -19,6 +20,7 @@ repository = "https://github.com/alibaba/anolisa"
 publish = false
 
 [workspace.dependencies]
+asc-daemon-protocol = { path = "crates/daemon/asc-daemon-protocol" }
 asc-daemon-service = { path = "crates/daemon/asc-daemon-service" }
 asc-foundation-types = { path = "crates/foundation/asc-foundation-types" }
 asc-pap = { path = "crates/policy/asc-pap" }
