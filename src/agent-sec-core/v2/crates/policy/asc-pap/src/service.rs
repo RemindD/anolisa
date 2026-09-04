@@ -26,6 +26,13 @@ enum WriteTarget<'a> {
     Update(&'a ResourceId),
 }
 
+#[derive(Clone, Copy)]
+enum BindingWriteTarget<'a> {
+    Create,
+    CreateWithId(&'a ResourceId),
+    Update(&'a ResourceId),
+}
+
 /// Policy Administration Point for transport-independent desired-state CRUD.
 pub struct PapService<R, C> {
     repository: Arc<R>,
@@ -285,13 +292,27 @@ where
         scope_id: &ResourceId,
         scope_revision: Revision,
     ) -> Result<BindingView, PapError> {
-        self.write_binding(
-            WriteTarget::Create,
-            policy_id,
-            policy_revision,
-            scope_id,
-            scope_revision,
-        )
+        self.create_binding_with_id(None, policy_id, policy_revision, scope_id, scope_revision)
+    }
+
+    /// Creates one immutable Binding spec, optionally using a caller-provided identity.
+    ///
+    /// PAP generates the identity when `binding_id` is absent. A caller-provided
+    /// identity starts at revision 1 and conflicts when already allocated.
+    ///
+    /// # Errors
+    /// Returns not-found, validation, conflict, revision, or persistence errors.
+    pub fn create_binding_with_id(
+        &self,
+        binding_id: Option<&ResourceId>,
+        policy_id: &ResourceId,
+        policy_revision: Revision,
+        scope_id: &ResourceId,
+        scope_revision: Revision,
+    ) -> Result<BindingView, PapError> {
+        let target =
+            binding_id.map_or(BindingWriteTarget::Create, BindingWriteTarget::CreateWithId);
+        self.write_binding(target, policy_id, policy_revision, scope_id, scope_revision)
     }
 
     /// Updates the single current Binding record to Apply intent.
@@ -316,7 +337,7 @@ where
         scope_revision: Revision,
     ) -> Result<BindingView, PapError> {
         self.write_binding(
-            WriteTarget::Update(binding_id),
+            BindingWriteTarget::Update(binding_id),
             policy_id,
             policy_revision,
             scope_id,
@@ -326,24 +347,26 @@ where
 
     fn write_binding(
         &self,
-        target: WriteTarget<'_>,
+        target: BindingWriteTarget<'_>,
         policy_id: &ResourceId,
         policy_revision: Revision,
         scope_id: &ResourceId,
         scope_revision: Revision,
     ) -> Result<BindingView, PapError> {
-        let (update_existing, mut selected_id) = match target {
-            WriteTarget::Create => (false, generated_resource_id()?),
-            WriteTarget::Update(id) => (true, id.clone()),
+        let (update_existing, retry_on_conflict, mut selected_id) = match target {
+            BindingWriteTarget::Create => (false, true, generated_resource_id()?),
+            BindingWriteTarget::CreateWithId(id) => (false, false, id.clone()),
+            BindingWriteTarget::Update(id) => (true, false, id.clone()),
         };
 
         for _ in 0..MAX_WRITE_ATTEMPTS {
             let current = match self.repository.get_binding(&selected_id) {
                 Ok(current) if update_existing => Some(current),
-                Ok(_) => {
+                Ok(_) if retry_on_conflict => {
                     selected_id = generated_resource_id()?;
                     continue;
                 }
+                Ok(_) => return Err(PapError::Conflict),
                 Err(PapError::NotFound) if update_existing => return Err(PapError::NotFound),
                 Err(PapError::NotFound) => None,
                 Err(error) => return Err(error),
@@ -396,10 +419,8 @@ where
             // current Binding replacement before any Adapter worker is introduced. No outbox or
             // dispatch is intentionally performed here.
             match self.repository.update_binding(&binding) {
-                Err(PapError::Conflict) => {
-                    if !update_existing {
-                        selected_id = generated_resource_id()?;
-                    }
+                Err(PapError::Conflict) if retry_on_conflict => {
+                    selected_id = generated_resource_id()?;
                 }
                 result => return result,
             }

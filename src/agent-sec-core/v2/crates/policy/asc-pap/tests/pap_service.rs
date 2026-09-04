@@ -466,6 +466,41 @@ fn concurrent_scope_updates_retry_after_repository_cas_conflict() {
 }
 
 #[test]
+fn binding_create_can_use_a_caller_provided_identity() {
+    let (pap, _) = service();
+    let policy = pap
+        .create_policy("protect files", &policy_template("/workspace/a"))
+        .unwrap();
+    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
+    let binding_id = ResourceId::new("30000000-0000-4000-8000-000000000001").unwrap();
+
+    let binding = pap
+        .create_binding_with_id(
+            Some(&binding_id),
+            &policy.policy_id,
+            policy.revision,
+            &scope.scope_id,
+            scope.revision,
+        )
+        .unwrap();
+
+    assert_eq!(binding.spec.binding_id, binding_id);
+    assert_eq!(binding.spec.binding_revision.get(), 1);
+    assert_eq!(binding.status, BindingStatus::PendingApply);
+    assert_eq!(
+        pap.create_binding_with_id(
+            Some(&binding.spec.binding_id),
+            &policy.policy_id,
+            policy.revision,
+            &scope.scope_id,
+            scope.revision,
+        ),
+        Err(PapError::Conflict),
+        "explicit create must not silently allocate a different Binding identity"
+    );
+}
+
+#[test]
 #[allow(
     clippy::too_many_lines,
     reason = "one end-to-end lifecycle scenario keeps transition assertions reviewable"

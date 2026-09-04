@@ -1,0 +1,10 @@
+{
+  "method": "poc.binding.create",
+  "params": {
+    "bindingId": "30000000-0000-4000-8000-000000000001",
+    "policyId": "00000000-0000-4000-8000-000000000002",
+    "policyRevision": 1,
+    "scopeId": "20000000-0000-4000-8000-000000000001",
+    "scopeRevision": 1
+  }
+}

@@ -154,6 +154,9 @@ fn parse_command(mut arguments: Vec<String>) -> Result<Command, CliError> {
             Command::CreateScope { pid }
         }
         ("binding", "create") => Command::CreateBinding(CreateBindingParams {
+            binding_id: take_option(&mut arguments, "--binding-id")?
+                .map(resource_id)
+                .transpose()?,
             policy_id: resource_id(required_option(&mut arguments, "--policy-id")?)?,
             policy_revision: revision(&required_option(&mut arguments, "--policy-revision")?)?,
             scope_id: resource_id(required_option(&mut arguments, "--scope-id")?)?,
@@ -296,7 +299,7 @@ AgentSecCore V2 Policy capability-validation CLI\n\n\
 Usage:\n\
   asc-cli --socket <ABSOLUTE_PATH> policy create --name <NAME> --file <TEMPLATE_JSON>\n\
   asc-cli --socket <ABSOLUTE_PATH> scope create --pid <PID>\n\
-  asc-cli --socket <ABSOLUTE_PATH> binding create --policy-id <ID> --policy-revision <N> --scope-id <ID> --scope-revision <N>\n\
+  asc-cli --socket <ABSOLUTE_PATH> binding create [--binding-id <ID>] --policy-id <ID> --policy-revision <N> --scope-id <ID> --scope-revision <N>\n\
   asc-cli --socket <ABSOLUTE_PATH> binding get --binding-id <ID>\n\n\
 The CLI is daemon-only and has no local fallback.\n";
 
@@ -330,6 +333,46 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn binding_create_accepts_a_caller_provided_identity() {
+        let outcome = Cli::parse_from([
+            "asc-cli",
+            "--socket",
+            "/run/asc/daemon.sock",
+            "binding",
+            "create",
+            "--binding-id",
+            "30000000-0000-4000-8000-000000000001",
+            "--policy-id",
+            "00000000-0000-4000-8000-000000000002",
+            "--policy-revision",
+            "1",
+            "--scope-id",
+            "20000000-0000-4000-8000-000000000001",
+            "--scope-revision",
+            "1",
+        ])
+        .unwrap();
+        let ParseOutcome::Run(cli) = outcome else {
+            panic!("expected executable CLI")
+        };
+        let request = cli.request().unwrap();
+        let actual = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "method": "poc.binding.create",
+                "params": {
+                    "bindingId": "30000000-0000-4000-8000-000000000001",
+                    "policyId": "00000000-0000-4000-8000-000000000002",
+                    "policyRevision": 1,
+                    "scopeId": "20000000-0000-4000-8000-000000000001",
+                    "scopeRevision": 1,
+                },
+            })
+        );
     }
 
     #[test]

@@ -82,6 +82,9 @@ pub struct CreateScopeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateBindingParams {
+    /// Optional caller-provided Binding identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<ResourceId>,
     /// Exact Policy identity.
     pub policy_id: ResourceId,
     /// Exact Policy revision.
@@ -203,7 +206,8 @@ where
             }
             BINDING_CREATE_METHOD => {
                 Self::decode_and(&request.params, |params: CreateBindingParams| {
-                    let binding = self.pap.create_binding(
+                    let binding = self.pap.create_binding_with_id(
+                        params.binding_id.as_ref(),
                         &params.policy_id,
                         params.policy_revision,
                         &params.scope_id,
@@ -415,6 +419,7 @@ mod tests {
         let binding_response = dispatcher.handle(&request(
             BINDING_CREATE_METHOD,
             &CreateBindingParams {
+                binding_id: None,
                 policy_id: policy.policy_id,
                 policy_revision: policy.revision,
                 scope_id: scope.scope_id,
@@ -445,6 +450,58 @@ mod tests {
 
         drop(dispatcher);
         worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn binding_create_accepts_a_caller_provided_identity() {
+        let repository = Arc::new(InMemoryPapRepository::default());
+        let client = Arc::new(FakeClient::default());
+        let pap = PapService::new(Arc::clone(&repository), Arc::new(PocPolicyCompiler));
+        let (queue, _worker) = reconciliation_queue(
+            NonZeroUsize::new(4).unwrap(),
+            Arc::clone(&repository),
+            client,
+        );
+        let dispatcher = PapDispatcher::new(pap, repository, queue);
+
+        let template: PolicyTemplate = serde_json::from_str(include_str!(
+            "../../../../fixtures/pap/prevent-file-deletion.json"
+        ))
+        .unwrap();
+        let policy_response = dispatcher.handle(&request(
+            POLICY_CREATE_METHOD,
+            &CreatePolicyParams {
+                policy_name: "protect files".to_owned(),
+                template,
+            },
+        ));
+        let policy: asc_policy_types::policy::PreparedPolicy =
+            serde_json::from_value(policy_response.data).unwrap();
+        let scope_response = dispatcher.handle(&request(
+            SCOPE_CREATE_METHOD,
+            &CreateScopeParams {
+                selector: ScopeSelector::Pid { pid: 4242 },
+            },
+        ));
+        let scope: asc_policy_types::scope::PreparedScope =
+            serde_json::from_value(scope_response.data).unwrap();
+        let binding_id = ResourceId::new("30000000-0000-4000-8000-000000000001").unwrap();
+        let params = CreateBindingParams {
+            binding_id: Some(binding_id.clone()),
+            policy_id: policy.policy_id,
+            policy_revision: policy.revision,
+            scope_id: scope.scope_id,
+            scope_revision: scope.revision,
+        };
+
+        let binding_response = dispatcher.handle(&request(BINDING_CREATE_METHOD, &params));
+        let binding: BindingView = serde_json::from_value(binding_response.data).unwrap();
+        assert_eq!(binding.spec.binding_id, binding_id);
+        assert_eq!(binding.spec.binding_revision.get(), 1);
+        assert_eq!(binding.status, BindingStatus::PendingApply);
+
+        let duplicate = dispatcher.handle(&request(BINDING_CREATE_METHOD, &params));
+        assert_eq!(duplicate.error.unwrap().code, "conflict");
     }
 
     #[test]
@@ -478,6 +535,10 @@ mod tests {
             ),
             (
                 include_str!("../../../../fixtures/daemon/poc-binding-create.request.json"),
+                BINDING_CREATE_METHOD,
+            ),
+            (
+                include_str!("../../../../fixtures/daemon/poc-binding-create-with-id.request.json"),
                 BINDING_CREATE_METHOD,
             ),
             (
