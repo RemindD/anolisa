@@ -42,6 +42,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-pap-repository-memory"
+version = "0.1.0"
+dependencies = [
+ "asc-foundation-types",
+ "asc-pap",
+ "asc-policy-engine",
+ "asc-policy-types",
+]
+
+[[package]]
+name = "asc-policy-engine"
+version = "0.1.0"
+dependencies = [
+ "asc-foundation-types",
+ "asc-pap",
+ "asc-policy-types",
+ "serde_json",
+]
+
+[[package]]
 name = "asc-policy-types"
 version = "0.1.0"
 dependencies = [

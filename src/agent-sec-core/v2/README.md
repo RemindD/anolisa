@@ -1,19 +1,25 @@
 # AgentSecCore V2 Policy and daemon foundations
 
 This workspace slice contains the dependency-light contracts, Policy
-Administration Point, protocol-independent Unix-domain-socket service framework,
-and runnable foreground process bootstrap used by later AgentSecCore V2 work
-packages. It deliberately contains no daemon wire protocol, concrete persistence
-or Policy compiler, Policy runtime, reconciliation worker, outbox, or target
-Adapter.
+Administration Point, product Policy-template compiler, temporary process-local
+PAP Repository, protocol-independent Unix-domain-socket service framework, and
+runnable foreground process bootstrap used by later AgentSecCore V2 work
+packages. It deliberately contains no daemon wire protocol, durable persistence,
+Policy runtime, reconciliation worker, outbox, or target Adapter.
 
 The current crates are:
 
 - `asc-foundation-types`: bounded transport-independent identifiers and revisions.
 - `asc-policy-types`: authored Policy and immutable prepared Policy/Scope/Binding
   snapshots, backend-independent IR, and target Adapter contracts.
+- `asc-policy-engine`: deterministic `prevent_file_deletion` authoring-template
+  compiler with a frozen Canonical Policy IR golden. Other template kinds remain
+  unsupported until their lowering and Adapter evidence are defined.
 - `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
   monotonic revisions over explicit compiler and repository ports.
+- `asc-pap-repository-memory`: temporary process-local `PapRepository` adapter
+  used for integration before durable persistence lands. All state is lost when
+  its owning process exits.
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
@@ -169,9 +175,10 @@ Binding replacement and its reconcile intent atomically, then let the future
 Reconciler consume one complete `BindingView` whose embedded revision fences
 claim, retry, completion, failure, restart recovery, and cancellation.
 
-Daemon protocol, client, concrete persistence/compiler, Policy runtime,
-reconciliation worker, outbox, and target Adapter belong to later work packages
-and are intentionally absent from this slice.
+Daemon protocol/client, durable persistence, Policy runtime, reconciliation
+worker, outbox, and target Adapter belong to later work packages and are
+intentionally absent from this slice. The concrete compiler and temporary
+Repository added here are not wired into `asc-daemon` by this work package.
 
 Run the branch-owned validation from this directory:
 

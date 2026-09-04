@@ -7,6 +7,8 @@ members = [
     "crates/daemon/asc-daemon-service",
     "crates/foundation/asc-foundation-types",
     "crates/policy/asc-pap",
+    "crates/policy/asc-pap-repository-memory",
+    "crates/policy/asc-policy-engine",
     "crates/policy/asc-policy-types",
 ]
 
@@ -22,6 +24,8 @@ publish = false
 asc-daemon-service = { path = "crates/daemon/asc-daemon-service" }
 asc-foundation-types = { path = "crates/foundation/asc-foundation-types" }
 asc-pap = { path = "crates/policy/asc-pap" }
+asc-pap-repository-memory = { path = "crates/policy/asc-pap-repository-memory" }
+asc-policy-engine = { path = "crates/policy/asc-policy-engine" }
 asc-policy-types = { path = "crates/policy/asc-policy-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
