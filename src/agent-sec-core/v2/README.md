@@ -1,11 +1,11 @@
 # AgentSecCore V2 Policy and daemon foundations
 
 This workspace slice contains the dependency-light contracts, Policy
-Administration Point, protocol-independent Unix-domain-socket service framework,
-and runnable foreground process bootstrap used by later AgentSecCore V2 work
-packages. It deliberately contains no daemon wire protocol, concrete persistence
-or Policy compiler, Policy runtime, reconciliation worker, outbox, or target
-Adapter.
+Administration Point, trusted daemon application boundary, protocol-independent
+Unix-domain-socket service framework, and runnable foreground process bootstrap
+used by later AgentSecCore V2 work packages. It deliberately contains no daemon
+wire protocol, concrete persistence or Policy compiler, Policy runtime,
+reconciliation worker, outbox, or target Adapter.
 
 The current crates are:
 
@@ -14,6 +14,9 @@ The current crates are:
   snapshots, backend-independent IR, and target Adapter contracts.
 - `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
   monotonic revisions over explicit compiler and repository ports.
+- `asc-daemon-core`: trusted Principal construction, server-owned Policy
+  administration authorization, type-erased `PolicyAdministration`, and stable
+  application-error projection. It has no wire or transport dependency.
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
@@ -169,9 +172,10 @@ Binding replacement and its reconcile intent atomically, then let the future
 Reconciler consume one complete `BindingView` whose embedded revision fences
 claim, retry, completion, failure, restart recovery, and cancellation.
 
-Daemon protocol, client, concrete persistence/compiler, Policy runtime,
+Daemon protocol/handler/client, concrete persistence/compiler, Policy runtime,
 reconciliation worker, outbox, and target Adapter belong to later work packages
-and are intentionally absent from this slice.
+and are intentionally absent from this slice. The daemon-core application
+boundary added here is not wired into `asc-daemon` by this work package.
 
 Run the branch-owned validation from this directory:
 
