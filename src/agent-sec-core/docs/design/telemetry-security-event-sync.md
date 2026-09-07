@@ -1,5 +1,9 @@
 # Telemetry 安全事件同步设计规格
 
+本地 JSONL 与 telemetry 文件存储的区别、Rust 追加和消费者验收要求见
+[JSONL 存储协议](JSONL_STORAGE_PROTOCOL_zh.md)。本文继续定义 telemetry 采集门控与字段
+投影；外部管理的 telemetry 文件不采用本地审计流的创建、权限收紧和轮转策略。
+
 ## 1. 背景与目标
 
 `security_middleware.lifecycle` 在每次 action 完成或抛出异常时生成一条

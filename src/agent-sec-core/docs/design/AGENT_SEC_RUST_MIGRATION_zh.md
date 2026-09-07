@@ -28,6 +28,16 @@ V2 产品形态。Rust 执行内核的详细设计见
 [RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md)，
 其中的类型和 module 仅是 asc-action-runtime 的实现提案。
 
+security-events 与 observability 的统一数据库模型、条件原子更新、本地存储、Rust 旧版本
+迁移及验收草案见
+[SQLITE_STORAGE_PROTOCOL_zh.md](SQLITE_STORAGE_PROTOCOL_zh.md)。该文档是 V2 persistence
+工作包的独立 Definition Review 输入，不是第七份 V1 行为契约；文档区分已明确要求与
+开发时补齐的实现细节，对应实现和 fixture 交付前不代表已通过验收。
+
+本地安全事件、observability、CLI/daemon 诊断以及 telemetry 的 JSONL 文件要求见
+[JSONL_STORAGE_PROTOCOL_zh.md](JSONL_STORAGE_PROTOCOL_zh.md)。该配套草案区分本地四条
+文件流与外部管理的 telemetry 追加通道，不将 SQLite 合并或原子更新扩展为 JSONL 事务。
+
 本文使用以下标签：
 
 - **[CURRENT]**：V1 Python 实现当前可观察行为；
