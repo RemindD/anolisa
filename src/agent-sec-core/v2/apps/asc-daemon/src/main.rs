@@ -42,6 +42,13 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    let telemetry = match asc_observability::init_runtime("asc-daemon") {
+        Ok(runtime) => runtime,
+        Err(reason) => {
+            eprintln!("otel: {reason}");
+            return ExitCode::FAILURE;
+        }
+    };
     let lease = match RuntimeLease::acquire(&cli.bootstrap.socket_path) {
         Ok(lease) => lease,
         Err(problem) => {
@@ -50,7 +57,7 @@ fn main() -> ExitCode {
         }
     };
     // Retain the singleton through the outer Tokio blocking-task shutdown window.
-    match run_with_shutdown_timeout(run(cli, &lease), RUNTIME_SHUTDOWN_TIMEOUT) {
+    let outcome = match run_with_shutdown_timeout(run(cli, &lease), RUNTIME_SHUTDOWN_TIMEOUT) {
         Ok((exit_code, event_sinks)) => {
             if let Some(sinks) = event_sinks {
                 sinks.close();
@@ -61,7 +68,9 @@ fn main() -> ExitCode {
             report_error(&problem);
             ExitCode::FAILURE
         }
-    }
+    };
+    telemetry.shutdown(Duration::from_millis(2000));
+    outcome
 }
 
 async fn run(
