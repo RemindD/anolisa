@@ -13,16 +13,6 @@ use asc_policy_engine::PolicyTemplateCompiler;
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() -> ExitCode {
-    match run_with_shutdown_timeout(run(), RUNTIME_SHUTDOWN_TIMEOUT) {
-        Ok(exit_code) => exit_code,
-        Err(problem) => {
-            report_error(&problem);
-            ExitCode::FAILURE
-        }
-    }
-}
-
-async fn run() -> ExitCode {
     let outcome = match Cli::parse_from(std::env::args_os()) {
         Ok(outcome) => outcome,
         Err(problem) => {
@@ -38,6 +28,25 @@ async fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    let telemetry = match asc_observability::init_runtime("asc-daemon") {
+        Ok(runtime) => runtime,
+        Err(reason) => {
+            eprintln!("otel: {reason}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = match run_with_shutdown_timeout(run(cli), RUNTIME_SHUTDOWN_TIMEOUT) {
+        Ok(exit_code) => exit_code,
+        Err(problem) => {
+            report_error(&problem);
+            ExitCode::FAILURE
+        }
+    };
+    telemetry.shutdown(Duration::from_millis(2000));
+    outcome
+}
+
+async fn run(cli: Cli) -> ExitCode {
     let signals = match ProcessSignals::install() {
         Ok(signals) => signals,
         Err(problem) => {
