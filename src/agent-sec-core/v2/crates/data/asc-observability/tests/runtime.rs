@@ -11,6 +11,7 @@ fn runtime_filters_do_not_disable_context_or_export_arbitrary_messages() {
             init_runtime("asc-runtime-test"),
             Err("subscriber_conflict")
         ));
+        assert!(std::panic::catch_unwind(|| panic!("DO_NOT_EXPORT_SECRET_PAYLOAD")).is_err());
         let context =
             bind_trace_context_input(&Context::new(), &serde_json::json!({"sessionId":"session"}))
                 .unwrap();
@@ -71,10 +72,12 @@ fn runtime_filters_do_not_disable_context_or_export_arbitrary_messages() {
             );
             let stderr = String::from_utf8(output.stderr).unwrap();
             assert!(!stderr.contains("DO_NOT_EXPORT_SECRET_PAYLOAD"));
+            assert!(stderr.contains("runtime: panic"));
             assert_eq!(stderr.contains("test_context_readable"), filter == "info");
             if filter == "info" {
                 let records: Vec<serde_json::Value> = stderr
                     .lines()
+                    .filter(|line| line.starts_with('{'))
                     .map(|line| {
                         let record: serde_json::Value = serde_json::from_str(line).unwrap();
                         serde_json::from_str(record["fields"]["correlation"].as_str().unwrap())

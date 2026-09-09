@@ -24,7 +24,7 @@ fn main() -> ExitCode {
     let runtime = match asc_observability::init_runtime("agent-sec-cli") {
         Ok(runtime) => runtime,
         Err(reason) => {
-            eprintln!("otel: {reason}");
+            asc_observability::report_startup_error(&format!("otel: {reason}"));
             return ExitCode::FAILURE;
         }
     };

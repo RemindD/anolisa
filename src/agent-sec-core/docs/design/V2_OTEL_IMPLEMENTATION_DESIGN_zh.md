@@ -292,10 +292,18 @@ TraceId/SpanId、父子关系及 Context/Baggage，snapshot 不依赖 span recor
 `OTEL_*` export/sampler/batch 环境设置不能开启导出或修改固定采样策略。
 `--otel-context` 是入站上下文接口，继续保留，与 exporter 无关。
 
-`RUST_LOG` 控制本地 JSON 关联诊断。info 级别启用独立 worker，队列最多 64 条，
-每条最多 32 KiB；默认 warn/off 不启动此线程。关联记录 producer 不等待 stderr，
-超长、队列满、写失败允许丢诊断。无按秒限速，接收方管理 rotation。
-初始化冲突在接收请求前退出 1。
+`RUST_LOG` 仅控制本地 JSON 关联诊断。runtime 另通过同一个有界 worker 输出 daemon
+启动警告和运行错误，不受此 filter 控制。初始化失败的 `otel: <reason>` 用独立的临时
+worker 尝试输出，最多等待 50 ms；线程创建失败直接丢诊断，没有同步 stderr fallback。
+subscriber 冲突仍在接收请求前退出 1。
+
+每进程正常 runtime 只有一个诊断 worker；队列最多 64 条，每条最多 32 KiB。
+producer 不等待 stderr；超长、队列满、写失败允许丢诊断。没有按秒限速，接收方管理
+rotation。CLI help/usage/业务结果与错误仍同步输出，保留用户输出契约。
+
+生产初始化还将 Rust 默认的同步 panic hook 替换为同一有界 writer，仅输出固定
+`runtime: panic`，不记录 panic payload，也不改变 unwind/abort 或业务错误映射。
+内部 runtime 子进程测试验证 caught panic 的固定诊断及 payload 隔离。
 
 退出时先结束业务 span，再关闭 provider，剩余时间排空诊断，共用下列预算：
 
@@ -328,7 +336,7 @@ SDK 内存 span 检查与真实进程日志测试属于不同证据层；均不�
 | TO-007 | 并发 task/thread 使用屏障交错；各自 trace/Baggage 不串；线程复用、scope 退出、task abort 和 panic 后为空/恢复 | SDK + multi-thread Tokio |
 | TO-008 | 正常 child、spawn、spawn_blocking 中完整 Context 一致，含兼容标签与请求 span 引用；跨 await 不持有 guard | SDK + 异步测试 |
 | TO-009 | 固定未采样 SDK、RUST_LOG info/off 时可读有效 IDs/Baggage；环境 sampler 设置不改变生产策略 | SDK + 进程 |
-| TO-010 | 本地关联诊断阻塞或队列满不影响请求响应和关闭；不因日志失败重试业务 | writer 单测 + 真实进程 |
+| TO-010 | 本地诊断阻塞或队列满不影响请求响应、启动和关闭；不因日志失败重试业务 | writer 单测 + 真实进程 |
 | TO-011 | 原始无 context 请求、合法/非法 context 请求的 UID 授权一致；伪造 role/uid Baggage 不能提权 | 真实 UDS peer |
 | TO-012 | CLI→daemon 日志共享 trace 和五字段；内部逐层 parent、显式 carrier 隔离、请求不变由 Rust SDK 测试验证 | 双进程日志 + 内存 span 检查 |
 | TO-013 | 当前 PAP CRUD/invalid-request goldens、revision、digest、CAS、输出与退出码保持当前基线语义 | 当前仓库测试 |

@@ -343,12 +343,12 @@ def test_maximum_unicode_baggage_with_full_business_frame(otel):
     assert all((field == value for field in started[0]["agent"].values()))
 
 
-def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
+@pytest.mark.parametrize("log_filter", ["info", "off"])
+def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filter):
     read_fd, write_fd = os.pipe()
     with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(
         write_fd, "wb", buffering=0
     ) as stderr:
-        otel.start(stderr=stderr)
         os.set_blocking(stderr.fileno(), False)
         try:
             while True:
@@ -359,6 +359,14 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
             # The child shares this file description: restore blocking writes
             # before emitting diagnostics so this is a real stalled sink.
             os.set_blocking(stderr.fileno(), True)
+        # Fill before startup: PAP warning and obsolete exporter configuration
+        # must not prevent binding the socket even with correlation logging off.
+        otel.start(
+            stderr=stderr,
+            RUST_LOG=log_filter,
+            OTEL_TRACES_EXPORTER="otlp",
+            OTEL_BSP_MAX_QUEUE_SIZE="invalid",
+        )
         assert otel.call(b"")["error"]["code"] == "invalid_request"
         assert (
             otel.call(b" " * (4 * 1024 * 1024 + 32768))["error"]["code"]
@@ -375,7 +383,8 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
                 "policy",
                 "list",
             ],
-            env=otel.env,
+            env=otel.env
+            | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
             stdout=subprocess.PIPE,
             stderr=stderr,
             timeout=10,
@@ -383,5 +392,17 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
         )
         assert cli.returncode == 0
         json.loads(cli.stdout)
-        # Keep the pipe undrained until both processes have exited.
+        # Startup failure diagnostics also cannot delay an exit. The running
+        # daemon owns the socket, so a second daemon must fail without serving.
+        duplicate = subprocess.run(
+            [str(BINS / "asc-daemon"), "--socket", str(otel.socket)],
+            env=otel.env | {"RUST_LOG": log_filter},
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            timeout=10,
+            check=False,
+        )
+        assert duplicate.returncode == 1
+        assert duplicate.stdout == b""
+        # Keep the pipe undrained until all processes have exited.
         otel.stop()

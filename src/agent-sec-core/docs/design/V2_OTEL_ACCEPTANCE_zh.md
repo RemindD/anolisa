@@ -60,7 +60,7 @@ watchdog 通过不表示精确测量或证明 50 ms / 2 s 的关闭开销。
 | TO-009 | context + `asc-observability/tests/runtime.rs` | PASS：真实 runtime 固定未采样，环境 always_on/off × RUST_LOG info/off 不影响当前 ID/Baggage；未知调优设置不输出诊断；普通消息 canary 不进入关联日志 |
 | TO-002/003/004/005 | context tests + `test_otel_e2e.py` | PASS（列明的正反例）：remote parent、flags/tracestate、无 parent、只带 Baggage、重复 Baggage key/非法编码/超长及成员上限、Unicode 往返；不等于完整 W3C 规范符合性 |
 | TO-006 | protocol `tests/tracing.rs` + process schema case | PASS：版本、null、重复字段、未知字段，原始 UDS 拒绝且不执行业务 |
-| TO-010 | writer 单测 + process blocked stderr case | PASS：队列饱和丢诊断；请求期间填满 stderr 后仍完成响应及关闭。公开 exporter 故障测试已移出范围 |
+| TO-010 | writer 单测 + process blocked stderr case | PASS：队列饱和丢诊断；启动前填满 stderr 后仍完成请求、重复 daemon 启动失败和关闭，RUST_LOG info/off 均覆盖。公开 exporter 故障测试已移出范围 |
 | TO-017 | process SIGTERM/blocked stderr + runtime shutdown test | PASS：正常与 stderr 阻塞时进程退出完成，stdout 无诊断污染；残留 blocking 工作不无限阻止应用 runtime 退出，不声称精确测量关闭耗时 |
 | TO-011/013 | 真实非 root peer 伪造 Baggage 用例 + 原有 PAP/CLI CRUD、拒绝、revision、digest、CAS、JSON/退出码 fixtures | PASS：保持当前 V2 行为；Agent attribution 不参与 Principal 构造 |
 | TO-012 | process correlation + client/context + `tracing_failures.rs` | PASS：两个真实二进制日志共享 trace、五字段和兼容标签；SDK 内存检查验证 parentage、PAP→compiler 成功/失败 span。未以本地日志声称证明跨进程每层 parent |
@@ -101,13 +101,17 @@ revision、授权、资源 ID、事件文件、数据库或 Agent 插件配置�
 
 ## Review 修复验收
 
-本轮 workspace Rust tests 通过；pytest E2E **7 passed，0 skipped**。
+本轮 workspace Rust tests 通过；pytest E2E **8 passed，0 skipped**。
 这些为本机验证，不宣称 GitHub CI job 已执行。
 
 - 范围：移除生产 exporter/config 与 mock OTLP；保留内部 SDK span 检查、本地日志及
   V1 输入兼容 fixtures。OTEL 环境变量无法开启导出或改变固定采样策略。
-- 日志：writer 单测覆盖阻塞/满队列/超长；pytest 在进程启动后填满 stderr，覆盖
-  请求拒绝和响应、队列饱和及 CLI/daemon 关闭，不作为启动诊断的阻塞验证。
+- 打印审计：daemon PAP 警告、signal/runtime/bind/serve 错误和异常链使用同一有界 writer；
+  OTel 初始化失败使用最多等待 50 ms 的临时 worker；均无同步 fallback。
+  CLI 帮助/usage/结果/业务错误与 daemon 帮助/参数错误为必需输出，保留同步语义及背压。
+- 日志：writer 单测覆盖阻塞/满队列/超长；pytest 在进程启动前填满 stderr，覆盖正常启动、
+  请求拒绝和响应、队列饱和、CLI 正常退出、重复 daemon 启动失败与 SIGTERM。
+  RUST_LOG info/off 均执行；不是精确延迟基准。
 - 传播：context tests 覆盖未知字段非法 UTF-8 隔离、单次 header 注入、转义往返，以及
   8 KiB 内 SDK 互通和超出后仅本地 16 KiB adapter 保留的边界；不声称全 SDK 全容量互通。
 - client：无可注入 SDK context 时保留显式 carrier；runtime 测试覆盖重复初始化冲突。
@@ -118,6 +122,10 @@ revision、授权、资源 ID、事件文件、数据库或 Agent 插件配置�
 内部变更：生产 exporter 配置入口退出范围；无效允许值仍丢弃整个 Baggage，但未知值不再做 UTF-8
 解码；metadata/归属字段值不变，ASCII wire 转义可更简洁。JSON 诊断改为有界 best-effort 队列，
 SecurityEvent 持久化契约不变。新 CLI/旧 daemon 不在支持范围，无 capability 协商或兼容降级。
+
+生产初始化还将 Rust 默认的同步 panic hook 替换为同一有界 writer，仅输出固定
+`runtime: panic`，不记录 panic payload，也不改变 unwind/abort 或业务错误映射。
+内部 runtime 子进程测试验证 caught panic 的固定诊断及 payload 隔离。
 
 ## 部署与回滚
 

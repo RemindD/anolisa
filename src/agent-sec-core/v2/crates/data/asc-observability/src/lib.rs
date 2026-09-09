@@ -12,7 +12,7 @@ pub use opentelemetry::Context;
 use opentelemetry::trace::TraceContextExt as _;
 pub use propagation::{extract_parent, inject_context, report_propagation_issues};
 #[cfg(feature = "runtime")]
-pub use runtime::{TelemetryRuntime, init_runtime};
+pub use runtime::{TelemetryRuntime, init_runtime, report_startup_error};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 /// Captures the full current context for a task/thread boundary. Create the child

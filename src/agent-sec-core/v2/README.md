@@ -296,15 +296,21 @@ local sampling policy. No Collector, HTTP client or exporter worker is created.
 | `AGENT_SEC_INVOCATION_ID` | Optional caller-supplied invocation label; never automatically generated |
 
 Service resources use `asc-daemon` / `agent-sec-cli` and the build package version.
-CLI telemetry shutdown waits at most 50 ms; daemon waits at most an additional 2 s
-following service drain and application runtime shutdown. Log draining shares
-these budgets. JSON diagnostics use a separate worker with a 64-record queue and
-a 32 KiB per-record limit (2 MiB queued payload). Producers never wait for stderr
-I/O; overflow, oversized records and sink failures lose diagnostics. There is no
-per-second rate limit; the stderr consumer owns retention and rotation.
-Default warn/off logging does not start a diagnostic worker.
-`init_runtime` is a process singleton called once from main; subscriber conflicts
-or invalid SDK identity fail before business work with exit 1 and `otel: <reason>`.
+Each runtime owns one diagnostic worker with a 64-record queue and a 32 KiB
+per-record limit (2 MiB queued payload). It also handles daemon startup warnings
+and operational errors, independently of `RUST_LOG`. Producers never wait for
+stderr I/O; overflow, oversized records, worker creation failure and sink failures
+lose diagnostics. There is no per-second rate limit; the stderr consumer owns
+retention and rotation. CLI draining waits at most 50 ms; daemon draining shares
+the additional 2 s provider shutdown budget after service/runtime shutdown.
+`init_runtime` is called once from main. Subscriber conflicts or invalid SDK
+identity fail before business work with exit 1; `otel: <reason>` is best effort,
+using a bounded worker even before successful runtime initialization.
+The process panic hook also queues only `runtime: panic`, without payloads;
+unwind/abort behavior is unchanged.
+CLI help, usage, errors and business results retain synchronous output semantics.
+These required outputs can wait for their consumer; the diagnostic queue is not a
+lossy replacement for business output.
 
 Native requests support optional `traceContext` (version 1, optional string
 `traceparent`, `tracestate`, `baggage`) and `compatibility` (version 1, optional
