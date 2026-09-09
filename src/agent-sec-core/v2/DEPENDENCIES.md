@@ -38,8 +38,11 @@ cargo tree -p asc-capability-code-scan --edges normal --locked
 cargo tree -p asc-daemon --edges normal,build --locked
 ```
 
-The daemon's normal/build dependency graph does not include the Client,
-Adapter, ureq or ring. Verify that boundary separately from workspace tests:
+The daemon's normal/build graph includes Policy Runtime, the AgentSight Adapter
+and Client, and the Client's ureq/rustls/ring dependencies. Runtime itself depends
+only on generic policy ports and std threads. Reconciliation adds local path
+crates to the daemon graph without adding registry packages to Cargo.lock. Verify
+the executable dependency boundary separately from workspace tests:
 
 ```sh
 cargo tree -p asc-daemon --edges normal,build --locked --offline
