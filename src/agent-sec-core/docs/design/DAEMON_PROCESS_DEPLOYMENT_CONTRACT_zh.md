@@ -254,10 +254,12 @@ symlink，替代 V1 跟随目标 symlink 的行为。预检查使用 `symlink_me
 使用 `O_NOFOLLOW` 防止检查后被替换为 symlink；不新增祖先目录校验或文件管理职责。
 `asc-event-sink/tests/telemetry.rs` 覆盖目标 symlink、dangling symlink、检查后替换及恢复写入。
 
-进程 panic hook 向 stderr/journald 输出 `agent-sec-daemon: internal panic`，并在 location
-可用时追加 ` at <file>:<line>:<column>`，不输出 panic payload。源码位置用于诊断，不进入
+OTel 初始化前的进程 panic hook 向 stderr/journald 输出 `agent-sec-daemon: internal panic`，并在 location
+可用时追加 ` at <file>:<line>:<column>`，通过临时有界 writer 最多等待 50 ms，
+不输出 panic payload。源码位置用于诊断，不进入
 RPC error、SecurityEvent 或 telemetry。`agent-sec-daemon` binary 单元测试
 `panic_hook_reports_location_without_payload` 通过独立子进程验证位置输出与 payload 脱敏。
+OTel 初始化后由 §11 的有界 hook 接管，仅输出固定诊断且不等待 stderr。
 
 该 slice 已由唯一的 concrete `DaemonDispatcher` 注册 first-version PAP daemon protocol，
 但尚未注册 `daemon.health`。dispatcher 完成 envelope decode、request ID、kernel peer
@@ -280,7 +282,7 @@ socket 权限和跨 UID 接入的部署测试沿用 `tests/v2/e2e/test_daemon_pr
 
 当前 PAP 由 `PolicyTemplateCompiler` 和过渡性的 process-local Repository 组成。Policy、Scope
 和 Binding CRUD 可在同一 daemon 生命周期内经真实 UDS 执行，但所有状态在进程重启后丢失，
-进程启动时会显式输出该限制。这些结果只证明 protocol、identity、authorization 和应用装配的
+进程启动时会 best-effort 输出该限制（诊断背压规则见 §11）。这些结果只证明 protocol、identity、authorization 和应用装配的
 integration slice，不表示 durable persistence、target enforcement 或 application READY。
 Busy、timeout、shutdown 等 transport failure 由独立且有短 deadline 的
 `RejectionEncoder` 投影，正常依赖图不包含 PAP、Repository 或 Compiler。
@@ -480,20 +482,35 @@ DPROC-021 是进程内装配验收，Client 使用 scripted port；完整 CLI→
 AlwaysOff 但仍提供有效 TraceId/SpanId 和 Context/Baggage。main 调用一次 `init_runtime`；
 启用 runtime feature 本身不会初始化全局状态。本期没有公开 exporter 或 OTLP 配置，
 OTEL export/sampler/batch 环境设置不能开启导出或改变固定采样策略。
-初始化冲突在接受请求前失败，退出 1 并输出 `otel: <reason>`。
-诊断 RUST_LOG 与 Context 独立；默认不增加正常 CLI stderr。
+初始化冲突在接受请求前退出 1；`otel: <reason>` 通过临时有界 worker best-effort 输出，
+最多等 50 ms；stderr 堵塞或 worker 创建失败不能阻止退出，也不保证诊断一定到达。
 
-daemon 停止顺序：现有 service drain → 原有应用 runtime 1 s shutdown → provider 最多额外 2 s。
-CLI 业务 span 结束后最多等待 50 ms；日志排空与 provider 共用该预算及 daemon 的额外 2 s
-预算，失败不改变业务 exit code、不重试业务请求。
-shutdown 自带 flush，不每请求 flush；仍运行的 blocking work 不能被 tracing 强停。
-单请求 scope 覆盖解码后授权/PAP/响应编码，不声称覆盖 socket 读写。
+停止顺序：service drain → reconciliation join（最多 30 s）→ 应用 runtime 1 s shutdown
+→ event sinks close → provider/诊断排空额外最多 2 s。singleton lease 保留至关闭流程结束。
+CLI 业务 span 结束后最多等待 50 ms；失败不改变业务 exit code、不重试业务请求。
+仍运行的 blocking work 不能被 tracing 强停。单请求 scope 覆盖解码后授权/PAP/响应编码，
+不声称覆盖 socket 读写。
 
-JSON 关联诊断通过独立线程写 stderr；队列最多 64 条，每条最多 32 KiB，排队 payload
-最多 2 MiB。producer 不等待 sink I/O；队列满、记录超长、写失败或关闭预算用尽时允许丢诊断。
-无额外按秒限速，流量随请求量增长；默认 warn 不产生这些 info 记录，也不启动诊断线程。
-持续存储和 rotation 由 stderr 接收方管理，当前未新增日志文件。SecurityEvent 不使用此丢弃队列。
+每个正常 runtime 启动一个独立诊断线程写 stderr；JSON 关联诊断、daemon PAP 启动警告、
+signal/runtime/bind/serve 错误及异常链共用此 writer。reconciliation、JSONL、SQLite schema/
+corruption/drop/read 的库诊断以 `tracing` target `asc_process_diagnostic` 接入同一 writer；
+它们保留原消息且不受 RUST_LOG 关联日志过滤影响，无同步 stderr fallback。库自身不启动
+线程、不初始化 SDK；其它库宿主须安装 subscriber，未安装时诊断不输出。队列最多 64 条，每条最多 32 KiB，
+排队 payload 最多 2 MiB。producer 不等待 sink I/O；满队列、超长、写失败或关闭预算
+用尽允许丢诊断，创建 worker 失败直接禁用诊断。RUST_LOG 默认 warn，仅过滤 JSON 关联
+记录；不抑制进程警告/错误。无按秒限速，接收方管理持续存储和 rotation。
+CLI help/usage/业务结果及错误、daemon 参数错误/help 仍同步输出，可能等待消费者；
+这些输出不能以丢弃诊断队列替代。SecurityEvent 持久化也不使用此队列。
+
+生产初始化还将 Rust 默认的同步 panic hook 替换为同一有界 writer，仅输出固定
+`runtime: panic`，不记录 panic payload，也不改变 unwind/abort 或业务错误映射。
+内部 runtime 子进程测试验证 caught panic 的固定诊断及 payload 隔离。
 
 DPROC tracing 扩展以 `v2/apps/asc-daemon/tests/tracing.rs` 和 `tests/v2/e2e/test_otel_e2e.py`
-作可执行证据：真实 UDS timeout 后 span 不提前关闭；SIGTERM、请求期间 stderr 阻塞时关闭有界；
-stdout 不混入诊断。原有 DPROC 条款仍由其现有 fixtures 验收，不能将本测试当成完整 systemd/包装验收。
+作证据：真实 UDS timeout 后 span 不提前关闭；启动前填满 stderr 后仍能启动、响应及退出，
+重复 daemon 启动失败也能退出。新增 storage fault 用例覆盖 stderr 已满时的 JSONL 写失败、
+SQLite 插入失败、高版本 schema 警告和独立 audit sink 仍写入；
+`v2/apps/asc-daemon/tests/process_diagnostics.rs` 覆盖后台 worker 的 repository 错误、
+未确认 terminalization 诊断和 join，RUST_LOG info/off 均执行。原有 DPROC 条款仍由各自 fixtures 验收。
+OTel E2E 从 PATH 解析产品 binary，与现有 `make test-e2e-rpm-v2` 的收集和安装态执行方式一致；
+本机源码进程测试不替代完整 systemd/RPM 验收。

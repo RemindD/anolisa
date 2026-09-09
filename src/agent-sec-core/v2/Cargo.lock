@@ -276,6 +276,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -296,6 +297,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -380,6 +382,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -425,6 +428,7 @@ dependencies = [
  "asc-policy-repository",
  "asc-policy-types",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -475,6 +479,7 @@ dependencies = [
  "rustix",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

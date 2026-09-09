@@ -10,8 +10,10 @@ import os
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import time
+from contextlib import closing, contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -34,6 +36,7 @@ class OtelEnvironment:
             if not key.startswith("OTEL_")
         }
         self.env["RUST_LOG"] = "info"
+        self.env["AGENT_SEC_DATA_DIR"] = str(directory / "data")
         self.daemon = None
         self.log = None
 
@@ -345,12 +348,12 @@ def test_maximum_unicode_baggage_with_full_business_frame(otel):
     assert all((field == value for field in started[0]["agent"].values()))
 
 
-def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
+@contextmanager
+def blocked_stderr():
     read_fd, write_fd = os.pipe()
     with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(
         write_fd, "wb", buffering=0
     ) as stderr:
-        otel.start(stderr=stderr)
         os.set_blocking(stderr.fileno(), False)
         try:
             while True:
@@ -361,6 +364,20 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
             # The child shares this file description: restore blocking writes
             # before emitting diagnostics so this is a real stalled sink.
             os.set_blocking(stderr.fileno(), True)
+        yield stderr
+
+
+@pytest.mark.parametrize("log_filter", ["info", "off"])
+def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filter):
+    with blocked_stderr() as stderr:
+        # Fill before startup: PAP warning and obsolete exporter configuration
+        # must not prevent binding the socket even with correlation logging off.
+        otel.start(
+            stderr=stderr,
+            RUST_LOG=log_filter,
+            OTEL_TRACES_EXPORTER="otlp",
+            OTEL_BSP_MAX_QUEUE_SIZE="invalid",
+        )
         assert otel.call(b"")["error"]["code"] == "invalid_request"
         assert (
             otel.call(b" " * (4 * 1024 * 1024 + 32768))["error"]["code"]
@@ -377,7 +394,8 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
                 "policy",
                 "list",
             ],
-            env=otel.env,
+            env=otel.env
+            | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
             stdout=subprocess.PIPE,
             stderr=stderr,
             timeout=10,
@@ -385,5 +403,74 @@ def test_blocked_stderr_preserves_responses_and_process_shutdown(otel):
         )
         assert cli.returncode == 0
         json.loads(cli.stdout)
-        # Keep the pipe undrained until both processes have exited.
+        scan = subprocess.run(
+            [
+                otel.binaries["agent-sec-cli"],
+                "--socket",
+                str(otel.socket),
+                "scan-code",
+                "--code",
+                "echo safe",
+            ],
+            env=otel.env | {"RUST_LOG": log_filter},
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            timeout=10,
+            check=False,
+        )
+        assert scan.returncode == 0
+        assert json.loads(scan.stdout)["verdict"] == "pass"
+        # Startup failure diagnostics also cannot delay an exit. The running
+        # daemon owns the socket, so a second daemon must fail without serving.
+        duplicate = subprocess.run(
+            [otel.binaries["agent-sec-daemon"], "--socket", str(otel.socket)],
+            env=otel.env | {"RUST_LOG": log_filter},
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            timeout=10,
+            check=False,
+        )
+        assert duplicate.returncode == 1
+        assert duplicate.stdout == b""
+        # Keep the pipe undrained until all processes have exited.
+        otel.stop()
+
+
+@pytest.mark.parametrize("log_filter", ["info", "off"])
+@pytest.mark.parametrize("fault", ["jsonl_write", "sqlite_write", "newer_schema"])
+def test_storage_fault_diagnostics_do_not_block_scan_or_shutdown(
+    otel, log_filter, fault
+):
+    data = Path(otel.env["AGENT_SEC_DATA_DIR"])
+    if fault == "newer_schema":
+        data.mkdir(mode=0o700)
+        with closing(sqlite3.connect(data / "security-events.db")) as connection:
+            connection.execute("PRAGMA user_version=99")
+    with blocked_stderr() as stderr:
+        otel.start(stderr=stderr, RUST_LOG=log_filter)
+        jsonl = data / "security-events.jsonl"
+        if fault == "jsonl_write":
+            jsonl.unlink()
+            jsonl.mkdir()
+        elif fault == "sqlite_write":
+            with closing(sqlite3.connect(data / "security-events.db")) as connection:
+                connection.execute(
+                    "CREATE TRIGGER reject_event BEFORE INSERT ON security_events "
+                    "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+                )
+                connection.commit()
+        result = otel.cli(command=["scan-code", "--code", "echo safe"])
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["verdict"] == "pass"
+        # A diagnostic failure must not suppress the independent audit destination.
+        if fault == "jsonl_write":
+            with closing(sqlite3.connect(data / "security-events.db")) as connection:
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM security_events"
+                    ).fetchone()[0]
+                    == 1
+                )
+        else:
+            assert len(jsonl.read_text().splitlines()) == 1
         otel.stop()

@@ -6,6 +6,7 @@ use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_policy_engine::PolicyTemplateCompiler;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, Sampler, SdkTracerProvider};
+use std::os::unix::fs::DirBuilderExt as _;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -52,12 +53,10 @@ async fn tracing_span_remains_open_after_dispatch_timeout_until_work_finishes() 
     ));
     let directory =
         std::env::temp_dir().join(format!("asc-otel-lifetime-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&directory).unwrap();
-    std::fs::set_permissions(
-        &directory,
-        std::os::unix::fs::PermissionsExt::from_mode(0o700),
-    )
-    .unwrap();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
     let path = directory.join("daemon.sock");
     let mut config = BootstrapConfig::new(&path);
     config.service.dispatch_timeout = Duration::from_millis(50);
