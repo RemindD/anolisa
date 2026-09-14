@@ -198,8 +198,14 @@ executes the complete scenario without root. A separate default-config case
 verifies non-root `permission_denied` (or full CRUD when root). CLI process tests
 use an in-process daemon service; a combined CLI and daemon binary E2E is deferred.
 
-Binding create/update accepts desired state and returns `PENDING_APPLY`; delete
-returns `PENDING_DELETE`. These responses prove PAP acceptance only. They do not
+New Binding intent normally returns `status: {phase: PENDING_APPLY}` for create/update
+or `status: {phase: PENDING_DELETE}` for delete; no-ops return the current lifecycle.
+After saving intent, queue rejection conditionally records Failed and `status.error`
+and returns the complete BindingView in the same result envelope. Mutation callers
+must inspect status.phase; the CLI prints Failed results to stdout and exits 1,
+while GET/LIST remain successful queries. A concurrent worker claim
+returns the current record; unconfirmed termination returns internal. These
+successful responses prove PAP acceptance only. They do not
 mean target enforcement or deletion completed. LIST is integration-ready but is
 not distribution-ready until a server-owned aggregate encoded-byte budget is
 passed through Repository, PAP, and transport.
@@ -236,18 +242,21 @@ its current lifecycle. Only spec changes increment `bindingRevision`.
 |---|---|---|---|
 | absent | CREATE | fresh server-generated ID, `PENDING_APPLY` | 1 |
 | `PENDING_APPLY`, `APPLYING`, `READY` | identical UPDATE | no-op | unchanged |
-| `APPLY_FAILED` | identical UPDATE | `PENDING_APPLY`, reset retry controls, retain cleanup targets | unchanged |
+| `APPLY_FAILED` | identical UPDATE | `PENDING_APPLY`, clear status.error, retain cleanup targets | unchanged |
 | `PENDING_APPLY`, `READY`, `APPLY_FAILED` | changed-spec UPDATE | `PENDING_APPLY`, prepare afresh, retain cleanup targets | +1 |
 | `APPLYING` | changed-spec UPDATE | `OperationInProgress` | unchanged |
 | `PENDING_DELETE`, `DELETING`, `DELETE_FAILED` | any UPDATE | `OperationInProgress`; deletion is irreversible | unchanged |
-| Apply-side states, `DELETE_FAILED` | DELETE | `PENDING_DELETE`, reset retry controls, retain spec/targets | unchanged |
+| Apply-side states, `DELETE_FAILED` | DELETE | `PENDING_DELETE`, clear status.error, retain spec/targets | unchanged |
 | `PENDING_DELETE`, `DELETING` | DELETE | no-op | unchanged |
 | absent | GET / UPDATE / DELETE | `NotFound` | — |
 
 Workers claim pending work as `APPLYING` or `DELETING`. Apply success becomes
 `READY`; retryable failure returns to the corresponding pending state with a
-deadline; permanent/exhausted failure becomes `APPLY_FAILED` or `DELETE_FAILED`.
-Delete success atomically removes the Binding and all runtime data only after
+WorkQueue-owned deadline; permanent/exhausted failure becomes `APPLY_FAILED` or `DELETE_FAILED`.
+Attempt counts and deadlines are process-local; explicit pending requests without
+an error reset that progress on the next attempt. The table describes Repository
+admission before queue notification; queue rejection can replace Pending with Failed.
+Delete success atomically removes the Binding and its deployment records only after
 all targets are confirmed absent. `Deleted` remains an internal completion marker
 in the state machine, never a persisted current status. LIST omits removed rows.
 Re-deployment uses CREATE with a new ID at revision 1.
@@ -256,8 +265,8 @@ PAP writes compare the complete expected Binding under the same transaction as
 request admission. `update_binding(None, next)` inserts a fresh ID;
 `update_binding(Some(expected), next)` updates only an existing record. It cannot
 resurrect a record removed between the service read and repository write.
-Reconciler patches compare revision/status and only the runtime/deployment fields
-being written; they carry no spec and cannot erase
+Reconciler patches compare revision/phase and the status/error or deployment fields
+being written; attempt counts and deadlines are not Repository fields. Patches carry no spec and cannot erase
 a newer intent or target observation. A Delete accepted while Apply is running
 keeps the same revision, and the old Apply still records its target observations
 before the next cleanup attempt.

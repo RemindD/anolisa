@@ -1,7 +1,8 @@
 # Binding reconciliation core
 
-`BindingReconciler::reconcile(binding_id)` owns one synchronous, due attempt.
-Every call reads the latest Binding, retry control and deployment records. Apply
+`BindingReconciler::reconcile(binding_id, &mut schedule)` owns one synchronous, due attempt.
+Every call reads the latest Binding status/error and deployment records. Retry
+progress is an AttemptSchedule owned by the caller between calls, never stored. Apply
 translates and prepares afresh; Delete uses recorded targets without translation.
 The Client registry contains `TargetDeploymentClientFactory` ports. A due Apply
 opens one Client after translation and reuses it through prepare and create/update.
@@ -91,3 +92,9 @@ complete serialized records, dependency inputs/results and ordered traces. Tests
 also compose real PAP/memory and actual Adapter/Client/Ureq with a loopback mock.
 Storage is process-local memory. Full CLI/daemon E2E is a separate PR; SQL,
 crash/restart error injection and live PEP/kernel enforcement are separate gates.
+
+The Runtime holds AttemptSchedule only while the queue entry exists. Automatic
+retries preserve its attempt count and deadline; a new explicit Pending request
+without an error resets progress. Rebuilding the queue starts with fresh progress,
+including a new delay for interrupted running work. Failed states remain terminal.
+Claim atomically changes the phase and clears the previous status.error.

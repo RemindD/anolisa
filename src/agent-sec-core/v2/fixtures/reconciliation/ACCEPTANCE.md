@@ -65,7 +65,7 @@ Reconciler 或只测状态枚举替代实际执行。
 
 重试 fixture 固定输入 `max_attempts=3`（含首次）、`base_delay=100ms`、
 `max_delay=150ms`，不加 jitter。第 1、2 次可重试失败后分别等待 100ms、150ms；
-第 3 次失败写 FAILED，nextAttemptAt 为空。这是可执行样例参数，不冻结产品默认值。
+第 3 次失败写 FAILED，调用方内存进度中的 nextAttemptAt 为空。这是可执行样例参数，不冻结产品默认值。
 只推进虚拟时钟，不使用真实 sleep 证明时序。一次认领消耗一次预算，重复通知和
 尚未到期的调用不消耗；未成功认领不能修改预算或产生目标副作用。
 
@@ -130,7 +130,8 @@ runner 必须在以下情况失败：缺失/重复 case、缺失预期变体、f
 ## 4. 首版核心必过矩阵
 
 以下 22 项及各自要求的变体均为必过；
-清单见 [required-variants.json](required-variants.json)，运行证据见 [执行报告](RESULTS.md)。
+清单见 [required-variants.json](required-variants.json)，当前运行证据见 [Binding 队列拒绝验收](../../../docs/design/BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)，
+旧版本结果见 [历史执行报告](RESULTS.md)。
 
 | ID | 场景与必要变体 | 通过条件 |
 |---|---|---|
@@ -150,7 +151,7 @@ runner 必须在以下情况失败：缺失/重复 case、缺失预期变体、f
 | REC-CORE-014 | create 返回结果未知，随后重试成功 | UNKNOWN 保留；退避后重新准备，校验本次准备的身份，不复用旧 prepared；成功记账后 READY |
 | REC-CORE-015 | update 部分成功：旧 A 确认 Absent，新 B Unknown 或被拒绝 | 仅 A 可回收；B 记录保留；整体不写 READY；按分类重试或 APPLY_FAILED，不自动回滚 A |
 | REC-CORE-016 | Delete 部分成功；可重试/永久失败/耗尽三个变体 | 仅明确 Absent 记录可回收，其余保留；重试只清理剩余目标；未确认目标保留时不能移除 Binding |
-| REC-CORE-017 | Apply 与 Delete 分别连续可重试失败 | 按第 2 节精确比较 3 次预算及 100/150ms 退避；到期前无调用；耗尽后 FAILED、nextAttemptAt 为空且保留目标 |
+| REC-CORE-017 | Apply 与 Delete 分别连续可重试失败 | 按第 2 节精确比较 3 次预算及 100/150ms 退避；到期前无调用；耗尽后 FAILED、调用方内存 deadline 为空且保留目标 |
 | REC-CORE-018 | Apply 退避中接受新 Delete | 最新 Delete 立即可认领，不等旧退避、不继承旧次数；目标记录保留并用于清理 |
 | REC-CORE-019 | 缺失 Binding、各终态、未到期 pending、旧通知 | 缺失/终态/未到期不发目标请求，不重置记录和预算；旧通知重读库；到期执行不超过该轮允许次数 |
 | REC-CORE-020 | 两个 fake Client：非 UUID 身份、直接复用 SecCore ID；不透明 prepared 含非 JSON 字节 | 相同核心无需 PEP 分支或 UUIDv5；身份被登记、内容在本次调用原样回传；旧记录仍按其 target 路由，不按当前配置重写；无法解析目标时保留记录并报错 |
@@ -320,3 +321,15 @@ CR-021 / DJOB-033 的回归入口：
 
 PAP 模块文档以已装配 worker 为当前行为；接受意图仍不代表下发完成。
 tick 的 O(entries) 属于已知性能边界，此门禁不包含满容量性能指标或到期索引实现。
+
+## Binding 调度拒绝契约补充（V2）
+
+PendingApply/PendingDelete 允许因入队拒绝直接进入 ApplyFailed/DeleteFailed；PAP 通过
+专用 Repository 原子条件写同步记录原因。worker 只认领最新 Pending，已 Failed 的旧唤醒
+跳过。GET/LIST 的 status.error 随 status.phase 一起保存，不改变 spec revision 或部署身份。
+范围、并发限制、wire fixtures 与可执行 BQA-001～010 验收见
+[Binding 队列拒绝验收](../../../docs/design/BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。
+
+当前 V2 契约修订：移除 Repository RuntimeState，重试次数和 deadline 仅由 WorkQueue
+持有，重建队列时重置。fixture 的 initialSchedule 是测试调用方的内存进度输入，
+不属于 initial/expected Repository 记录；旧跨重启预算保持要求已被 CR-020 取代。

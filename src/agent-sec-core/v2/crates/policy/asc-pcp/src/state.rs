@@ -19,38 +19,44 @@ impl ReconcileState {
         &self,
         record: &ReconcileRecord,
         now: u64,
-        fallback: RetryPolicy,
+        policy: RetryPolicy,
+        schedule: &mut crate::AttemptSchedule,
     ) -> Result<bool, StoreError> {
-        let policy = record.runtime.retry_policy.unwrap_or(fallback);
         let mut next = record.clone();
-        let exhausted = record.runtime.attempts_started >= policy.max_attempts;
-        next.binding.status = if exhausted {
-            record.binding.status.fail_reconcile()
+        let exhausted = schedule.attempts_started >= policy.max_attempts;
+        next.binding.status.phase = if exhausted {
+            record.binding.status.phase.fail_reconcile()
         } else {
-            record.binding.status.retry_reconcile()
+            record.binding.status.phase.retry_reconcile()
         }
         .map_err(|_| StoreError::Invalid)?;
-        next.runtime.last_error = Some(crate::Failure::new(
+        next.binding.status.error = Some(crate::Failure::new(
             crate::FailureKind::Retryable,
             "RECONCILE_INTERRUPTED",
         ));
-        next.runtime.next_attempt_at = if exhausted {
+        let next_attempt_at = if exhausted {
             None
         } else {
-            Some(now.saturating_add(crate::retry::delay(policy, record.runtime.attempts_started)))
+            Some(now.saturating_add(crate::retry::delay(policy, schedule.attempts_started)))
         };
-        Ok(self
+        let matched = self
             .repository
             .compare_exchange_binding_state(record, &BindingStateWrite::new(next))?
-            != WriteResult::Conflict)
+            != WriteResult::Conflict;
+        if matched {
+            schedule.next_attempt_at = next_attempt_at;
+        }
+        Ok(matched)
     }
     pub fn claim(
         &self,
         record: &ReconcileRecord,
         now: u64,
         policy: RetryPolicy,
+        schedule: &mut crate::AttemptSchedule,
     ) -> Result<Option<ReconcileRecord>, StoreError> {
-        let Some(next) = claim(record.clone(), now, policy)? else {
+        let before = schedule.clone();
+        let Some(next) = claim(record.clone(), now, policy, schedule)? else {
             return Ok(None);
         };
         let write = BindingStateWrite::new(next.clone());
@@ -59,7 +65,10 @@ impl ReconcileState {
             .compare_exchange_binding_state(record, &write)?
         {
             WriteResult::Applied | WriteResult::AlreadyApplied => Ok(Some(next)),
-            WriteResult::Conflict => Ok(None),
+            WriteResult::Conflict => {
+                *schedule = before;
+                Ok(None)
+            }
         }
     }
     pub fn register(
@@ -146,23 +155,23 @@ fn claim(
     mut record: ReconcileRecord,
     now: u64,
     policy: RetryPolicy,
+    schedule: &mut crate::AttemptSchedule,
 ) -> Result<Option<ReconcileRecord>, StoreError> {
     crate::retry::validate(policy)?;
-    if record.runtime.next_attempt_at.is_some_and(|at| at > now) {
+    if schedule.next_attempt_at.is_some_and(|at| at > now) {
         return Ok(None);
     }
-    let Ok(running) = record.binding.status.start_reconcile() else {
+    let Ok(running) = record.binding.status.phase.start_reconcile() else {
         return Ok(None);
     };
-    let policy = record.runtime.retry_policy.unwrap_or(policy);
     crate::retry::validate(policy)?;
-    if record.runtime.attempts_started >= policy.max_attempts {
+    if schedule.attempts_started >= policy.max_attempts {
         return Ok(None);
     }
-    record.binding.status = running;
-    record.runtime.retry_policy = Some(policy);
-    record.runtime.attempts_started += 1;
-    record.runtime.next_attempt_at = None;
+    record.binding.status.phase = running;
+    record.binding.status.error = None;
+    schedule.attempts_started += 1;
+    schedule.next_attempt_at = None;
     Ok(Some(record))
 }
 fn register(
@@ -294,9 +303,8 @@ fn finish(
         {
             return Err(StoreError::Invalid);
         }
-        record.binding.status = outcome.next_status;
-        record.runtime.next_attempt_at = outcome.next_attempt_at;
-        record.runtime.last_error.clone_from(&outcome.error);
+        record.binding.status.phase = outcome.next_status;
+        record.binding.status.error.clone_from(&outcome.error);
     }
     Ok((record, matches))
 }

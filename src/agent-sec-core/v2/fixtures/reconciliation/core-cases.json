@@ -377,7 +377,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -492,7 +494,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -607,7 +611,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -722,7 +728,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -805,13 +813,17 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "APPLY_FAILED"
+                "status": {
+                  "phase": "APPLY_FAILED"
+                }
               },
               {
                 "spec": {
                   "$ref": "binding.rev-8"
                 },
-                "status": "PENDING_APPLY"
+                "status": {
+                  "phase": "PENDING_APPLY"
+                }
               }
             ]
           },
@@ -924,7 +936,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -1099,19 +1113,12 @@
                   }
                 }
               },
-              "status": "PENDING_APPLY"
-            },
-            "runtime": {
-              "attemptsStarted": 1,
-              "nextAttemptAt": 100,
-              "retryPolicy": {
-                "maxAttempts": 3,
-                "baseDelayMs": 100,
-                "maxDelayMs": 150
-              },
-              "lastError": {
-                "kind": "RETRYABLE",
-                "code": "RECONCILE_INTERRUPTED"
+              "status": {
+                "phase": "PENDING_APPLY",
+                "error": {
+                  "kind": "RETRYABLE",
+                  "code": "RECONCILE_INTERRUPTED"
+                }
               }
             },
             "deployments": []
@@ -1284,19 +1291,12 @@
                   }
                 }
               },
-              "status": "PENDING_APPLY"
-            },
-            "runtime": {
-              "attemptsStarted": 1,
-              "nextAttemptAt": 100,
-              "retryPolicy": {
-                "maxAttempts": 3,
-                "baseDelayMs": 100,
-                "maxDelayMs": 150
-              },
-              "lastError": {
-                "kind": "RETRYABLE",
-                "code": "RECONCILE_INTERRUPTED"
+              "status": {
+                "phase": "PENDING_APPLY",
+                "error": {
+                  "kind": "RETRYABLE",
+                  "code": "RECONCILE_INTERRUPTED"
+                }
               }
             },
             "deployments": [
@@ -1498,19 +1498,12 @@
                   }
                 }
               },
-              "status": "PENDING_APPLY"
-            },
-            "runtime": {
-              "attemptsStarted": 1,
-              "nextAttemptAt": 100,
-              "retryPolicy": {
-                "maxAttempts": 3,
-                "baseDelayMs": 100,
-                "maxDelayMs": 150
-              },
-              "lastError": {
-                "kind": "RETRYABLE",
-                "code": "RECONCILE_INTERRUPTED"
+              "status": {
+                "phase": "PENDING_APPLY",
+                "error": {
+                  "kind": "RETRYABLE",
+                  "code": "RECONCILE_INTERRUPTED"
+                }
               }
             },
             "deployments": [
@@ -1671,17 +1664,9 @@
                   }
                 }
               },
-              "status": "READY"
-            },
-            "runtime": {
-              "attemptsStarted": 2,
-              "nextAttemptAt": null,
-              "retryPolicy": {
-                "maxAttempts": 3,
-                "baseDelayMs": 100,
-                "maxDelayMs": 150
-              },
-              "lastError": null
+              "status": {
+                "phase": "READY"
+              }
             },
             "deployments": [
               {
@@ -3066,7 +3051,9 @@
                 "spec": {
                   "$ref": "binding.rev-7"
                 },
-                "status": "PENDING_DELETE"
+                "status": {
+                  "phase": "PENDING_DELETE"
+                }
               }
             ]
           },
@@ -3091,7 +3078,11 @@
             "finish:matched"
           ]
         }
-      ]
+      ],
+      "initialSchedule": {
+        "attemptsStarted": 1,
+        "nextAttemptAt": 100
+      }
     },
     {
       "caseId": "REC-CORE-019",
@@ -3283,15 +3274,12 @@
                   }
                 }
               },
-              "status": "PENDING_APPLY"
-            },
-            "runtime": {
-              "attemptsStarted": 0,
-              "nextAttemptAt": 100,
-              "retryPolicy": null,
-              "lastError": {
-                "kind": "RETRYABLE",
-                "code": "RECONCILE_INTERRUPTED"
+              "status": {
+                "phase": "PENDING_APPLY",
+                "error": {
+                  "kind": "RETRYABLE",
+                  "code": "RECONCILE_INTERRUPTED"
+                }
               }
             },
             "deployments": []
@@ -3419,15 +3407,12 @@
                   }
                 }
               },
-              "status": "PENDING_DELETE"
-            },
-            "runtime": {
-              "attemptsStarted": 0,
-              "nextAttemptAt": 100,
-              "retryPolicy": null,
-              "lastError": {
-                "kind": "RETRYABLE",
-                "code": "RECONCILE_INTERRUPTED"
+              "status": {
+                "phase": "PENDING_DELETE",
+                "error": {
+                  "kind": "RETRYABLE",
+                  "code": "RECONCILE_INTERRUPTED"
+                }
               }
             },
             "deployments": []
@@ -3494,7 +3479,11 @@
             "read"
           ]
         }
-      ]
+      ],
+      "initialSchedule": {
+        "attemptsStarted": 1,
+        "nextAttemptAt": 100
+      }
     },
     {
       "caseId": "REC-CORE-019",
@@ -4026,13 +4015,9 @@
           "spec": {
             "$ref": "binding.rev-7"
           },
-          "status": "PENDING_APPLY"
-        },
-        "runtime": {
-          "attemptsStarted": 0,
-          "nextAttemptAt": null,
-          "retryPolicy": null,
-          "lastError": null
+          "status": {
+            "phase": "PENDING_APPLY"
+          }
         },
         "deployments": [
           {
@@ -4076,17 +4061,12 @@
               "spec": {
                 "$ref": "binding.rev-7"
               },
-              "status": "APPLY_FAILED"
-            },
-            "runtime": {
-              "attemptsStarted": 1,
-              "nextAttemptAt": null,
-              "retryPolicy": {
-                "$ref": "retry.three-attempts"
-              },
-              "lastError": {
-                "kind": "REJECTED",
-                "code": "RECONCILE_TARGET_UNAVAILABLE"
+              "status": {
+                "phase": "APPLY_FAILED",
+                "error": {
+                  "kind": "REJECTED",
+                  "code": "RECONCILE_TARGET_UNAVAILABLE"
+                }
               }
             },
             "deployments": [
@@ -4132,17 +4112,12 @@
               "spec": {
                 "$ref": "binding.rev-7"
               },
-              "status": "APPLY_FAILED"
-            },
-            "runtime": {
-              "attemptsStarted": 1,
-              "nextAttemptAt": null,
-              "retryPolicy": {
-                "$ref": "retry.three-attempts"
-              },
-              "lastError": {
-                "kind": "REJECTED",
-                "code": "RECONCILE_TARGET_UNAVAILABLE"
+              "status": {
+                "phase": "APPLY_FAILED",
+                "error": {
+                  "kind": "REJECTED",
+                  "code": "RECONCILE_TARGET_UNAVAILABLE"
+                }
               }
             },
             "deployments": [

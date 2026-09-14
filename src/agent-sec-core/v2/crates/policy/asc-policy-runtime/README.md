@@ -21,14 +21,18 @@ first call; RetryAt, Superseded and repository errors share this queue budget.
 delegate that method to their core. Deadline creation, worker scheduling and scans
 therefore use the same clock instance in the production composition.
 Skipped only restores an existing deadline and does not consume another retry.
-Exhaustion retains the entry so neither timers nor scans restart it. New notifications
-reset this queue budget and immediately queue waiting/exhausted work; dirty notifications
-take precedence on completion. They do not reset the core's stored business budget.
-Capacity counts running, waiting and exhausted entries. Exhausted entries can fill
-capacity until explicit notifications allow them to finish; no unbounded suppression
-map is allocated. Queue exhaustion emits an ID-only diagnostic and preserves the
-repository state and cleanup responsibility without claiming a persisted failure.
-This queue budget is process-local and does not survive Runtime recreation.
+On automatic reschedule exhaustion, the worker retains Running, conditionally
+writes APPLY_FAILED/DELETE_FAILED with RECONCILE_RETRY_EXHAUSTED, then releases
+the entry and its schedule. Confirmed terminal/missing records are also released.
+Only unconfirmed termination retains Exhausted so timers/scans cannot restart it.
+Notifications reset the queue budget and queue waiting/exhausted work; dirty
+notifications take precedence. They do not reset the business attempt progress
+for the same pending request. Capacity counts running, waiting and unconfirmed
+exhausted entries. Terminalization patches never change spec or deployment records.
+Both queue reschedule budget and business AttemptSchedule are process-local and
+do not survive Runtime recreation. Existing entries retain attempt count and
+monotonic deadline through scans and duplicate wakeups. A new explicit Pending
+request with no error resets its business progress on the next call.
 Overflow increments a counter; continuous stable-ID scan rounds
 repair missed notifications without clearing or dirtying existing entries. The
 scanner resumes its cursor after a full page and wraps after the final page.
@@ -38,25 +42,34 @@ records therefore cannot cause an unbounded repository scan under one lock.
 Ticks still scan all entries; no deadline index or full-capacity latency guarantee
 is provided. Add an index only if load measurements justify its maintenance cost.
 
-PAP uses `BindingReconcileEnqueuer` after successful Binding admission. Queue
-saturation never changes the already-committed CRUD result. Policy/Scope CRUD never
-checks reconciliation readiness. Binding admission rejects only an unavailable,
-stopped or fatally failed Runtime; individual attempt errors and temporary scan
+PAP uses `BindingReconcileEnqueuer` after saving pending intent. On Full/Stopped,
+PAP conditionally writes Failed and status.error, then returns the complete BindingView
+in the same result envelope as accepted intent, including the saved identity. If a worker already claimed the request, PAP returns
+the current record instead. Unconfirmed termination returns internal. Scans do not
+restart Failed requests; callers must explicitly retry them. This admission failure
+is distinct from automatic reschedule exhaustion above. Policy/Scope CRUD never
+checks reconciliation readiness. Binding admission also rejects an unavailable,
+stopped or fatally failed Runtime before saving with protocol `unavailable` and no
+BindingView. Readiness does not check capacity; storage failures remain `internal`.
+Individual attempt errors and temporary scan
 failures do not close admission. Repository operations report their own errors.
-A failed attempt retains its Binding in WaitingRetry, or Exhausted after the queue
-budget runs out; there is no separate error-ID
+A failed attempt waits in WaitingRetry; after the queue budget runs out, the worker
+persists Failed before releasing its slot (Exhausted only if unconfirmed); there is no separate error-ID
 set. Storage/invalid-write errors emit an ID and a payload-free error diagnostic,
 since the error may prevent recording it in the Binding. CAS exhaustion returns
 `StoreError::Contended`, not `Unavailable`. The next call reloads repository facts;
 neither error proves remote failure or permits discarding target responsibility.
-Each worker catches an attempt panic after the core's bookkeeping unwinds, then
-checks the stored outcome while retaining Running. Terminal/missing records release
-the entry; unconfirmed outcomes (including read errors/panics) retain Exhausted and
-are not automatically replayed. Dirty notifications still take precedence. The same
+Each worker catches attempt and scheduling-read panics after core bookkeeping
+unwinds, then retains Running while checking the stored outcome. Pending/running
+records for the original revision and Apply/Delete intent are conditionally failed
+with RECONCILE_WORKER_PANICKED. Confirmed terminal/missing records release the entry;
+unconfirmed reads/writes/panics retain Exhausted and are not automatically replayed.
+New intent and dirty notifications take precedence; CAS conflicts never retry the
+old failure patch against a fresh snapshot. Dirty notifications still take precedence. The same
 worker continues with other Bindings; successful results and cleanup responsibility
 are preserved. This does not isolate aborts or repair poisoned shared dependencies.
 Scan failures still degrade health until scanning succeeds. Timer/scanner panics
-or panics in worker scheduling code mark the service failed and stop pickup.
+or panics in internal queue bookkeeping mark the service failed and stop pickup.
 Runtime startup failure uses an explicit unavailable
 Binding admission port. A failed Runtime is not automatically restarted. Queries,
 Policy/Scope writes and other daemon services remain available.

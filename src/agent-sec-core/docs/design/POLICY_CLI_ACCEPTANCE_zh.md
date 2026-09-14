@@ -64,7 +64,7 @@ transport/输出边界验收，不用尚未实现的 V1 stub 或假设的通用�
 | ID | 变更 | 影响 |
 | --- | --- | --- |
 | CCLI-CR-001 | 增加 `asc-cli` 与独立 `asc-daemon-client` | CLI 参数解析采用 clap，版本统一写在 workspace，更新 Cargo.lock；无新增服务端 RPC |
-| CCLI-CR-002 | 固定当前 Policy 输出/退出码 | success result JSON/stdout/0；daemon error envelope JSON/stderr/1；本地执行失败 1；用法错误 2 |
+| CCLI-CR-002 | 固定当前 Policy 输出/退出码 | result JSON/stdout/0；Binding CREATE/UPDATE/DELETE 返回 APPLY_FAILED/DELETE_FAILED 时保持完整 result JSON/stdout，但退出 1；GET/LIST 查询 Failed 记录仍退出 0；daemon error envelope JSON/stderr/1；本地执行失败 1；用法错误 2 |
 | CCLI-CR-003 | 一次调用 deadline、LF/EOF、4 MiB wire bounds | 不重试未知结果、不增加 wire timeout 字段；默认 5000 ms，可用正 u32 覆盖 |
 | CCLI-CR-004 | 输入文件读取与完整模板解码属于 CLI | 文件相对 CLI cwd 解析；保留空格和 OS-native 路径；重复键在 Value 之前拒绝；领域编译仍在 PAP |
 | CCLI-CR-005 | daemon 增加可重复 `--policy-admin-uid <UID>` 启动配置 | 默认 root-only 保持；内核 peer UID 匹配部署配置，不跳过授权；运行时委派仍需 root；每次启动重新配置 |

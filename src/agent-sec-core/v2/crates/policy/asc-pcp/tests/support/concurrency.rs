@@ -138,7 +138,9 @@ fn run_case(case: ThreadCase) {
         .unwrap();
     runtime.block_on(async {
         let first_id = id.clone();
-        let mut first_task = tokio::task::spawn_blocking(move || first.reconcile(&first_id));
+        let mut first_task = tokio::task::spawn_blocking(move || {
+            first.reconcile(&first_id, &mut crate::AttemptSchedule::default())
+        });
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(
             harness.repository.read(&id).unwrap().unwrap(),
@@ -180,7 +182,12 @@ fn run_case(case: ThreadCase) {
         );
         release_tx.send(()).unwrap();
         assert_eq!(first_task.await.unwrap().unwrap(), case.first);
-        assert_eq!(second.reconcile(&id).unwrap(), case.second);
+        assert_eq!(
+            second
+                .reconcile(&id, &mut crate::AttemptSchedule::default())
+                .unwrap(),
+            case.second
+        );
     });
     assert_eq!(harness.repository.read(&id).unwrap(), case.expected);
     let script = harness.script.lock().unwrap();

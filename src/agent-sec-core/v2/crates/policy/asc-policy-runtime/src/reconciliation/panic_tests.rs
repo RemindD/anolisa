@@ -4,22 +4,13 @@ use asc_policy_repository::{BindingStateWrite, Deployment, ReconcileCandidate, W
 
 fn registered(client: &Client, failed: bool) -> BindingStateSnapshot {
     let mut expected = record(1);
-    expected.binding.status = if failed {
+    expected.binding.status.phase = if failed {
         BindingStatus::ApplyFailed
     } else {
         BindingStatus::Applying
     };
-    expected.runtime = RuntimeState {
-        attempts_started: 1,
-        next_attempt_at: None,
-        retry_policy: Some(RetryPolicy {
-            max_attempts: 3,
-            base_delay_ms: 100,
-            max_delay_ms: 200,
-        }),
-        last_error: failed
-            .then(|| Failure::new(FailureKind::Rejected, "RECONCILE_WORKER_PANICKED")),
-    };
+    expected.binding.status.error =
+        failed.then(|| Failure::new(FailureKind::Rejected, "RECONCILE_WORKER_PANICKED"));
     expected.deployments = vec![Deployment {
         target: client.requests.lock().unwrap()[0].target.clone(),
         revision: expected.binding.spec.binding_revision,
@@ -86,7 +77,7 @@ fn delete_during_attempt_panic_keeps_dirty_and_cleans_registered_target() {
     let accepted = pap.delete_binding(&id(1)).unwrap();
     let mut expected = registered(&client, false);
     expected.binding = accepted;
-    expected.runtime = RuntimeState::default();
+
     assert_eq!(repo.get_binding_state(&id(1)).unwrap(), Some(expected));
     assert_eq!(
         queue.state.lock().unwrap().entries.get(&id(1)),
@@ -113,9 +104,13 @@ impl ReconcileAttempt for PanicAfterCompletion {
     fn clock(&self) -> Arc<dyn Clock> {
         self.core.clock()
     }
-    fn reconcile(&self, binding_id: &ResourceId) -> Result<Disposition, StoreError> {
+    fn reconcile(
+        &self,
+        binding_id: &ResourceId,
+        schedule: &mut AttemptSchedule,
+    ) -> Result<Disposition, StoreError> {
         self.calls.lock().unwrap().push(binding_id.clone());
-        let result = self.core.reconcile(binding_id);
+        let result = self.core.reconcile(binding_id, schedule);
         assert_ne!(binding_id, &id(1), "scripted post-completion panic");
         result
     }
@@ -126,7 +121,7 @@ fn committed_success_survives_attempt_panic_without_replay() {
     for deleting in [false, true] {
         let mut initial = record(1);
         if deleting {
-            initial.binding.status = BindingStatus::PendingDelete;
+            initial.binding.status.phase = BindingStatus::PendingDelete;
         }
         let repo = Arc::new(
             ProcessLocalPapRepository::with_binding_states(vec![initial, record(2)]).unwrap(),
@@ -156,7 +151,7 @@ fn committed_success_survives_attempt_panic_without_replay() {
             None
         } else {
             let mut saved = registered(&client, false);
-            saved.binding.status = BindingStatus::Ready;
+            saved.binding.status.phase = BindingStatus::Ready;
             saved.deployments[0].presence = Presence::Present;
             saved.deployments[0].last_confirmed = Some(Presence::Present);
             Some(saved)
@@ -199,10 +194,12 @@ impl BindingStateRepository for FailedBookkeeping {
         write: &BindingStateWrite,
     ) -> Result<WriteResult, StoreError> {
         if expected.binding.spec.binding_id == id(1)
-            && write
-                .next
-                .as_ref()
-                .is_some_and(|patch| patch.status == Some(BindingStatus::ApplyFailed))
+            && write.next.as_ref().is_some_and(|patch| {
+                patch
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.phase == BindingStatus::ApplyFailed)
+            })
         {
             self.failed.store(true, Ordering::SeqCst);
             return Err(StoreError::Unavailable);
@@ -287,17 +284,17 @@ fn panic_completion_and_new_notification_race_never_loses_work() {
     for terminal in [false, true] {
         for _ in 0..32 {
             let queue = Arc::new(WorkQueue::new(1, 4));
-            queue.enqueue(&id(1));
+            let _ = queue.enqueue(&id(1));
             assert_eq!(queue.take(), Some(id(1)));
             let barrier = Arc::new(Barrier::new(2));
             let other_queue = queue.clone();
             let other_barrier = barrier.clone();
             let notifier = thread::spawn(move || {
                 other_barrier.wait();
-                other_queue.enqueue(&id(1));
+                let _ = other_queue.enqueue(&id(1));
             });
             barrier.wait();
-            queue.finish_panicked(id(1), terminal);
+            queue.finish_terminalization(id(1), terminal);
             notifier.join().unwrap();
             let state = queue.state.lock().unwrap();
             assert_eq!(

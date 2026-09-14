@@ -79,6 +79,7 @@ fn initialization_failure_retries_apply_update_and_delete_without_losing_target_
             "../../asc-policy-types/tests/fixtures/prepared-binding.json"
         ))
         .unwrap();
+        let mut schedule = AttemptSchedule::default();
         let id = spec.binding_id.clone();
         let previous = Deployment {
             target: target("old"),
@@ -89,9 +90,8 @@ fn initialization_failure_retries_apply_update_and_delete_without_losing_target_
         let initial = ReconcileRecord {
             binding: BindingView {
                 spec: spec.clone(),
-                status,
+                status: status.into(),
             },
-            runtime: RuntimeState::default(),
             deployments: if has_previous { vec![previous] } else { vec![] },
         };
         let repo = Arc::new(
@@ -138,43 +138,43 @@ fn initialization_failure_retries_apply_update_and_delete_without_losing_target_
             "registration must not initialize a Client"
         );
         assert_eq!(
-            core.reconcile(&id).unwrap(),
+            core.reconcile(&id, &mut schedule).unwrap(),
             Disposition::RetryAt { at: 100 }
         );
         let mut expected = initial;
-        expected.runtime = RuntimeState {
-            attempts_started: 1,
-            next_attempt_at: Some(100),
-            retry_policy: Some(retry),
-            last_error: Some(Failure::new(
-                FailureKind::Retryable,
-                "TEST_CREDENTIAL_UNAVAILABLE",
-            )),
-        };
+        expected.binding.status.error = Some(Failure::new(
+            FailureKind::Retryable,
+            "TEST_CREDENTIAL_UNAVAILABLE",
+        ));
         if status == BindingStatus::PendingDelete {
             expected.deployments[0].presence = Presence::Unknown;
         }
         assert_eq!(repo.get_binding_state(&id).unwrap(), Some(expected));
-        assert_eq!(core.reconcile(&id).unwrap(), Disposition::Skipped);
+        assert_eq!(
+            core.reconcile(&id, &mut schedule).unwrap(),
+            Disposition::Skipped
+        );
         assert_eq!(
             opens.load(Ordering::SeqCst),
             1,
             "not-due calls must not initialize a Client"
         );
         clock.0.store(100, Ordering::SeqCst);
-        assert_eq!(core.reconcile(&id).unwrap(), Disposition::Completed);
+        assert_eq!(
+            core.reconcile(&id, &mut schedule).unwrap(),
+            Disposition::Completed
+        );
         assert_eq!(opens.load(Ordering::SeqCst), 2);
         let expected = (status != BindingStatus::PendingDelete).then_some(ReconcileRecord {
-            binding: BindingView {
-                spec: spec.clone(),
-                status: BindingStatus::Ready,
+            binding: {
+                let mut binding = BindingView {
+                    spec: spec.clone(),
+                    status: (BindingStatus::Ready).into(),
+                };
+                binding.status.error = None;
+                binding
             },
-            runtime: RuntimeState {
-                attempts_started: 2,
-                next_attempt_at: None,
-                retry_policy: Some(retry),
-                last_error: None,
-            },
+
             deployments: vec![Deployment {
                 target: target("new"),
                 revision: spec.binding_revision,

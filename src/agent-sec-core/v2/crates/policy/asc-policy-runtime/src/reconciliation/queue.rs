@@ -3,7 +3,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use asc_foundation_types::ResourceId;
-use asc_pap::{BindingReconcileEnqueuer, PapError};
+use asc_pap::{BindingReconcileEnqueuer, EnqueueError, PapError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Entry {
@@ -13,14 +13,15 @@ pub(super) enum Entry {
     Running { dirty: bool, retries: u32 },
     /// Waiting for a deadline in the shared monotonic millisecond clock domain.
     WaitingRetry { retry_at: u64, retries: u32 },
-    /// Automatic execution stopped after retry exhaustion or an unconfirmed panic.
+    /// Terminalization could not be confirmed after retry exhaustion or panic.
     /// Retained until a new notification so scanning
     /// cannot restart it; currently still occupies one capacity slot.
     Exhausted,
 }
 
 /// Process-local scheduling state protected by `WorkQueue`'s mutex.
-/// Binding intent, deployment records and business retry state live in the Repository.
+/// Binding intent, status/error and deployment records live in the Repository.
+/// Attempt counts and monotonic deadlines are owned here and never persisted.
 #[derive(Default)]
 pub(super) struct State {
     /// FIFO of distinct IDs ready for pickup. Each has exactly one Queued entry;
@@ -29,6 +30,9 @@ pub(super) struct State {
     /// One scheduling entry per Binding ID, including running/waiting/exhausted work.
     /// `entries.len()`, not `ready.len()`, is compared against `WorkQueue`'s capacity.
     pub entries: BTreeMap<ResourceId, Entry>,
+    /// One progress value per entry; checked out by its exclusive running worker.
+    /// Removed with the entry, retained through waiting, dirty and exhausted states.
+    pub schedules: BTreeMap<ResourceId, asc_pcp::AttemptSchedule>,
     /// Stops admission, new pickup and scanning. Existing synchronous calls still
     /// finish and must be joined; setting this flag does not cancel Client I/O.
     pub stopped: bool,
@@ -110,6 +114,20 @@ impl WorkQueue {
         deadline.is_none()
     }
 
+    pub(super) fn take_schedule(&self, id: &ResourceId) -> asc_pcp::AttemptSchedule {
+        self.state
+            .lock()
+            .unwrap()
+            .schedules
+            .remove(id)
+            .unwrap_or_default()
+    }
+    pub(super) fn save_schedule(&self, id: &ResourceId, schedule: asc_pcp::AttemptSchedule) {
+        let mut state = self.state.lock().unwrap();
+        assert!(matches!(state.entries.get(id), Some(Entry::Running { .. })));
+        state.schedules.insert(id.clone(), schedule);
+    }
+
     pub(super) fn take(&self) -> Option<ResourceId> {
         let mut state = self.state.lock().unwrap();
         loop {
@@ -133,7 +151,14 @@ impl WorkQueue {
         }
     }
 
-    /// Returns true when the automatic retry budget was exhausted.
+    pub(super) fn is_dirty(&self, id: &ResourceId) -> bool {
+        matches!(
+            self.state.lock().unwrap().entries.get(id),
+            Some(Entry::Running { dirty: true, .. })
+        )
+    }
+
+    /// Returns true with Running retained when the automatic retry budget is exhausted.
     /// A new notification supersedes this outcome and starts a fresh queue budget.
     pub(super) fn finish(&self, id: ResourceId, deadline: Option<u64>, auto_retry: bool) -> bool {
         let mut state = self.state.lock().unwrap();
@@ -147,7 +172,8 @@ impl WorkQueue {
                 .insert(id.clone(), Entry::Queued { retries: 0 });
             state.ready.push_back(id);
         } else if exhausted {
-            state.entries.insert(id, Entry::Exhausted);
+            // The worker retains Running while it conditionally persists Failed.
+            // finish_terminalization releases only after confirmation.
         } else if let Some(retry_at) = deadline {
             state.entries.insert(
                 id,
@@ -158,6 +184,7 @@ impl WorkQueue {
             );
         } else {
             state.entries.remove(&id);
+            state.schedules.remove(&id);
         }
         self.wake.notify_all();
         exhausted
@@ -182,9 +209,9 @@ impl WorkQueue {
         self.wake.notify_all();
     }
 
-    /// Finish a caught attempt panic without stopping other work. Repository I/O
+    /// Finish a terminalization attempt without stopping other work. Repository I/O
     /// has already finished outside the lock; notifications still take precedence.
-    pub(super) fn finish_panicked(&self, id: ResourceId, terminal: bool) {
+    pub(super) fn finish_terminalization(&self, id: ResourceId, terminal: bool) {
         let mut state = self.state.lock().unwrap();
         let Some(Entry::Running { dirty, .. }) = state.entries.get(&id).copied() else {
             unreachable!("only a running entry can finish");
@@ -196,6 +223,7 @@ impl WorkQueue {
             state.ready.push_back(id);
         } else if terminal {
             state.entries.remove(&id);
+            state.schedules.remove(&id);
         } else {
             state.entries.insert(id, Entry::Exhausted);
         }
@@ -246,14 +274,14 @@ impl BindingReconcileEnqueuer for WorkQueue {
         if !state.stopped && !state.fatal {
             Ok(())
         } else {
-            Err(PapError::Persistence)
+            Err(PapError::Unavailable)
         }
     }
-    fn enqueue(&self, id: &ResourceId) {
+    fn enqueue(&self, id: &ResourceId) -> Result<(), EnqueueError> {
         let mut state = self.state.lock().unwrap();
         if state.stopped {
             state.overflow_count = state.overflow_count.saturating_add(1);
-            return;
+            return Err(EnqueueError::Stopped);
         }
         match state.entries.get_mut(id) {
             Some(Entry::Queued { retries }) => *retries = 0,
@@ -266,8 +294,11 @@ impl BindingReconcileEnqueuer for WorkQueue {
             None => {
                 if self.insert(&mut state, id.clone(), None) {
                     self.wake.notify_all();
+                } else {
+                    return Err(EnqueueError::Full);
                 }
             }
         }
+        Ok(())
     }
 }

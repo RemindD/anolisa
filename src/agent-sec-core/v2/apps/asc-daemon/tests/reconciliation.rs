@@ -7,7 +7,7 @@ use asc_pcp::{
     DeploymentReport, Failure, Observation, PreparedApply, Presence, TargetDeploymentClient,
     TargetRef,
 };
-use asc_policy_repository::{BindingStateRepository, Deployment, RetryPolicy, RuntimeState};
+use asc_policy_repository::{BindingStateRepository, Deployment};
 use asc_policy_types::binding::{BindingStatus, PreparedBinding};
 use asc_policy_types::target::TargetBindingPlan;
 use std::sync::{Arc, Mutex};
@@ -96,19 +96,7 @@ fn configured_composition_delivers_pap_intent_and_joins_its_workers() {
     wait(|| pap.get_binding(id).unwrap().status == BindingStatus::Ready);
     let actual = repository.get_binding_state(id).unwrap().unwrap();
     assert_eq!(actual.binding.spec, accepted.spec);
-    assert_eq!(
-        actual.runtime,
-        RuntimeState {
-            attempts_started: 1,
-            next_attempt_at: None,
-            retry_policy: Some(RetryPolicy {
-                max_attempts: 5,
-                base_delay_ms: 1000,
-                max_delay_ms: 30_000
-            }),
-            last_error: None
-        }
-    );
+    assert_eq!(actual.binding.status.error, None);
     assert_eq!(
         actual.deployments,
         vec![Deployment {
@@ -189,7 +177,7 @@ fn unavailable_reconciliation_only_rejects_binding_writes() {
             &scope.scope_id,
             scope.revision
         ),
-        Err(asc_pap::PapError::Persistence)
+        Err(asc_pap::PapError::Unavailable)
     );
     assert_eq!(
         pap.update_binding(
@@ -199,11 +187,11 @@ fn unavailable_reconciliation_only_rejects_binding_writes() {
             &scope.scope_id,
             scope.revision
         ),
-        Err(asc_pap::PapError::Persistence)
+        Err(asc_pap::PapError::Unavailable)
     );
     assert_eq!(
         pap.delete_binding(&spec.binding_id),
-        Err(asc_pap::PapError::Persistence)
+        Err(asc_pap::PapError::Unavailable)
     );
     assert_eq!(pap.list_bindings(10, 0).unwrap().total, 0);
     assert_eq!(

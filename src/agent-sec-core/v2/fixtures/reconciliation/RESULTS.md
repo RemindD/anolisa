@@ -1,12 +1,17 @@
-# Binding Reconciler 工作包验收报告
+# Binding Reconciler 历史验收报告
 
-最新验证日期：2026-09-09。被验收的源码 HEAD：
+本报告保留各历史版本的执行结果，测试数、字段和测试名均以对应版本为准。
+其中 RuntimeState、跨重启保留预算等描述不适用于调整后的契约；当前验收入口为
+[Binding 队列拒绝验收](../../../docs/design/BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。
+`core-output.txt`、`client-output.txt` 等日志保留原始历史内容，不作为当前实现的通过证据。
+
+Runtime 集成版本验证日期：2026-09-09。被验收的源码 HEAD：
 `79c460a89ab95d3514e323cde8dd0fad1971e9d1`（`feat(sec-core): binding reconcile orchestrator`）。
 本报告按版本记录结果：下表与文末「Runtime 集成验证」对应上述 HEAD；后续 CR-018
 错误隔离修正的结果见其独立章节，两个版本的准入行为与测试数不能混用。2026-09-08
 各节保留历史阶段证据，不再作为共享执行锁、跨调用 prepared 缓存或 daemon 未接入等旧行为的依据。
 
-当前已交付同步核心、局部条件写、PAP 提交后通知、WorkQueue、worker、重试定时器、
+该版本已交付同步核心、局部条件写、PAP 提交后通知、WorkQueue、worker、重试定时器、
 分页补偿扫描和 daemon 装配。Client 按尝试延迟初始化；不保存跨调用中间结果。
 验收类型为 `GREENFIELD_CONTRACT` 与 `ADAPTER_CONFORMANCE`，不保留 V1 runtime。
 

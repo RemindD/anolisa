@@ -130,7 +130,6 @@ impl Rig {
         let repo = Arc::new(
             ProcessLocalPapRepository::with_binding_states(vec![ReconcileRecord {
                 binding: binding.clone(),
-                runtime: RuntimeState::default(),
                 deployments: vec![],
             }])
             .unwrap(),
@@ -194,17 +193,24 @@ fn same_spec_failed_apply_prepares_again_and_resets_only_retry_controls() {
     let id = &rig.binding.spec.binding_id;
     rig.client.0.lock().unwrap().reject_apply = true;
     assert!(matches!(
-        rig.core.reconcile(id).unwrap(),
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
         Disposition::Failed { .. }
     ));
     let failed = rig.state();
-    assert_eq!(failed.runtime.attempts_started, 1);
+    assert!(failed.binding.status.error.is_some());
     assert_eq!(rig.apply().unwrap(), rig.binding);
     let pending = rig.state();
     assert_eq!(pending.deployments, failed.deployments);
-    assert_eq!(pending.runtime, RuntimeState::default());
+    assert_eq!(pending.binding.status.error, None);
     rig.client.0.lock().unwrap().reject_apply = false;
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Completed
+    );
     let script = rig.client.0.lock().unwrap();
     assert_eq!(script.prepare_count, 2);
     assert_eq!(script.requests.len(), 2);
@@ -217,24 +223,31 @@ fn deletion_retry_preserves_targets_then_removes_record_and_new_create_uses_fres
     let rig = Rig::new();
     let spec = &rig.binding.spec;
     let id = &spec.binding_id;
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Completed
+    );
     let ready = rig.state();
     let pending = rig.pap.delete_binding(id).unwrap();
     assert_eq!(pending.spec, ready.binding.spec);
     assert_eq!(rig.state().deployments, ready.deployments);
-    assert_eq!(rig.state().runtime, RuntimeState::default());
+    assert_eq!(rig.state().binding.status.error, None);
     assert_eq!(rig.apply(), Err(PapError::OperationInProgress));
     rig.client.0.lock().unwrap().reject_delete = true;
     assert!(matches!(
-        rig.core.reconcile(id).unwrap(),
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
         Disposition::Failed { .. }
     ));
     let failed = rig.state();
-    assert_eq!(failed.binding.status, BindingStatus::DeleteFailed);
+    assert_eq!(failed.binding.status.phase, BindingStatus::DeleteFailed);
     assert_eq!(rig.apply(), Err(PapError::OperationInProgress));
     assert_eq!(rig.pap.delete_binding(id).unwrap(), pending);
     assert_eq!(rig.state().deployments, failed.deployments);
-    assert_eq!(rig.state().runtime.attempts_started, 0);
+    assert_eq!(rig.state().binding.status.error, None);
     let retry = rig.state();
     assert_eq!(rig.pap.delete_binding(id).unwrap(), pending);
     assert_eq!(
@@ -243,13 +256,23 @@ fn deletion_retry_preserves_targets_then_removes_record_and_new_create_uses_fres
         "duplicate DELETE preserves the retry budget"
     );
     rig.client.0.lock().unwrap().reject_delete = false;
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(rig.repo.get_binding_state(id).unwrap(), None);
     assert_eq!(rig.pap.get_binding(id), Err(PapError::NotFound));
     assert_eq!(rig.apply(), Err(PapError::NotFound));
     assert_eq!(rig.pap.delete_binding(id), Err(PapError::NotFound));
     assert!(rig.pap.list_bindings(100, 0).unwrap().items.is_empty());
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Skipped);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Skipped
+    );
     let fresh = rig
         .pap
         .create_binding(
@@ -262,7 +285,12 @@ fn deletion_retry_preserves_targets_then_removes_record_and_new_create_uses_fres
     assert_ne!(fresh.spec.binding_id, *id);
     assert_eq!(fresh.spec.binding_revision.get(), 1);
     assert_eq!(
-        rig.core.reconcile(&fresh.spec.binding_id).unwrap(),
+        rig.core
+            .reconcile(
+                &fresh.spec.binding_id,
+                &mut asc_pcp::AttemptSchedule::default()
+            )
+            .unwrap(),
         Disposition::Completed
     );
     let script = rig.client.0.lock().unwrap();
@@ -275,7 +303,9 @@ fn deletion_retry_preserves_targets_then_removes_record_and_new_create_uses_fres
 fn spec_change_clears_prepared_but_keeps_previous_target_for_cleanup() {
     let rig = Rig::new();
     let id = &rig.binding.spec.binding_id;
-    rig.core.reconcile(id).unwrap();
+    rig.core
+        .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+        .unwrap();
     let ready = rig.state();
     let scope = rig
         .pap
@@ -296,8 +326,13 @@ fn spec_change_clears_prepared_but_keeps_previous_target_for_cleanup() {
         .unwrap();
     assert_eq!(next.spec.binding_revision.get(), 2);
     assert_eq!(rig.state().deployments, ready.deployments);
-    assert_eq!(rig.state().runtime, RuntimeState::default());
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Completed);
+    assert_eq!(rig.state().binding.status.error, None);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Completed
+    );
     let current = rig.state();
     assert_eq!(current.deployments.len(), 1);
     assert_ne!(
@@ -312,7 +347,9 @@ fn maximum_revision_allows_same_spec_retry_and_delete_but_rejects_spec_change() 
     let id = &rig.binding.spec.binding_id;
     rig.client.0.lock().unwrap().reject_apply = true;
     assert!(matches!(
-        rig.core.reconcile(id).unwrap(),
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
         Disposition::Failed { .. }
     ));
     assert_eq!(rig.apply().unwrap(), rig.binding);
@@ -334,6 +371,11 @@ fn maximum_revision_allows_same_spec_retry_and_delete_but_rejects_spec_change() 
         Err(PapError::RevisionExhausted)
     );
     assert_eq!(rig.pap.delete_binding(id).unwrap().spec, rig.binding.spec);
-    assert_eq!(rig.core.reconcile(id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        rig.core
+            .reconcile(id, &mut asc_pcp::AttemptSchedule::default())
+            .unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(rig.pap.get_binding(id), Err(PapError::NotFound));
 }

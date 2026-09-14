@@ -53,9 +53,8 @@ fn initial() -> ReconcileRecord {
     ReconcileRecord {
         binding: BindingView {
             spec: spec(7),
-            status: BindingStatus::PendingApply,
+            status: (BindingStatus::PendingApply).into(),
         },
-        runtime: RuntimeState::default(),
         deployments: vec![],
     }
 }
@@ -69,18 +68,17 @@ fn deployment(revision: u32, presence: Presence, confirmed: Option<Presence>) ->
     }
 }
 
-fn ready(revision: u32, attempts: u32, _is_update: bool) -> ReconcileRecord {
+fn ready(revision: u32, _attempts: u32, _is_update: bool) -> ReconcileRecord {
     ReconcileRecord {
-        binding: BindingView {
-            spec: spec(revision),
-            status: BindingStatus::Ready,
+        binding: {
+            let mut binding = BindingView {
+                spec: spec(revision),
+                status: (BindingStatus::Ready).into(),
+            };
+            binding.status.error = None;
+            binding
         },
-        runtime: RuntimeState {
-            attempts_started: attempts,
-            next_attempt_at: None,
-            retry_policy: Some(policy()),
-            last_error: None,
-        },
+
         deployments: vec![deployment(
             revision,
             Presence::Present,
@@ -183,6 +181,7 @@ fn inspect_registered(repo: &ProcessLocalPapRepository, request: &AgentSightHttp
 
 #[test]
 fn real_http_apply_then_uncertain_delete_and_retry() {
+    let mut schedule = AttemptSchedule::default();
     let repo = Arc::new(ProcessLocalPapRepository::with_binding_states(vec![initial()]).unwrap());
     let inspect = repo.clone();
     let server = MockHttp::start(
@@ -197,11 +196,14 @@ fn real_http_apply_then_uncertain_delete_and_retry() {
     let clock = Arc::new(TestClock::default());
     let worker = core(repo.clone(), clock.clone(), &server.base_url);
     let id = spec(7).binding_id;
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(repo.read(&id).unwrap(), Some(ready(7, 1, false)));
 
     let mut desired = ready(7, 1, false).binding;
-    desired.status = BindingStatus::PendingDelete;
+    desired.status = BindingStatus::PendingDelete.into();
     assert!(
         repo.compare_exchange_reconcile_intent(
             &ExpectedBinding::from_binding(&ready(7, 1, false).binding),
@@ -210,33 +212,39 @@ fn real_http_apply_then_uncertain_delete_and_retry() {
         .unwrap()
     );
     assert_eq!(
-        worker.reconcile(&id).unwrap(),
+        worker.reconcile(&id, &mut schedule).unwrap(),
         Disposition::RetryAt { at: 100 }
     );
     let failed = ReconcileRecord {
-        binding: desired.clone(),
-        runtime: RuntimeState {
-            attempts_started: 1,
-            next_attempt_at: Some(100),
-            retry_policy: Some(policy()),
-            last_error: Some(Failure::new(
+        binding: {
+            let mut binding = desired.clone();
+            binding.status.error = Some(Failure::new(
                 FailureKind::Retryable,
                 "AGENTSIGHT_TRANSPORT_UNAVAILABLE",
-            )),
+            ));
+            binding
         },
+
         deployments: vec![deployment(7, Presence::Unknown, Some(Presence::Present))],
     };
     assert_eq!(repo.read(&id).unwrap(), Some(failed));
     clock.0.store(99, Ordering::SeqCst);
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Skipped);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Skipped
+    );
     clock.0.store(100, Ordering::SeqCst);
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(repo.read(&id).unwrap(), None);
     server.finish(4);
 }
 
 #[test]
 fn real_http_partial_update_retry_cleans_old_once_and_reuses_new_request() {
+    let mut schedule = AttemptSchedule::default();
     let repo =
         Arc::new(ProcessLocalPapRepository::with_binding_states(vec![ready(7, 1, false)]).unwrap());
     let inspect = repo.clone();
@@ -255,7 +263,7 @@ fn real_http_partial_update_retry_cleans_old_once_and_reuses_new_request() {
     let id = spec(7).binding_id;
     let desired = BindingView {
         spec: spec(8),
-        status: BindingStatus::PendingApply,
+        status: (BindingStatus::PendingApply).into(),
     };
     assert!(
         repo.compare_exchange_reconcile_intent(
@@ -265,33 +273,36 @@ fn real_http_partial_update_retry_cleans_old_once_and_reuses_new_request() {
         .unwrap()
     );
     assert_eq!(
-        worker.reconcile(&id).unwrap(),
+        worker.reconcile(&id, &mut schedule).unwrap(),
         Disposition::RetryAt { at: 100 }
     );
     assert_eq!(
         repo.read(&id).unwrap(),
         Some(ReconcileRecord {
-            binding: desired,
-            runtime: RuntimeState {
-                attempts_started: 1,
-                next_attempt_at: Some(100),
-                retry_policy: Some(policy()),
-                last_error: Some(Failure::new(
+            binding: {
+                let mut binding = desired;
+                binding.status.error = Some(Failure::new(
                     FailureKind::Retryable,
-                    "AGENTSIGHT_ENFORCER_UNAVAILABLE"
-                )),
+                    "AGENTSIGHT_ENFORCER_UNAVAILABLE",
+                ));
+                binding
             },
+
             deployments: vec![deployment(8, Presence::Unknown, None)]
         })
     );
     clock.0.store(100, Ordering::SeqCst);
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(repo.read(&id).unwrap(), Some(ready(8, 2, true)));
     server.finish(5);
 }
 
 #[test]
 fn same_revision_delete_during_real_http_apply_preserves_target_for_cleanup() {
+    let mut schedule = AttemptSchedule::default();
     let repo = Arc::new(ProcessLocalPapRepository::with_binding_states(vec![initial()]).unwrap());
     let inspect = repo.clone();
     let server = MockHttp::start(
@@ -305,7 +316,7 @@ fn same_revision_delete_during_real_http_apply_preserves_target_for_cleanup() {
             if req.method == AgentSightHttpMethod::Post {
                 let record = inspect.read(&spec(7).binding_id).unwrap().unwrap();
                 let mut desired = record.binding.clone();
-                desired.status = BindingStatus::PendingDelete;
+                desired.status = BindingStatus::PendingDelete.into();
                 assert!(
                     inspect
                         .compare_exchange_reconcile_intent(
@@ -323,19 +334,24 @@ fn same_revision_delete_during_real_http_apply_preserves_target_for_cleanup() {
         &server.base_url,
     );
     let id = spec(7).binding_id;
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Superseded);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Superseded
+    );
     assert_eq!(
         repo.read(&id).unwrap(),
         Some(ReconcileRecord {
             binding: BindingView {
                 spec: spec(7),
-                status: BindingStatus::PendingDelete
+                status: BindingStatus::PendingDelete.into()
             },
-            runtime: RuntimeState::default(),
             deployments: vec![deployment(7, Presence::Present, Some(Presence::Present))]
         })
     );
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(repo.read(&id).unwrap(), None);
     server.finish(3);
 }
@@ -367,6 +383,7 @@ impl BindingStateRepository for FailFinishOnce {
 
 #[test]
 fn result_storage_failure_reprepares_and_safely_replays_http() {
+    let mut schedule = AttemptSchedule::default();
     let repo = Arc::new(ProcessLocalPapRepository::with_binding_states(vec![initial()]).unwrap());
     let inspect = repo.clone();
     let server = MockHttp::start(
@@ -382,21 +399,31 @@ fn result_storage_failure_reprepares_and_safely_replays_http() {
     let clock = Arc::new(TestClock::default());
     let worker = core(wrapped, clock.clone(), &server.base_url);
     let id = spec(7).binding_id;
-    assert_eq!(worker.reconcile(&id), Err(StoreError::Unavailable));
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule),
+        Err(StoreError::Unavailable)
+    );
     let mut expected = ready(7, 1, false);
-    expected.binding.status = BindingStatus::Applying;
+    expected.binding.status.phase = BindingStatus::Applying;
     expected.deployments = vec![deployment(7, Presence::Unknown, None)];
     assert_eq!(repo.read(&id).unwrap(), Some(expected));
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Skipped);
-    assert_eq!(repo.read(&id).unwrap().unwrap().runtime.attempts_started, 1);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Skipped
+    );
+    assert_eq!(schedule.attempts_started, 1);
     clock.0.store(100, Ordering::SeqCst);
-    assert_eq!(worker.reconcile(&id).unwrap(), Disposition::Completed);
+    assert_eq!(
+        worker.reconcile(&id, &mut schedule).unwrap(),
+        Disposition::Completed
+    );
     assert_eq!(repo.read(&id).unwrap(), Some(ready(7, 2, true)));
     server.finish(4);
 }
 
 #[test]
 fn retry_prepares_current_process_identity_without_storing_it_in_cleanup() {
+    let mut schedule = AttemptSchedule::default();
     for change_boot in [false, true] {
         let repo =
             Arc::new(ProcessLocalPapRepository::with_binding_states(vec![initial()]).unwrap());
@@ -426,7 +453,7 @@ fn retry_prepares_current_process_identity_without_storing_it_in_cleanup() {
         .unwrap();
         let id = spec(7).binding_id;
         assert_eq!(
-            core.reconcile(&id).unwrap(),
+            core.reconcile(&id, &mut schedule).unwrap(),
             Disposition::RetryAt { at: 100 }
         );
         let previous = repo.read(&id).unwrap().unwrap();
@@ -437,13 +464,13 @@ fn retry_prepares_current_process_identity_without_storing_it_in_cleanup() {
         }
         clock.0.store(100, Ordering::SeqCst);
         assert_eq!(
-            core.reconcile(&id).unwrap(),
+            core.reconcile(&id, &mut schedule).unwrap(),
             Disposition::RetryAt { at: 250 }
         );
         let after = repo.read(&id).unwrap().unwrap();
         assert_eq!(after.binding.spec, previous.binding.spec);
         assert_eq!(after.deployments, previous.deployments);
-        assert_eq!(after.runtime.attempts_started, 2);
+        assert_eq!(schedule.attempts_started, 2);
         let requests = wire.requests();
         assert_eq!(requests.len(), 4);
         let body: Value = serde_json::from_slice(requests[3].body.as_ref().unwrap()).unwrap();

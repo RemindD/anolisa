@@ -35,8 +35,16 @@ struct FixtureCase {
     case_id: String,
     variant: String,
     initial: Option<ReconcileRecord>,
+    initial_schedule: Option<FixtureSchedule>,
     id: ResourceId,
     steps: Vec<Step>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FixtureSchedule {
+    attempts_started: u32,
+    next_attempt_at: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -254,6 +262,14 @@ fn complete_serialized_core_cases() {
         let key = format!("{}/{}", case.case_id, case.variant);
         assert!(actual.insert(key.clone()), "duplicate fixture {key}");
         assert!(!case.steps.is_empty(), "empty fixture {key}");
+        let mut schedule = AttemptSchedule::default();
+        if let Some(initial) = &case.initial {
+            schedule.observe(&initial.binding);
+        }
+        if let Some(progress) = case.initial_schedule {
+            schedule.attempts_started = progress.attempts_started;
+            schedule.next_attempt_at = progress.next_attempt_at;
+        }
         let harness = Arc::new(Harness {
             repository: ProcessLocalPapRepository::with_binding_states(
                 case.initial.into_iter().collect(),
@@ -289,7 +305,7 @@ fn complete_serialized_core_cases() {
                 admission: step.admission,
                 trace: vec![],
             };
-            let result = reconciler.reconcile(&case.id);
+            let result = reconciler.reconcile(&case.id, &mut schedule);
             let result = match result {
                 Ok(disposition) => json!({"Ok": disposition}),
                 Err(error) => json!({"Err": error.to_string()}),
@@ -388,7 +404,9 @@ fn actual_agentsight_adapter_uses_the_core_port_without_interface_changes() {
     )
     .unwrap();
     assert_eq!(
-        reconciler.reconcile(&case.id).unwrap(),
+        reconciler
+            .reconcile(&case.id, &mut crate::AttemptSchedule::default())
+            .unwrap(),
         Disposition::Completed
     );
     assert_eq!(harness.repository.read(&case.id).unwrap(), step.expected);

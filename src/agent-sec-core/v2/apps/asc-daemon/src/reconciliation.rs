@@ -61,8 +61,13 @@ pub struct UnavailableReconciliation;
 
 impl asc_pap::BindingReconcileEnqueuer for UnavailableReconciliation {
     fn check_ready(&self) -> Result<(), asc_pap::PapError> {
-        Err(asc_pap::PapError::Persistence)
+        Err(asc_pap::PapError::Unavailable)
     }
 
-    fn enqueue(&self, _: &asc_policy_types::identifiers::ResourceId) {}
+    fn enqueue(
+        &self,
+        _: &asc_policy_types::identifiers::ResourceId,
+    ) -> Result<(), asc_pap::EnqueueError> {
+        Err(asc_pap::EnqueueError::Stopped)
+    }
 }

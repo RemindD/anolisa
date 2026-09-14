@@ -1,3 +1,5 @@
+#[path = "admission_tests.rs"]
+mod admission_tests;
 use super::queue::Entry;
 use super::*;
 use asc_pap::{BindingReconcileEnqueuer, PapRepository, PapService};
@@ -6,7 +8,7 @@ use asc_pcp::{
     DeploymentReport, Failure, FailureKind, Observation, PreparedApply, Presence, RetryPolicy,
     TargetDeploymentClient, TargetRef,
 };
-use asc_policy_repository::{BindingStateSnapshot, RuntimeState};
+use asc_policy_repository::BindingStateSnapshot;
 use asc_policy_types::binding::{BindingView, PreparedBinding};
 use asc_policy_types::target::{TargetBindingPlan, TranslationOutcome};
 use std::collections::{BTreeMap, VecDeque};
@@ -28,9 +30,8 @@ fn record(n: u32) -> BindingStateSnapshot {
     BindingStateSnapshot {
         binding: BindingView {
             spec,
-            status: BindingStatus::PendingApply,
+            status: (BindingStatus::PendingApply).into(),
         },
-        runtime: RuntimeState::default(),
         deployments: vec![],
     }
 }
@@ -46,9 +47,9 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 fn fifo_coalesces_and_dirty_survives_notification_finish_races() {
     for _ in 0..32 {
         let q = Arc::new(WorkQueue::new(3, 4));
-        q.enqueue(&id(1));
-        q.enqueue(&id(1));
-        q.enqueue(&id(2));
+        let _ = q.enqueue(&id(1));
+        let _ = q.enqueue(&id(1));
+        let _ = q.enqueue(&id(2));
         assert_eq!(q.take(), Some(id(1)));
         let barrier = Arc::new(Barrier::new(3));
         let a = {
@@ -56,7 +57,7 @@ fn fifo_coalesces_and_dirty_survives_notification_finish_races() {
             let b = barrier.clone();
             thread::spawn(move || {
                 b.wait();
-                q.enqueue(&id(1));
+                let _ = q.enqueue(&id(1));
             })
         };
         let b = {
@@ -80,8 +81,8 @@ fn fifo_coalesces_and_dirty_survives_notification_finish_races() {
 #[test]
 fn concurrent_takers_never_claim_one_id_twice() {
     let q = Arc::new(WorkQueue::new(2, 4));
-    q.enqueue(&id(1));
-    q.enqueue(&id(2));
+    let _ = q.enqueue(&id(1));
+    let _ = q.enqueue(&id(2));
     let barrier = Arc::new(Barrier::new(3));
     let handles: Vec<_> = (0..2)
         .map(|_| {
@@ -105,14 +106,15 @@ fn concurrent_takers_never_claim_one_id_twice() {
 #[test]
 fn batch_discovery_preserves_existing_work_and_applies_capacity_and_deadlines() {
     let q = WorkQueue::new(6, 0);
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
-    q.enqueue(&id(1)); // Running and dirty.
-    q.enqueue(&id(2));
+    q.enqueue(&id(1)).unwrap(); // Running and dirty.
+    let _ = q.enqueue(&id(2));
     assert_eq!(q.take(), Some(id(2)));
-    assert!(q.finish(id(2), Some(100), true)); // Exhausted.
+    assert!(q.finish(id(2), Some(100), true));
+    q.finish_terminalization(id(2), false); // Unconfirmed terminal write retains Exhausted.
     q.discover_many([(id(3), Some(200))], 100);
-    q.enqueue(&id(4));
+    let _ = q.enqueue(&id(4));
     let before = q.state.lock().unwrap().entries.clone();
     q.discover_many(
         [
@@ -153,7 +155,7 @@ fn batch_discovery_preserves_existing_work_and_applies_capacity_and_deadlines() 
 #[test]
 fn retry_deadline_is_invalidated_by_delete_and_discovery_never_dirties() {
     let q = WorkQueue::new(2, 4);
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     q.discover_many([(id(1), None)], 0);
     assert_eq!(
@@ -166,12 +168,12 @@ fn retry_deadline_is_invalidated_by_delete_and_discovery_never_dirties() {
     q.finish(id(1), Some(100), false);
     q.tick(99);
     assert!(q.state.lock().unwrap().ready.is_empty());
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     q.tick(100);
     q.tick(101);
     assert_eq!(q.state.lock().unwrap().ready, VecDeque::from([id(1)]));
     q.take();
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     q.finish(id(1), Some(1000), false);
     assert_eq!(q.state.lock().unwrap().ready, VecDeque::from([id(1)]));
 }
@@ -179,12 +181,12 @@ fn retry_deadline_is_invalidated_by_delete_and_discovery_never_dirties() {
 #[test]
 fn capacity_includes_running_and_waiting_and_stop_wakes_takers() {
     let q = Arc::new(WorkQueue::new(1, 4));
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     q.take();
-    q.enqueue(&id(2));
+    let _ = q.enqueue(&id(2));
     assert!(q.state.lock().unwrap().overflow_count > 0);
     q.finish(id(1), Some(1000), false);
-    q.enqueue(&id(2));
+    let _ = q.enqueue(&id(2));
     assert_eq!(q.state.lock().unwrap().entries.len(), 1);
     let waiter = {
         let q = q.clone();
@@ -347,7 +349,7 @@ fn core(
 fn status(repo: &ProcessLocalPapRepository, n: u32) -> Option<BindingStatus> {
     repo.get_binding_state(&id(n))
         .unwrap()
-        .map(|r| r.binding.status)
+        .map(|r| r.binding.status.phase)
 }
 
 #[test]
@@ -368,8 +370,23 @@ fn one_worker_serves_other_bindings_during_retry_and_reprepares_on_deadline() {
     wait_until(|| status(&repo, 2) == Some(BindingStatus::Ready));
     let pending = repo.get_binding_state(&id(1)).unwrap().unwrap();
     assert_eq!(pending.binding.spec, record(1).binding.spec);
-    assert_eq!(pending.runtime.attempts_started, 1);
-    assert_eq!(pending.runtime.next_attempt_at, Some(50_100));
+    wait_until(|| {
+        service
+            .queue
+            .state
+            .lock()
+            .unwrap()
+            .schedules
+            .contains_key(&id(1))
+    });
+    assert_eq!(
+        service.queue.state.lock().unwrap().schedules[&id(1)].attempts_started,
+        1
+    );
+    assert_eq!(
+        service.queue.state.lock().unwrap().schedules[&id(1)].next_attempt_at,
+        Some(50_100)
+    );
     assert_eq!(pending.deployments[0].presence, Presence::Unknown);
     wait_until(|| {
         service.queue.state.lock().unwrap().entries.get(&id(1))
@@ -399,7 +416,7 @@ fn one_worker_serves_other_bindings_during_retry_and_reprepares_on_deadline() {
 fn compensation_pages_past_capacity_without_any_notifications() {
     let mut records: Vec<_> = (1..=7).map(record).collect();
     let mut terminal = record(0);
-    terminal.binding.status = BindingStatus::ApplyFailed;
+    terminal.binding.status.phase = BindingStatus::ApplyFailed;
     records.insert(0, terminal);
     let repo = Arc::new(ProcessLocalPapRepository::with_binding_states(records).unwrap());
     let client = Arc::new(Client::default());
@@ -443,7 +460,7 @@ fn delete_admitted_during_apply_waits_for_exit_and_preserves_cleanup() {
     let mut other = record(2).binding;
     other.spec.binding_revision = asc_foundation_types::Revision::new(1).unwrap();
     repo.update_binding(None, &other).unwrap();
-    service.enqueuer().enqueue(&id(2));
+    service.enqueuer().enqueue(&id(2)).unwrap();
     wait_until(|| status(&repo, 2) == Some(BindingStatus::Ready));
     assert_eq!(status(&repo, 1), Some(BindingStatus::PendingDelete));
     assert_eq!(
@@ -617,7 +634,7 @@ fn timer_panic_closes_admission_and_shutdown_observes_failure() {
     wait_until(|| queue.has_failed());
     assert!(queue.check_ready().is_err());
     assert!(queue.state.lock().unwrap().entries.is_empty());
-    queue.enqueue(&id(1));
+    let _ = queue.enqueue(&id(1));
     assert_eq!(queue.take(), None);
     assert_eq!(repo.get_binding_state(&id(1)).unwrap(), None);
     assert_eq!(runtime.shutdown(), Err(StoreError::Unavailable));
@@ -633,11 +650,12 @@ fn pap_notification_observes_committed_state_and_failed_admission_never_notifies
         fn check_ready(&self) -> Result<(), asc_pap::PapError> {
             Ok(())
         }
-        fn enqueue(&self, id: &ResourceId) {
+        fn enqueue(&self, id: &ResourceId) -> Result<(), asc_pap::EnqueueError> {
             self.seen
                 .lock()
                 .unwrap()
                 .push(self.repo.get_binding(id).unwrap());
+            Ok(())
         }
     }
     let repo = Arc::new(ProcessLocalPapRepository::default());
@@ -695,8 +713,8 @@ fn pap_notification_observes_committed_state_and_failed_admission_never_notifies
 #[test]
 fn waiting_retry_releases_worker_without_closing_admission() {
     let q = WorkQueue::new(2, 4);
-    q.enqueue(&id(1));
-    q.enqueue(&id(2));
+    let _ = q.enqueue(&id(1));
+    let _ = q.enqueue(&id(2));
     assert_eq!(q.take(), Some(id(1)));
     q.finish(id(1), Some(100), false);
     assert!(q.check_ready().is_ok());
@@ -716,13 +734,13 @@ fn scan_failure_degrades_health_without_closing_binding_admission() {
     q.state.lock().unwrap().scan_failed = true;
     assert!(!q.is_healthy());
     assert_eq!(q.check_ready(), Ok(()));
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     q.finish(id(1), None, false);
     q.state.lock().unwrap().scan_failed = false;
     assert!(q.is_healthy());
     q.stop();
-    assert_eq!(q.check_ready(), Err(asc_pap::PapError::Persistence));
+    assert_eq!(q.check_ready(), Err(asc_pap::PapError::Unavailable));
 }
 
 struct RepeatedOutcome {
@@ -734,12 +752,16 @@ impl ReconcileAttempt for RepeatedOutcome {
     fn clock(&self) -> Arc<dyn Clock> {
         self.core.clock()
     }
-    fn reconcile(&self, binding_id: &ResourceId) -> Result<Disposition, StoreError> {
+    fn reconcile(
+        &self,
+        binding_id: &ResourceId,
+        schedule: &mut AttemptSchedule,
+    ) -> Result<Disposition, StoreError> {
         self.calls.lock().unwrap().push(binding_id.clone());
         if binding_id == &id(1) {
             self.result.clone()
         } else {
-            self.core.reconcile(binding_id)
+            self.core.reconcile(binding_id, schedule)
         }
     }
 }
@@ -806,24 +828,27 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
             );
             clock.0.store(deadline, Ordering::SeqCst);
         }
-        wait_until(|| q.state.lock().unwrap().entries.get(&id(1)) == Some(&Entry::Exhausted));
+        wait_until(|| {
+            status(&repo, 1) == Some(BindingStatus::ApplyFailed)
+                && q.state.lock().unwrap().entries.is_empty()
+        });
         assert_eq!(
             *attempt.calls.lock().unwrap(),
             vec![id(1), id(2), id(1), id(1)]
         );
-        q.tick(u64::MAX);
-        q.discover_many([(id(1), None)], u64::MAX);
-        assert!(q.state.lock().unwrap().ready.is_empty());
-        assert_eq!(
-            q.state.lock().unwrap().entries.get(&id(1)),
-            Some(&Entry::Exhausted)
-        );
-        assert_eq!(repo.get_binding_state(&id(1)).unwrap(), Some(record(1)));
+        let mut expected = record(1);
+        expected.binding.status.phase = BindingStatus::ApplyFailed;
+        expected.binding.status.error = Some(Failure::new(
+            FailureKind::Rejected,
+            "RECONCILE_RETRY_EXHAUSTED",
+        ));
+        assert_eq!(repo.get_binding_state(&id(1)).unwrap(), Some(expected));
+        assert!(q.state.lock().unwrap().schedules.is_empty());
         exercise_independent_pap_crud(&repo, &q);
         assert!(q.is_healthy());
 
-        // An explicit new notification starts another bounded scheduling series.
-        q.enqueue(&id(1));
+        // An explicit retry clears Failed before starting a new scheduling series.
+        retry_failed_binding(&repo, &q);
         wait_until(|| {
             q.state.lock().unwrap().entries.get(&id(1))
                 == Some(&Entry::WaitingRetry {
@@ -848,32 +873,33 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
 #[test]
 fn new_notifications_reset_queue_budget_and_preempt_waiting_or_exhaustion() {
     let q = WorkQueue::new(1, 1);
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     assert!(!q.finish(id(1), Some(100), true));
     q.tick(100);
     // Notification of a newly admitted intent coalesces with the queued retry.
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.state.lock().unwrap().ready, VecDeque::from([id(1)]));
     assert_eq!(q.take(), Some(id(1)));
     assert!(!q.finish(id(1), Some(200), true));
     q.tick(200);
     assert_eq!(q.take(), Some(id(1)));
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     // Dirty is a new notification, so the exhausted old budget cannot suppress it.
     assert!(!q.finish(id(1), Some(300), true));
     assert_eq!(q.take(), Some(id(1)));
     assert!(!q.finish(id(1), Some(300), true));
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     assert!(!q.finish(id(1), Some(400), true));
     q.tick(400);
     assert_eq!(q.take(), Some(id(1)));
     assert!(q.finish(id(1), Some(500), true));
+    q.finish_terminalization(id(1), false);
     q.discover_many([(id(1), None)], 1000);
     q.tick(1000);
     assert!(q.state.lock().unwrap().ready.is_empty());
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     assert!(!q.finish(id(1), None, false));
     assert!(q.state.lock().unwrap().entries.is_empty());
@@ -882,9 +908,10 @@ fn new_notifications_reset_queue_budget_and_preempt_waiting_or_exhaustion() {
 #[test]
 fn zero_retry_budget_stops_first_failure_and_submillisecond_delay_is_rejected() {
     let q = WorkQueue::new(1, 0);
-    q.enqueue(&id(1));
+    let _ = q.enqueue(&id(1));
     assert_eq!(q.take(), Some(id(1)));
     assert!(q.finish(id(1), Some(100), true));
+    q.finish_terminalization(id(1), false);
     assert_eq!(
         q.state.lock().unwrap().entries.get(&id(1)),
         Some(&Entry::Exhausted)
@@ -915,7 +942,11 @@ fn binding_errors_retry_without_blocking_other_bindings_or_pap_writes() {
         fn clock(&self) -> Arc<dyn Clock> {
             self.core.clock()
         }
-        fn reconcile(&self, id: &ResourceId) -> Result<Disposition, StoreError> {
+        fn reconcile(
+            &self,
+            id: &ResourceId,
+            schedule: &mut AttemptSchedule,
+        ) -> Result<Disposition, StoreError> {
             let mut calls = self.calls.lock().unwrap();
             let first = calls.is_empty();
             calls.push(id.clone());
@@ -923,7 +954,7 @@ fn binding_errors_retry_without_blocking_other_bindings_or_pap_writes() {
             if first {
                 Err(self.error)
             } else {
-                self.core.reconcile(id)
+                self.core.reconcile(id, schedule)
             }
         }
     }
@@ -1045,4 +1076,24 @@ fn exercise_independent_pap_crud(repo: &Arc<ProcessLocalPapRepository>, q: &Arc<
         .unwrap();
     pap.delete_scope_revision(&scope.scope_id, scope.revision)
         .unwrap();
+}
+
+#[path = "termination_tests.rs"]
+mod termination_tests;
+
+fn retry_failed_binding(repo: &Arc<ProcessLocalPapRepository>, queue: &Arc<WorkQueue>) {
+    let pap = PapService::new(
+        repo.clone(),
+        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
+    )
+    .with_reconcile_enqueuer(queue.clone());
+    let spec = record(1).binding.spec;
+    pap.update_binding(
+        &id(1),
+        &spec.policy.policy_id,
+        spec.policy.revision,
+        &spec.scope.scope_id,
+        spec.scope.revision,
+    )
+    .unwrap();
 }

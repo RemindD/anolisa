@@ -41,7 +41,7 @@ error injection、进程崩溃和重启恢复测试在 persistent Repository 就
 | `asc-pcp` | 同步单次 `reconcile(id)`；每次重新读取、计算和执行，返回结果及重试条件 |
 | Repository | 保持 spec 与部署责任独立；一致读取可聚合，写入按所属字段和目标进行条件更新 |
 | 单次临时数据 | plan、prepared request、create/update 判断及 Client 返回结果仅存活于本次调用，不进入 SQL schema |
-| 时间与恢复 | 持久化跨重启 deadline，进程内使用单调时间等待；重新计算前恢复业务状态和目标责任 |
+| 时间与恢复 | 预算和 deadline 仅存 WorkQueue，重启重置；状态、错误和目标责任由 Repository 保留 |
 
 源码入口：[内存布局](../../v2/crates/policy/asc-pap-repository-memory/src/lib.rs)、
 [部署存储适配](../../v2/crates/policy/asc-pap-repository-memory/src/binding_state.rs)、
@@ -139,11 +139,13 @@ worker 领取时只获得 Binding ID；所有执行都从头开始，不需要�
 `RetryAt`、`Superseded` 和 `StoreError` 共用本条目计数。`Skipped` 恢复已有等待不增加次数。
 `RetryAt` 使用核心期限；若期限在收尾期间已过去，仍至少等待 1 毫秒并经 timer 唤醒。
 `Superseded` 和仓储错误使用固定 `storage_retry`，配置不得小于 1 毫秒。
-预算耗尽时转为 `Exhausted`，输出仅含 ID 的安全诊断；timer 和补扫不得重新激活该条目。
-`Exhausted` 仍计入队列容量，因此耗尽条目占满容量时新 ID 依赖容量释放后补扫；不另建无界集合。
-此状态仅表示队列停止自动重试，不伪造 Binding 的 FAILED、远端结果或清理完成。
-已有 Repository 记录与目标责任保留；队列计数和 `Exhausted` 只存在内存，Runtime 重建后不保留。
-核心已提交的业务预算独立有效，新通知只重置队列预算，不能自行重置 Repository 的业务预算。
+预算耗尽时保留 Running 执行条件写，将原 revision、原 Apply/Delete 意图标记为对应 Failed，
+原因码为 RECONCILE_RETRY_EXHAUSTED；确认成功或已终态/缺失后释放条目和 AttemptSchedule。
+只在读写失败/panic 等导致终止无法确认时保留 Exhausted，防止补扫重新执行 Pending。
+状态更新不修改 spec、deployments 或目标清理责任；Failed 不证明远端没有副作用。
+新 revision、Apply→Delete、dirty 通知优先，CAS 冲突不将旧失败写入循环应用到新快照。
+队列计数及异常保留的 Exhausted 只存在内存，Runtime 重建后不保留。
+业务 AttemptSchedule 同样只存在内存；重复通知不重置当前请求的业务进度。
 新 Delete/Update 通知可立即打断旧等待或耗尽状态；Running 的 dirty 同样优先于旧调用结果。
 这不对持续外部通知限速，等待和次数限制只约束自动重试。
 
@@ -164,8 +166,12 @@ Binding 创建定时任务。扫描与 enqueue 使用同一状态锁；转为 Qu
 扫描批次有界，数据量增大后再根据测量决定是否引入最小堆。
 
 容量按 entries 总数（排队、执行、等待、耗尽）计，不只限制 ready。已有条目的通知仍可合并。
-新 ID 无容量时递增 overflow_count；PAP 已提交的意图不能回滚，也不能把通知失败伪装成
-数据库写失败，让客户端误以为 CREATE 没发生。队列闭合还需报告服务健康并停止新的 Binding 写准入；Policy/Scope CRUD 不依赖队列。
+新 ID 无容量时递增 overflow_count 并返回 Full；队列停止返回 Stopped。
+PAP 对原 ID/revision/Pending 做原子条件失败写入：Pending→对应 Failed、status.error 更新；
+不保存重试次数或 deadline；保留 spec 和部署责任。成功后返回完整 BindingView（spec + Failed status/error），与受理成功使用相同 result 结构。
+worker 已认领或新状态已替换时不覆盖；失败落库未确认时明确说明后台仍可能执行。
+完整竞争边界及可执行验收见 [Binding 队列拒绝验收](BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。
+队列闭合仍报告服务健康并停止新的 Binding 写准入；Policy/Scope CRUD 不依赖队列。
 
 补偿扫描按稳定 ID 分页读取轻量 Binding 元数据（包含终态，以限制每页实际访问量），
 再筛选可执行意图，并使用区分“发现候选”和“新请求通知”的去重入口：
@@ -228,7 +234,7 @@ APPLY_FAILED。Delete 清理全部仍可能存在的目标，包含旧 revision 
 
 | 表 | 内容 | 写权限 |
 |---|---|---|
-| `bindings` | ID、spec、spec revision、status、当前重试控制、安全错误 | PAP 修改 spec 和请求意图；核心只条件更新 status/重试字段 |
+| `bindings` | ID、spec、spec revision、status（phase 与安全 error） | PAP 修改 spec 和请求意图；核心只条件更新完整 status |
 | `binding_deployments` | Binding ID、目标 route/ID、来源 revision、cleanup、presence、最近确认信息 | 核心按具体目标登记、更新观察和确认回收 |
 
 唯一目标键由 Binding ID 和 Client 的不透明目标身份组成；不得用当前 revision 过滤掉旧清理责任。
@@ -245,11 +251,11 @@ SQL `SET` 只更新指定列，同表分列也能保护 spec。分表的理由�
 
 | 操作 | 原子边界 |
 |---|---|
-| PAP 写意图 | 检查当前 Binding，按准入规则更新 spec/status/重试控制；保留 deployments |
-| 条件认领 | 对 ID + revision + expected pending status 检查到期及预算，更新 running 和 attempts；不写 spec |
+| PAP 写意图 | 检查当前 Binding，按准入规则更新 spec/status 并清除旧错误；保留 deployments |
+| 条件认领 | 调用方先检查内存到期时间及预算；事务检查 ID/revision/Pending，更新 running 并清除 error；不写 spec |
 | `register_targets` | 检查执行仍被允许，登记本次将操作的目标及 UNKNOWN；提交后才允许目标修改 |
 | `record_observations` | 只合并已登记且归属有效的目标记录；不修改 spec；可单独调用 |
-| `commit_attempt` | 显式事务：合并目标观察；仅在认领的 revision/status 仍匹配时更新状态/重试字段 |
+| `commit_attempt` | 显式事务：合并目标观察；仅在认领的 revision/status 仍匹配时更新状态和错误 |
 | `finalize_delete` | 同一事务检查删除意图、所有目标均确认不存在，再移除 Binding 和关联记录 |
 
 例如状态更新可使用：
@@ -307,7 +313,8 @@ prepare 产生的请求必须原样交给 Client，不能在发送前偷偷改�
 | 最新 spec/status | 每次从 Repository 读取，不使用旧 Binding 副本 |
 | Adapter plan / Client prepared / 本次返回结果 | 不缓存、不落库；本次退出后释放 |
 | deployment 的身份、cleanup、已确认观察 | 保留，作为外部目标责任；每次读取最新记录 |
-| 重试次数、退避、终态错误 | 保留业务控制；新意图按 PAP 规则重置，自动重试不重置 |
+| 重试次数、退避 | WorkQueue 持有 AttemptSchedule；自动重试保留，新请求/重启重置 |
+| 状态及错误 | Repository 中的 BindingView.status 是唯一来源；认领时清除旧错误 |
 | WorkQueue entries / dirty | 仅调度；不表达执行到哪个步骤 |
 
 “从头”是重新计算当前应做的操作，不是清空外部事实。已确认不存在并移除的目标不会重新
@@ -316,7 +323,7 @@ create/update 的选择也根据最新目标集合及具体 Client 契约重新�
 
 ### 7.3 失败与结果提交
 
-可重试的 Client 失败先提交观察和重试控制，再返回 RetryAt；worker 释放执行资源，
+可重试的 Client 失败先提交观察和 Pending/error，再返回 RetryAt；重试次数与 deadline 保留在调用方的内存进度；worker 释放执行资源，
 到期后重新调用整个流程。dirty 只保证当前调用退出后再次排队，不承担缓存失效语义。
 
 若结果提交失败，本次调用可以使用其仍持有的结果进行有界的事务重试；这不构成跨调用
@@ -341,9 +348,8 @@ create/update 的选择也根据最新目标集合及具体 Client 契约重新�
 
 | 状态 | 恢复 |
 |---|---|
-| PENDING_APPLY / PENDING_DELETE，到期或无 deadline | 重建 Queued |
-| PENDING_*，尚未到期 | 重建 WaitingRetry |
-| APPLYING / DELETING | 视为中断的已开始尝试；保留已消耗预算与全部目标责任，条件恢复为 pending 或预算耗尽的 FAILED |
+| PENDING_APPLY / PENDING_DELETE | 重建 Queued，次数从零开始，不继承旧 deadline |
+| APPLYING / DELETING | 确认旧调用已退出后条件恢复 Pending/RECONCILE_INTERRUPTED，保留目标责任；新进程预算从零开始，按当前配置安排退避 |
 | READY / APPLY_FAILED / DELETE_FAILED | 不自动恢复执行或预算 |
 | 记录已移除 | 不创建任务、不复活 ID |
 
@@ -351,9 +357,8 @@ create/update 的选择也根据最新目标集合及具体 Client 契约重新�
 恢复后 Apply 从最新 spec 重新翻译/准备；Delete 直接清理已知目标。WorkQueue、dirty、
 进程内 prepared 都不落盘。补扫不能把本进程仍有 handle 的任务当成崩溃遗留任务。
 
-跨重启的 retry deadline 使用明确的墙钟时间表示，进程内等待转换为单调 deadline；
-单调毫秒不能直接写入 DB 后跨进程解释。识别时钟前跳/后跳时有界重算等待，不重置 attempts。
-具体精度、转换和异常判定在 SQL 工作包的 fake-clock fixture 固定。
+重试次数和 deadline 不写入 Repository，也不要求跨重启继承；无需墙钟持久化转换。
+同一进程内使用共享单调时钟。补扫不得覆盖已有队列条目的次数和 deadline。
 
 当前进程内 Runtime 的 `start(repository, reconciler, config)` 不接收独立时钟参数，
 通过 `ReconcileAttempt::clock()` 取得核心用于计算 deadline 的同一个 `Arc<dyn Clock>`。
@@ -401,11 +406,12 @@ Delete 使用原 cleanup，不要求原进程仍然存活；已登记的 UNKNOWN
   这不是整个 daemon 的启动条件。Client 凭据与远端状态在尝试内检查。
   恢复枚举可与有界 worker 协作，不能等待所有目标 READY 才宣布服务可接受请求。
 - **失败边界**：单 Binding 的业务 FAILED、存储/数据错误及 CAS 耗尽不使整个服务失败。
-  单次错误由 WaitingRetry 保留重试责任，队列预算耗尽后由 Exhausted 阻止补扫重启；不另存 storage_errors 集合。不能写入 Binding 错误时
+  单次错误由 WaitingRetry 保留重试责任，队列预算耗尽后先写 Failed 再释放 slot，无法确认时才由 Exhausted 阻止补扫重启；不另存 storage_errors 集合。不能写入 Binding 错误时
   输出安全诊断，不宣称远端失败。单次 reconcile panic 经核心收尾后在 worker 调用边界捕获；
-  已确认终态/缺失则移除条目，否则保留 Exhausted，worker 继续处理其它 ID。收尾查询错误或
+  原意图仍 Pending/Running 时条件写 Failed（RECONCILE_WORKER_PANICKED）；确认成功或已终态/缺失则移除条目。
+  无法确认则保留 Exhausted，worker 继续处理其它 ID。调度中的 Skipped 查询也在单 Binding panic 隔离边界内。收尾查询错误或
   panic 视为结果未确认；dirty 始终优先。补扫失败影响 health，但不关闭写准入。
-  Runtime 停止、timer/scanner 或 worker 调度代码自身 panic/join 失败关闭新的 Binding 写准入，
+  Runtime 停止、timer/scanner 或 worker 队列内部维护代码 panic/join 失败关闭新的 Binding 写准入，
   保留已有意图；Policy/Scope CRUD 和读查询独立处理。
 - **取消**：停止新领取，唤醒等待循环；不能通过丢弃/abort async waiter 假装同步 Client 已停止。
   保存可用结果，等待实际执行 handle 退出；确认退出后才释放同 ID 所有权或交给其它 worker。
@@ -457,10 +463,10 @@ CAS 耗尽从 Unavailable 改为 Contended，仍有界重调度，不改变 wire
 回滚时一并撤销核心错误分类、Runtime/PAP 门禁及直接消费者契约，避免混用两套错误语义。
 
 CR-019：所有自动重试先等待并有次数上限；Superseded 不再立即自动入队。
-新通知继续抢占等待，耗尽条目保留在有界 entries 中，补扫不能重置预算。
+新通知继续抢占等待；耗尽时先条件写 Failed 再释放条目，仅未确认终止的条目保留在有界 entries 中。
 这是 V2 内部调度修正，无 V1 对应能力，不改变 wire、Binding revision 或存储格式。
 回滚须同时撤销 Runtime 配置、队列状态/计数、测试及契约；停止领取并 join 实际调用后替换。
-队列预算不跨重启，持久化预算及恢复仍需 SQL 阶段独立验收。
+队列预算及业务尝试预算均不跨重启；SQL 阶段仅验证状态和部署责任恢复。
 
 CR-020：单次 reconcile panic 从服务级失败改为 Binding 级隔离。复用核心的条件结果/失败记账；
 worker 捕获展开后查询终态并收尾队列，dirty 优先，未确认结果复用 Exhausted 防止自动重放。
@@ -502,7 +508,7 @@ Client 初始化边界由 `asc-pcp/tests/client_initialization.rs` 和
 | RRT-011 | 无 dirty 的自动重试也重新读取并执行 translate/prepare，不复用上次对象；本次准备结果原样交给 Client | 重算次数、完整输入、身份校验、安全重放和调用顺序的组件测试 | — |
 | RRT-012 | 存储写入与跨调用上下文无 plan/prepared/body/pending outcome；每次及新进程均重新计算 | 数据模型、单次生命周期和内存写接口测试 | SQL schema 与真实新进程验证 |
 | RRT-013 | 重启恢复 running、pending、部分目标，终态不自动重试 | 不作 Runtime 集成阶段门禁 | SQL 关闭重开、进程终止与恢复 |
-| RRT-014 | 跨重启预算不重置，时钟异常有界 | 不作 Runtime 集成阶段跨重启门禁 | 持久化预算及 fake-clock 恢复测试 |
+| RRT-014 | 重建队列重置次数和 deadline；Failed 不自动重试 | BQA-011 及已有终态跳过测试 | 持久化状态与部署责任恢复另验 |
 | RRT-015 | 远端成功但观察未提交保留 UNKNOWN，重新准备及身份变化按 Client 恢复契约处理 | 不作 Runtime 集成阶段系统性注入门禁 | 提交窗口注入、PID/boot/route 变化及 Client 恢复契约 |
 | RRT-016 | 取消/停机及异常保留 ownership 至真实退出，health 正确 | 正常取消、drain/join、生命周期组件测试 | worker panic、存储故障、强制退出等注入 |
 | RRT-017 | dirty/新通知及自动重试均走从头执行路径；读取新 spec 时 Client 只收到新请求；Delete 不调用 Adapter | Queue/核心/Runtime 组件与竞争测试 | — |
@@ -557,3 +563,18 @@ SQL 崩溃恢复或真实 PEP 已验收。live target/enforcement 的证据另�
 各工作包记录 V1 relationship（新增 V2 内部能力）、GREENFIELD_CONTRACT/ADAPTER_CONFORMANCE
 验收类型、直接依赖版本、完整 pass/fail、外部兼容及内部变更报告。回滚按工作包恢复匹配的
 接口/核心/adapter/fixtures；未来 SQL schema 变更需先定义迁移及回滚兼容，不能丢弃已有目标责任。
+
+### CR-019：队列拒绝与可查询原因
+
+PAP 对可确认的入队拒绝执行 Pending→Failed 条件写；失败原因同步投影到 GET/LIST。
+不增加 operation ID；同 revision 重试的 ABA 边界及验证见
+[BQA 验收](BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。
+
+### CR-020：状态解释与进程内重试进度
+
+BindingView.status 改为 `{phase, error?}`，状态和原因同一条件写；移除 RuntimeState。
+Reconciler.reconcile 接受调用方持有的可变 AttemptSchedule，WorkQueue 在各次调用之间
+保留次数和单调 deadline，Repository 的快照、patch、扫描结果均不再含这些字段。
+同进程补扫/重复通知不重置业务预算；显式请求通过新的 Pending 且无 error 表达，
+认领前重置对应内存进度。新进程不继承次数或 deadline，Failed 仍只由显式请求恢复。
+完整验收见 [BQA](BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。

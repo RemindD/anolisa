@@ -52,6 +52,31 @@ pub fn render_policy(
     }
 }
 
+/// Prints the complete Binding mutation result, including a failed lifecycle.
+/// GET/LIST remain successful queries even when a Binding has failed.
+///
+/// # Errors
+/// Returns output encoding or write failures.
+pub fn render_binding_mutation(
+    response: &DaemonResponse,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<u8> {
+    let code = render_policy(response, stdout, stderr)?;
+    if let DaemonResponse::Success(success) = response
+        && matches!(
+            success
+                .result
+                .pointer("/status/phase")
+                .and_then(serde_json::Value::as_str),
+            Some("APPLY_FAILED" | "DELETE_FAILED")
+        )
+    {
+        return Ok(1);
+    }
+    Ok(code)
+}
+
 /// Renders a V1-compatible scan result rather than the daemon envelope.
 ///
 /// Action failures are complete scan results and remain parseable on stdout;
@@ -86,6 +111,46 @@ pub fn render_scan_code(
         DaemonResponse::Error(error) => {
             writeln!(stderr, "scan error: {}", error.error.message())?;
             Ok(1)
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scheduling_errors_and_binding_reasons_preserve_wire_output() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../fixtures/reconciliation/admission-wire.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let response: DaemonResponse = serde_json::from_value(
+                serde_json::json!({"requestId":"10000000-0000-4000-8000-000000000001", "result":case["binding"]})
+            ).unwrap();
+            for mutation in [false, true] {
+                let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+                let code = if mutation {
+                    render_binding_mutation(&response, &mut stdout, &mut stderr)
+                } else {
+                    render_policy(&response, &mut stdout, &mut stderr)
+                }
+                .unwrap();
+                assert_eq!(code, u8::from(mutation));
+                assert!(stderr.is_empty());
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&stdout).unwrap(),
+                    case["binding"]
+                );
+            }
+            let mut pending = case["binding"].clone();
+            pending["status"] = serde_json::json!({"phase":"PENDING_APPLY"});
+            let response: DaemonResponse = serde_json::from_value(
+                serde_json::json!({"requestId":"10000000-0000-4000-8000-000000000001", "result":pending})
+            ).unwrap();
+            assert_eq!(
+                render_binding_mutation(&response, &mut Vec::new(), &mut Vec::new()).unwrap(),
+                0
+            );
         }
     }
 }

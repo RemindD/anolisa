@@ -25,7 +25,7 @@ mod panic_recovery_tests;
 mod test_store;
 
 use model::{AttemptOutcome, ExecutionSlot, PreparedAttempt};
-pub use model::{Disposition, ExpectedBinding};
+pub use model::{AttemptSchedule, Disposition, ExpectedBinding};
 pub use ports::*;
 pub use reconciler::BindingReconciler;
 
@@ -40,7 +40,7 @@ pub use asc_policy_types::target::{
 
 pub use asc_policy_repository::{
     BindingStateRepository, BindingStateSnapshot, BindingStateWrite, Deployment, RetryPolicy,
-    RuntimeState, StoreError, WriteResult,
+    StoreError, WriteResult,
 };
 /// Complete serialized state retained for existing fixture consumers.
 pub type ReconcileRecord = BindingStateSnapshot;

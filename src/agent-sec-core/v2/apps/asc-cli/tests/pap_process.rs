@@ -302,3 +302,60 @@ async fn domain_validation_and_pagination_are_owned_by_the_daemon() {
     shutdown.request();
     task.await.unwrap();
 }
+
+#[test]
+fn failed_binding_results_preserve_cli_stdout_and_mutation_exit_status() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../fixtures/reconciliation/admission-wire.json"
+    ))
+    .unwrap();
+    let methods: Value = serde_json::from_str(common::METHODS).unwrap();
+    for case in cases {
+        for operation in ["create", "update", "delete", "get"] {
+            let directory = common::Directory::new();
+            let socket = directory.0.join("result.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let binding = case["binding"].clone();
+            let method = format!("policy.bindings.{operation}");
+            let expected_method = method.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&request).unwrap()["method"],
+                    expected_method
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"requestId":"10000000-0000-4000-8000-000000000001", "result":binding})
+                )
+                .unwrap();
+            });
+            let row = methods
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["method"] == method)
+                .unwrap();
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_agent-sec-cli"))
+                .args(common::args_for(row, &directory.0, &socket))
+                .output()
+                .unwrap();
+            server.join().unwrap();
+            assert_eq!(output.status.code(), Some(i32::from(operation != "get")));
+            assert!(output.stderr.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+                case["binding"]
+            );
+        }
+    }
+}

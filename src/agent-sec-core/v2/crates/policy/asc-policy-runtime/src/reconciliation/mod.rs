@@ -8,9 +8,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use asc_foundation_types::ResourceId;
-use asc_pcp::{BindingReconciler, Clock, Disposition};
-use asc_policy_repository::{BindingReconcileCatalog, BindingStateRepository, StoreError};
+use asc_pap::BindingReconcileEnqueuer;
+use asc_pcp::{AttemptSchedule, BindingReconciler, Clock, Disposition};
+use asc_policy_repository::{
+    BindingReconcileCatalog, BindingStateRepository, BindingStateSnapshot, BindingStateWrite,
+    ReconciliationPatch, StoreError, WriteResult,
+};
 use asc_policy_types::binding::BindingStatus;
+use asc_policy_types::target::{Failure, FailureKind};
 
 /// One shared clock domain for core deadlines and queue timers.
 pub struct MonotonicClock(Instant);
@@ -36,15 +41,23 @@ pub trait ReconcileAttempt: Send + Sync {
     /// # Errors
     /// Returns storage failure or exhausted CAS contention without claiming the
     /// remote operation failed.
-    fn reconcile(&self, id: &ResourceId) -> Result<Disposition, StoreError>;
+    fn reconcile(
+        &self,
+        id: &ResourceId,
+        schedule: &mut AttemptSchedule,
+    ) -> Result<Disposition, StoreError>;
 }
 impl ReconcileAttempt for BindingReconciler {
     fn clock(&self) -> Arc<dyn Clock> {
         self.clock()
     }
 
-    fn reconcile(&self, id: &ResourceId) -> Result<Disposition, StoreError> {
-        self.reconcile(id)
+    fn reconcile(
+        &self,
+        id: &ResourceId,
+        schedule: &mut AttemptSchedule,
+    ) -> Result<Disposition, StoreError> {
+        self.reconcile(id, schedule)
     }
 }
 
@@ -62,7 +75,7 @@ pub struct RuntimeConfig {
     /// Delay for Superseded and repository errors, in whole milliseconds.
     pub storage_retry: Duration,
     /// Automatic reschedules per notification/discovery, excluding the first call.
-    /// Exhaustion remains in memory until a new notification or process restart.
+    /// Exhaustion persists Failed before releasing the slot; unconfirmed writes retain it.
     pub max_auto_retries: u32,
 }
 impl Default for RuntimeConfig {
@@ -123,23 +136,14 @@ impl ReconciliationRuntime {
             let queue = queue.clone();
             service.spawn(format!("binding-worker-{index}"), move || {
                 while let Some(id) = queue.take() {
-                    // The core finishes panic bookkeeping before unwinding here.
-                    // Keep Running until that unwind and the state check finish.
-                    let Ok(result) = catch_unwind(AssertUnwindSafe(|| reconciler.reconcile(&id)))
-                    else {
-                        finish_panicked(repository.as_ref(), &queue, id);
-                        continue;
-                    };
-                    let (deadline, auto_retry) = scheduling_decision(
+                    run_attempt(
                         repository.as_ref(),
-                        &id,
-                        &result,
-                        clock.now_ms(),
+                        reconciler.as_ref(),
+                        clock.as_ref(),
+                        &queue,
+                        id,
                         config.storage_retry,
                     );
-                    if queue.finish(id.clone(), deadline, auto_retry) {
-                        eprintln!("binding reconciliation {id}: automatic retry budget exhausted");
-                    }
                 }
             })?;
         }
@@ -166,7 +170,7 @@ impl ReconciliationRuntime {
                                         BindingStatus::PendingApply | BindingStatus::PendingDelete
                                     )
                             })
-                            .map(|candidate| (candidate.id, candidate.next_attempt_at));
+                            .map(|candidate| (candidate.id, None));
                         queue.discover_many(candidates, clock.now_ms());
                     }
                     Err(_) => queue.state.lock().unwrap().scan_failed = true,
@@ -227,25 +231,129 @@ impl Drop for ReconciliationRuntime {
     }
 }
 
-fn finish_panicked(repository: &dyn BindingStateRepository, queue: &WorkQueue, id: ResourceId) {
-    eprintln!("binding reconciliation {id}: attempt panicked");
-    // A broken port can also panic during this read. Never turn an unconfirmed
-    // outcome into completion or automatically replay the panicking attempt.
-    let terminal = match catch_unwind(AssertUnwindSafe(|| repository.get_binding_state(&id))) {
-        Ok(Ok(None)) => true,
-        Ok(Ok(Some(record))) => matches!(
-            record.binding.status,
+fn run_attempt(
+    repository: &dyn BindingStateRepository,
+    reconciler: &dyn ReconcileAttempt,
+    clock: &dyn Clock,
+    queue: &WorkQueue,
+    id: ResourceId,
+    storage_retry: Duration,
+) {
+    // The core finishes panic bookkeeping before unwinding here.
+    // Keep Running until that unwind and the state check finish.
+    let mut schedule = queue.take_schedule(&id);
+    let mut original = None;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        original = repository.get_binding_state(&id)?;
+        let result = reconciler.reconcile(&id, &mut schedule);
+        Ok::<_, StoreError>(scheduling_decision(
+            repository,
+            &id,
+            &result,
+            clock.now_ms(),
+            storage_retry,
+            schedule.next_attempt_at,
+        ))
+    }));
+    queue.save_schedule(&id, schedule);
+    let (deadline, auto_retry) = match result {
+        Ok(Ok(decision)) => decision,
+        Ok(Err(error)) => (
+            Some(error_retry_at(&id, error, clock.now_ms(), storage_retry)),
+            true,
+        ),
+        Err(_) => {
+            finish_failed(
+                repository,
+                queue,
+                id,
+                original.as_ref(),
+                "RECONCILE_WORKER_PANICKED",
+            );
+            return;
+        }
+    };
+    if queue.finish(id.clone(), deadline, auto_retry) {
+        finish_failed(
+            repository,
+            queue,
+            id,
+            original.as_ref(),
+            "RECONCILE_RETRY_EXHAUSTED",
+        );
+    }
+}
+
+// Keep Running across all terminalization I/O. Notifications set dirty and cannot
+// start another worker until the conditional write and confirmation have finished.
+fn finish_failed(
+    repository: &dyn BindingStateRepository,
+    queue: &WorkQueue,
+    id: ResourceId,
+    original: Option<&BindingStateSnapshot>,
+    code: &str,
+) {
+    let confirmed = catch_unwind(AssertUnwindSafe(|| -> Result<bool, StoreError> {
+        let Some(current) = repository.get_binding_state(&id)? else {
+            return Ok(true);
+        };
+        if matches!(
+            current.binding.status.phase,
             BindingStatus::Ready
                 | BindingStatus::ApplyFailed
                 | BindingStatus::DeleteFailed
                 | BindingStatus::Deleted
-        ),
-        _ => false,
-    };
+        ) {
+            return Ok(true);
+        }
+        if queue.is_dirty(&id) {
+            return Ok(false);
+        }
+        let Some(original) = original else {
+            return Ok(false);
+        };
+        let deleting = |status| {
+            matches!(
+                status,
+                BindingStatus::PendingDelete
+                    | BindingStatus::Deleting
+                    | BindingStatus::DeleteFailed
+            )
+        };
+        if current.binding.spec.binding_revision != original.binding.spec.binding_revision
+            || deleting(current.binding.status.phase) != deleting(original.binding.status.phase)
+        {
+            // A newer intent wins even if its post-commit notification is delayed.
+            let _ = queue.enqueue(&id);
+            return Ok(false);
+        }
+        let mut status: asc_policy_types::binding::BindingLifecycle =
+            if deleting(current.binding.status.phase) {
+                BindingStatus::DeleteFailed
+            } else {
+                BindingStatus::ApplyFailed
+            }
+            .into();
+        // No spec/deployment patch: all target cleanup responsibility survives.
+        status.error = Some(Failure::new(FailureKind::Rejected, code));
+        let write = BindingStateWrite::patch(ReconciliationPatch {
+            status: Some(status),
+            deployments: None,
+        });
+        match repository.compare_exchange_binding_state(&current, &write)? {
+            WriteResult::Applied | WriteResult::AlreadyApplied => Ok(true),
+            WriteResult::Conflict => {
+                // Never retry this old failure write against a fresh snapshot.
+                let _ = queue.enqueue(&id);
+                Ok(false)
+            }
+        }
+    }));
+    let terminal = matches!(confirmed, Ok(Ok(true)));
     if !terminal {
-        eprintln!("binding reconciliation {id}: panic outcome unconfirmed");
+        eprintln!("binding reconciliation {id}: termination unconfirmed ({code})");
     }
-    queue.finish_panicked(id, terminal);
+    queue.finish_terminalization(id, terminal);
 }
 
 fn scheduling_decision(
@@ -254,6 +362,7 @@ fn scheduling_decision(
     result: &Result<Disposition, StoreError>,
     now: u64,
     delay: Duration,
+    deadline: Option<u64>,
 ) -> (Option<u64>, bool) {
     let decision = match result {
         Ok(Disposition::RetryAt { at }) => {
@@ -266,11 +375,11 @@ fn scheduling_decision(
             let deadline = record
                 .filter(|r| {
                     matches!(
-                        r.binding.status,
+                        r.binding.status.phase,
                         BindingStatus::PendingApply | BindingStatus::PendingDelete
                     )
                 })
-                .and_then(|r| r.runtime.next_attempt_at);
+                .and(deadline);
             (deadline, false)
         }),
         Ok(Disposition::Completed | Disposition::Failed { .. }) => Ok((None, false)),

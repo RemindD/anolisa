@@ -201,7 +201,7 @@ mutation 返回准入事务取得的快照；worker 可能在响应发送前继�
 Delete 接受成功不表示目标已删除；删除完成后旧 ID 返回 NotFound，不保留 DELETED 行。
 
 例：`policy.bindings.delete` 作用于 revision 2 的 READY Binding 时，目标响应中的
-`result.spec` 与删除前完全相同，`result.status` 为 `PENDING_DELETE`。完整 CRUD fixture
+`result.spec` 与删除前完全相同，`result.status` 为 `{"phase":"PENDING_DELETE"}`。完整 CRUD fixture
 保留原 Policy/Scope、IR、digest，仅调整 status；`bindingPendingDelete` 固定同版响应。
 
 认证继续由 kernel peer credentials 构造 Principal，经 daemon-core 准入；handler
@@ -211,7 +211,9 @@ Delete 接受成功不表示目标已删除；删除完成后旧 ID 返回 NotFo
 现有类型/参数错误仍为 `invalid_request`，领域验证为 `invalid_argument`，资源或来源版本
 缺失为 `not_found`，真实并发冲突及受限 UPDATE 为 `conflict`。只有需要增版的操作可因
 revision 上限返回 `resource_exhausted`；新 ID CREATE 从 1 开始，Delete 不得
-继续触发 RevisionExhausted。
+继续触发 RevisionExhausted。提交后的队列容量拒绝确认写入 Failed 后，返回完整
+BindingView，通过 status.phase/status.error 表达失败。详见
+[队列拒绝契约](BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。
 
 ### 4.3 必须同步的文件与兼容记录
 
@@ -551,16 +553,18 @@ Apply 仍可能晚完成；本阶段没有远端操作查询/fencing/order 协�
 
 本节保留旧核心阶段的范围与提案。后续 Runtime 集成以
 [新设计](BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)第 4～9 节为准：实现 dirty 合并、
-WaitingRetry、容量及补偿；重启不恢复 prepared。跨重启预算和目标责任继续保留。
+WaitingRetry、容量及补偿；重启不恢复 prepared。跨重启只保留 Binding 状态/错误和目标责任；次数与 deadline 重置。
 
 ### 8.1 意图与 Runtime 调度
 
-current 行中的 pending status、operation 与 next_attempt_at 是执行事实来源，
+Repository 中的 Binding spec、status/error 与 deployments 是持久状态边界；
+当前实现仍为内存 Repository。次数与 next_attempt_at 由 WorkQueue 的 AttemptSchedule 持有，
 内存通知只携带 Binding ID。PAP 成功提交后尝试唤醒；worker 获取执行权后重读。
 重复或乱序通知不能直接调用旧命令，不能增加重试次数，也不能重置退避时间。
 
 Runtime 已实现有界 WorkQueue、dirty 合并、到期 timer 与按稳定 Binding ID 的分页补扫。
-队列满不改变已提交的 CRUD 结果，补扫重新发现 pending；Running 条目直到调用实际退出
+队列拒绝后 PAP 条件写入 Failed 和原因并返回完整 BindingView；若 worker 已认领则返回当前状态。
+补扫只重新发现 pending/running，不自动恢复 Failed。Running 条目直到调用实际退出
 才结束。同一 Repository 使用一个 Runtime。跨进程恢复仍需后续持久化 Repository。
 
 ### 8.2 重试参数与计数提案
@@ -639,17 +643,19 @@ blocking 调用必须有超时并受 ownership 管理；不能取消外层 futur
 health 使用 running/degraded/stopped 与最近 outcome 分开表达。一次策略被目标拒绝
 只改变该操作 outcome，不把长期服务永久设成失败。补扫持续失败、timer/scanner 或调度线程异常退出
 反映到服务 health。单 Binding 存储/数据错误输出安全诊断并安排重试，
-CAS 耗尽独立返回 Contended；自动重调度必须等待且默认最多 4 次，耗尽后在队列中保留
-Exhausted，禁止补扫重新触发；不伪造存储中的失败状态。队列预算仅在当前 Runtime 有效。
+CAS 耗尽独立返回 Contended；自动重调度必须等待且默认最多 4 次。耗尽后保持 Running，
+条件写入 Failed/RECONCILE_RETRY_EXHAUSTED，确认后释放 slot；仅终止未确认时保留 Exhausted。
+失败不表示目标不存在，不修改部署责任。队列预算仅在当前 Runtime 有效。
 新通知仍立即触发并重置队列预算，核心已提交的业务预算不变。这些错误及补扫降级不关闭写准入。
 单次 reconcile panic 在 worker 调用边界隔离，worker 继续服务其它 Binding。
-timer/scanner 或 worker 调度代码自身 panic 则停止新领取并关闭 Binding 写准入，daemon 保留其它服务。
+timer/scanner 或 worker 队列内部维护代码 panic 则停止新领取并关闭 Binding 写准入，daemon 保留其它服务。
 Policy/Scope 写操作只依赖自身校验、编译及 Repository；具体写失败由 Repository 返回。
 
 当前同步核心的 panic 收尾契约：在 WorkQueue 仍保持 Running 期间捕获 unwind；有实际完成
 结果则优先提交，否则以 `RECONCILE_WORKER_PANICKED` 对原 claim 做失败 CAS。
 失败不代表目标不存在，UNKNOWN 与清理责任均保留，prepared 随本次调用退出丢弃；新意图不能被覆盖。
-本次收尾存储失败则丢弃临时结果，Runtime 保留 Exhausted 阻止自动重放；
+本次收尾存储失败则丢弃临时结果；Runtime 尝试对原意图条件写 Failed，
+仅终止仍无法确认时保留 Exhausted 阻止自动重放；
 后续显式新通知触发时按 Repository 事实处理最新意图。
 同一次调用内，内存 adapter 的最近 CAS 回执支持提交后 unwind 的精确写入重放；
 整个聚合删除后的重放以缺失 ID 确认，不在 panic 收尾中重复 Client 调用。
@@ -660,47 +666,23 @@ panic payload 投影为公开错误。此机制不捕获 abort，不修复已中
 核心仅保留每次调用新建的 `ExecutionSlot`，保存待提交结果和本次写入凭据；没有共享锁表、
 槽位分配或回收。未知 ID 读取缺失后直接返回。slot 随调用退出而丢弃，不能在进程崩溃后写回。
 Runtime 在同步调用及 unwind 收尾、结果查询结束前保持 Running。结果已终结或记录缺失时
-移除条目；仍 pending/running 或查询错误/panic 时保留 Exhausted。dirty 优先于旧结果，
+移除条目；原意图仍 pending/running 时条件写 Failed，确认成功后移除；查询/写入失败或 panic
+导致终止无法确认时保留 Exhausted。Skipped 调度查询同样纳入单 Binding panic 隔离。dirty 优先于旧结果，
 转为 Queued；新调用不得在前次收尾结束前进入。
 
 ## 9. API 运行结果与诊断提案
 
-内部 deployments/prepared request 不直接加入公开 API。建议扩展复用的 BindingView
-为 `spec + status + runtime`，runtime 是领域定义的有界公开投影，不在 handler 再定义
-一套领域 CRUD 类型。下表字段尚待 CR-009 的序列化契约和消费者验证后冻结。
+内部 deployments/prepared request 不直接加入公开 API。BindingView 为 `spec + status`，
+其中 status 为 `{phase, error?}`；error 使用有界 `{kind, code}`，不暴露远端正文。
+状态和原因由同一 Repository 条件写更新。自动重试 Pending 保留上一失败原因；
+开始 Applying/Deleting 时清除；显式请求进入 Pending 时清除。
 
-| runtime 字段提案 | 语义 |
-|---|---|
-| `operation` | 当前/最近 Apply 或 Delete，不用于身份或增版 |
-| `attemptsStarted`、`maxAttempts`、`nextAttemptAt` | 已持久化预算与计划；终态 nextAttemptAt 为 null |
-| `lastError` | null 或 `{code, message, retryable}`，message 最多 256 UTF-8 bytes，禁止回显原始远端 body/路径/凭据 |
-| `deploymentObservation` | `PRESENT` / `ABSENT` / `UNKNOWN`，按目标记录保守聚合 |
-| `observedAt` | 支撑上述确认的时间；无充分确认时为 null，不伪装为实时观测 |
+重试次数和 nextAttemptAt 属于 WorkQueue 的进程内 AttemptSchedule，不属于持久化
+记录或 BindingView。自动重试保留该进度，显式新请求或重建队列重置。RetryPolicy 来自
+Runtime 装配的配置，不随 Binding 存储。移除原 `spec + status + runtime` 投影提案。
+可重试 error 与是否继续执行不同：FAILED 表示自动重试停止，即使 error.kind 为 RETRYABLE。
+mutation、GET、LIST 使用同一状态结构；状态变化和错误变化不改变 spec revision。
 
-aggregation：任一目标 Unknown 则 UNKNOWN；所有仍需考虑的目标均明确 Absent
-且不存在未记账本地操作时才为 ABSENT；有明确 Present 且无不确定目标时可为 PRESENT。
-PRESENT 只表示某些关联部署最近确认存在，不等同于当前 spec 已成功应用；是否达成
-最新 Apply 以 status=READY 及该次结果判断。没有记录但尚有 in-flight/未确认输入，
-不能只按空集合给 ABSENT。
-
-可重试 error 与是否还会自动重试分开解释：预算耗尽时 error.retryable 可以为 true，
-但 FAILED 和 nextAttemptAt=null 表示自动重试停止。不要为此把原错误分类改成永久拒绝。
-mutation、GET、LIST 采用同一投影，按一致读快照生成；新增字段计入既有 response
-预算，不能把无限目标列表或 request body 放入公开 BindingView。
-
-用户表达示例：
-
-- 所有目标明确 Absent 且 APPLY_FAILED：策略应用失败；最近确认无关联部署；自动重试停止。
-- 任一目标 Unknown 且 APPLY_FAILED：策略应用失败，当前生效状态无法确认；自动重试停止。
-- DELETE_FAILED：删除未完成，保留未确认清理的目标；不能宣称已回滚或已全部撤销。
-
-异步执行失败通过 Binding runtime/status 和安全诊断表达，不追改已经成功返回的
-PAP response。同步准入失败仍使用原 daemon error 层。
-
-每次实际 reconcile 用 OTel SDK 管理 span，记录 Binding ID、binding revision、操作、
-attempt、安全 error code 和 outcome；不自造 trace ID，不把 TraceId 当 CAS/幂等键。
-安全事件持久化若接入，独立于采样/exporter；本方案不把所有后台操作都虚构成既有
-SecurityEvent 类型，新增事件需同步相应语言无关 contract 与 fixture。
 
 ## 10. 实现工作包与依赖
 
@@ -900,3 +882,11 @@ Adapter 仅移除已被输入校验排除的 glob 长度分支和无人消费的
 fixture 矩阵。详细执行记录见 [RESULTS.md](../../v2/fixtures/reconciliation/RESULTS.md)。
 回退需同组恢复内部接口、调用方及测试；无 wire/state 迁移，不得只恢复无部署记账的
 status-only 写口供实际 worker 使用。Runtime、SQL 与真实目标的验收按各自工作包提供。
+
+## Binding 调度拒绝契约补充（V2）
+
+PendingApply/PendingDelete 允许因入队拒绝直接进入 ApplyFailed/DeleteFailed；PAP 通过
+专用 Repository 原子条件写同步记录原因。worker 只认领最新 Pending，已 Failed 的旧唤醒
+跳过。GET/LIST 的 status.error 随 status.phase 一起保存，不改变 spec revision 或部署身份。
+范围、并发限制、wire fixtures 与可执行 BQA-001～010 验收见
+[Binding 队列拒绝验收](BINDING_QUEUE_ADMISSION_ACCEPTANCE_zh.md)。

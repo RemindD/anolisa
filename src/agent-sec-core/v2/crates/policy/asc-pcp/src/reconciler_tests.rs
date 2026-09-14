@@ -44,9 +44,8 @@ fn invalid_outcome_transitions_return_invalid_without_producing_a_write() {
                     "../../asc-policy-types/tests/fixtures/prepared-binding.json"
                 ))
                 .unwrap(),
-                status,
+                status: status.into(),
             },
-            runtime: crate::RuntimeState::default(),
             deployments: vec![],
         };
         for error in [
@@ -60,7 +59,8 @@ fn invalid_outcome_transitions_return_invalid_without_producing_a_write() {
                     DeploymentReport {
                         observations: vec![],
                         error
-                    }
+                    },
+                    &crate::AttemptSchedule::default()
                 ),
                 Err(StoreError::Invalid)
             ));

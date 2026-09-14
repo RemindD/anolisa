@@ -34,23 +34,23 @@ impl TestAdmission for asc_pap_repository_memory::ProcessLocalPapRepository {
         }
         // Simulate a newer independently admitted Apply for stale-result tests.
         // End the old lifecycle first; the product PAP never replaces Applying.
-        if before.binding.status == asc_policy_types::binding::BindingStatus::Applying
+        if before.binding.status.phase == asc_policy_types::binding::BindingStatus::Applying
             && before.binding.spec != desired.spec
         {
             let mut failed = before.clone();
-            failed.binding.status = asc_policy_types::binding::BindingStatus::ApplyFailed;
+            failed.binding.status.phase = asc_policy_types::binding::BindingStatus::ApplyFailed;
             self.compare_exchange_binding_state(&before, &BindingStateWrite::new(failed.clone()))?;
             before = failed;
         }
         if !matches!(
-            desired.status,
+            desired.status.phase,
             asc_policy_types::binding::BindingStatus::PendingApply
                 | asc_policy_types::binding::BindingStatus::PendingDelete
         ) && desired.spec == before.binding.spec
         {
             let mut next = before.clone();
-            next.binding.status = desired.status;
-            next.runtime = RuntimeState::default();
+            next.binding.status = desired.status.clone();
+
             return Ok(self
                 .compare_exchange_binding_state(&before, &BindingStateWrite::new(next))?
                 == WriteResult::Applied);
@@ -65,14 +65,18 @@ pub fn write_phase(expected: &BindingStateSnapshot, write: &BindingStateWrite) -
     let Some(next) = &write.next else {
         return "finish";
     };
-    if !expected.binding.status.is_reconciling()
+    if !expected.binding.status.phase.is_reconciling()
         && next
             .status
-            .is_some_and(asc_policy_types::binding::BindingStatus::is_reconciling)
+            .as_ref()
+            .is_some_and(|s| s.phase.is_reconciling())
     {
         "claim"
-    } else if expected.binding.status.is_reconciling()
-        && next.status.is_none_or(|s| s == expected.binding.status)
+    } else if expected.binding.status.phase.is_reconciling()
+        && next
+            .status
+            .as_ref()
+            .is_none_or(|s| s.phase == expected.binding.status.phase)
     {
         "register"
     } else {

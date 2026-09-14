@@ -35,7 +35,6 @@ impl ProcessLocalPapRepository {
             state.binding_states.insert(
                 id,
                 BindingStateData {
-                    runtime: record.runtime,
                     deployments: record.deployments,
                     last_write: None,
                 },
@@ -83,8 +82,9 @@ impl BindingStateRepository for ProcessLocalPapRepository {
         };
         let patch = write.next.as_ref();
         if current.binding.spec.binding_revision != expected.binding.spec.binding_revision
-            || current.binding.status != expected.binding.status
-            || (patch.is_none_or(|p| p.runtime.is_some()) && current.runtime != expected.runtime)
+            || current.binding.status.phase != expected.binding.status.phase
+            || (patch.is_none_or(|p| p.status.is_some())
+                && current.binding.status != expected.binding.status)
             || (patch.is_none_or(|p| p.deployments.is_some())
                 && current.deployments != expected.deployments)
         {
@@ -92,7 +92,11 @@ impl BindingStateRepository for ProcessLocalPapRepository {
         }
         if let Some(next) = &write.next {
             // Validate before mutating either map.
-            if next.status == Some(asc_policy_types::binding::BindingStatus::Deleted) {
+            if next
+                .status
+                .as_ref()
+                .is_some_and(|s| s.phase == asc_policy_types::binding::BindingStatus::Deleted)
+            {
                 return Err(StoreError::Invalid);
             }
             if let Some(deployments) = &next.deployments {
@@ -106,17 +110,14 @@ impl BindingStateRepository for ProcessLocalPapRepository {
                     }
                 }
             }
-            if let Some(status) = next.status {
+            if let Some(status) = &next.status {
                 state
                     .bindings
                     .get_mut(id)
                     .ok_or(StoreError::Invalid)?
-                    .status = status;
+                    .status = status.clone();
             }
             let data = state.binding_states.entry(id.to_owned()).or_default();
-            if let Some(runtime) = &next.runtime {
-                data.runtime.clone_from(runtime);
-            }
             if let Some(deployments) = &next.deployments {
                 data.deployments.clone_from(deployments);
             }
@@ -133,7 +134,6 @@ fn snapshot(state: &State, id: &str) -> Option<BindingStateSnapshot> {
     let data = state.binding_states.get(id);
     Some(BindingStateSnapshot {
         binding,
-        runtime: data.map(|d| d.runtime.clone()).unwrap_or_default(),
         deployments: data.map(|d| d.deployments.clone()).unwrap_or_default(),
     })
 }
@@ -157,13 +157,9 @@ impl asc_policy_repository::BindingReconcileCatalog for ProcessLocalPapRepositor
                 std::ops::Bound::Unbounded,
             ))
             .take(limit)
-            .map(|(id, binding)| asc_policy_repository::ReconcileCandidate {
+            .map(|(_id, binding)| asc_policy_repository::ReconcileCandidate {
                 id: binding.spec.binding_id.clone(),
-                status: binding.status,
-                next_attempt_at: state
-                    .binding_states
-                    .get(id)
-                    .and_then(|d| d.runtime.next_attempt_at),
+                status: binding.status.phase,
             })
             .collect())
     }

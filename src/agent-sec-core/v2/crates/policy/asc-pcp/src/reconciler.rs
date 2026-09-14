@@ -58,7 +58,8 @@ impl BindingReconciler {
     }
 
     /// Reloads current state and executes at most one due attempt from scratch.
-    /// The returned retry deadline is for the caller's timer.
+    /// The caller retains `schedule` between calls and discards it on process exit.
+    /// The returned retry deadline is for the caller's timer; it is not stored.
     ///
     /// This synchronous call is intentionally not cancellation-safe by dropping
     /// an async wrapper: callers must retain/join their blocking task. No task is
@@ -73,11 +74,17 @@ impl BindingReconciler {
     /// Resumes a port panic after attempting terminal bookkeeping.
     /// The caller must catch the attempt panic, inspect committed state and finish
     /// scheduling this ID before continuing other work. Unwinding never proves remote absence.
-    pub fn reconcile(&self, id: &ResourceId) -> Result<Disposition, StoreError> {
+    pub fn reconcile(
+        &self,
+        id: &ResourceId,
+        schedule: &mut crate::AttemptSchedule,
+    ) -> Result<Disposition, StoreError> {
         let mut slot = ExecutionSlot::default();
         // Keep call-local completion data available for panic bookkeeping.
         // The caller retains the Running entry throughout this unwind boundary.
-        let result = catch_unwind(AssertUnwindSafe(|| self.reconcile_attempt(id, &mut slot)));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            self.reconcile_attempt(id, &mut slot, schedule)
+        }));
         match result {
             Ok(result) => result,
             Err(payload) => {
@@ -101,16 +108,18 @@ impl BindingReconciler {
         &self,
         id: &ResourceId,
         slot: &mut ExecutionSlot,
+        schedule: &mut crate::AttemptSchedule,
     ) -> Result<Disposition, StoreError> {
         let Some(mut record) = self.state.read(id)? else {
             return Ok(Disposition::Skipped);
         };
+        schedule.observe(&record.binding);
         // Caller serialization guarantees any earlier invocation has exited.
         // Recovery preserves budget and cannot overwrite a newer CRUD intent.
-        if record.binding.status.is_reconciling() {
+        if record.binding.status.phase.is_reconciling() {
             if !self
                 .state
-                .recover(&record, self.clock.now_ms(), self.retry)?
+                .recover(&record, self.clock.now_ms(), self.retry, schedule)?
             {
                 return Ok(Disposition::Superseded);
             }
@@ -120,10 +129,9 @@ impl BindingReconciler {
             record = latest;
         }
         if !matches!(
-            record.binding.status,
+            record.binding.status.phase,
             BindingStatus::PendingApply | BindingStatus::PendingDelete
-        ) || record
-            .runtime
+        ) || schedule
             .next_attempt_at
             .is_some_and(|at| at > self.clock.now_ms())
         {
@@ -149,7 +157,9 @@ impl BindingReconciler {
                 "RECONCILE_WORKER_PANICKED",
             )),
         });
-        let claimed = self.state.claim(&record, self.clock.now_ms(), self.retry);
+        let claimed = self
+            .state
+            .claim(&record, self.clock.now_ms(), self.retry, schedule);
         let claimed = match claimed {
             Ok(Some(claimed)) => claimed,
             other => {
@@ -161,7 +171,8 @@ impl BindingReconciler {
             slot.pending = None;
             return Ok(Disposition::Superseded);
         };
-        slot.pending = Some(self.outcome(&claimed, report)?);
+        slot.pending = Some(self.outcome(&claimed, report, schedule)?);
+        schedule.next_attempt_at = slot.pending.as_ref().and_then(|o| o.next_attempt_at);
         let disposition = self.commit(
             slot.pending.as_ref().ok_or(StoreError::Invalid)?,
             &mut slot.completion,
@@ -171,7 +182,7 @@ impl BindingReconciler {
     }
 
     fn execute(&self, record: &ReconcileRecord) -> Result<Option<DeploymentReport>, StoreError> {
-        if record.binding.status == BindingStatus::Deleting {
+        if record.binding.status.phase == BindingStatus::Deleting {
             return self.delete(record);
         }
         let (saved, client) = match self.prepare(record) {
@@ -335,21 +346,23 @@ impl BindingReconciler {
         &self,
         record: &ReconcileRecord,
         report: DeploymentReport,
+        schedule: &crate::AttemptSchedule,
     ) -> Result<AttemptOutcome, StoreError> {
-        let status = record.binding.status;
-        let policy = record.runtime.retry_policy.unwrap_or(self.retry);
+        let status = record.binding.status.phase;
+        let policy = self.retry;
         let (next_status, next_attempt_at) = match &report.error {
             None => (status.complete_reconcile(), None),
             Some(error)
                 if error.kind == FailureKind::Retryable
-                    && record.runtime.attempts_started < policy.max_attempts =>
+                    && schedule.attempts_started < policy.max_attempts =>
             {
                 (
                     status.retry_reconcile(),
-                    Some(self.clock.now_ms().saturating_add(crate::retry::delay(
-                        policy,
-                        record.runtime.attempts_started,
-                    ))),
+                    Some(
+                        self.clock
+                            .now_ms()
+                            .saturating_add(crate::retry::delay(policy, schedule.attempts_started)),
+                    ),
                 )
             }
             Some(_) => (status.fail_reconcile(), None),

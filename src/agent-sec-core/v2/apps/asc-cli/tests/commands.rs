@@ -251,7 +251,7 @@ fn file_errors_duplicate_keys_and_oversized_inputs_are_local_failures() {
 fn result_rendering_keeps_domains_and_errors_separate() {
     let response = DaemonResponse::success(
         RequestId::new("r1").unwrap(),
-        json!({"status":"PENDING_APPLY"}),
+        json!({"status":{"phase":"PENDING_APPLY"}}),
     );
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     assert_eq!(
@@ -260,7 +260,7 @@ fn result_rendering_keeps_domains_and_errors_separate() {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&stdout).unwrap(),
-        json!({"status":"PENDING_APPLY"})
+        json!({"status":{"phase":"PENDING_APPLY"}})
     );
     assert!(stderr.is_empty());
     stdout.clear();

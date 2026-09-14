@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 use asc_foundation_types::{ResourceId, Revision};
 use asc_policy_types::binding::{BindingStatus, BindingView};
-use asc_policy_types::target::{Failure, Presence, TargetRef};
+use asc_policy_types::target::{Presence, TargetRef};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -25,20 +25,10 @@ pub struct RetryPolicy {
     pub max_delay_ms: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeState {
-    pub attempts_started: u32,
-    pub next_attempt_at: Option<u64>,
-    pub retry_policy: Option<RetryPolicy>,
-    pub last_error: Option<Failure>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BindingStateSnapshot {
     pub binding: BindingView,
-    pub runtime: RuntimeState,
     pub deployments: Vec<Deployment>,
 }
 
@@ -56,8 +46,7 @@ pub enum StoreError {
 /// Field-scoped reconciliation update. There is deliberately no spec field.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReconciliationPatch {
-    pub status: Option<BindingStatus>,
-    pub runtime: Option<RuntimeState>,
+    pub status: Option<asc_policy_types::binding::BindingLifecycle>,
     pub deployments: Option<Vec<Deployment>>,
 }
 
@@ -78,7 +67,6 @@ impl BindingStateWrite {
     pub fn new(next: BindingStateSnapshot) -> Self {
         Self::patch(ReconciliationPatch {
             status: Some(next.binding.status),
-            runtime: Some(next.runtime),
             deployments: Some(next.deployments),
         })
     }
@@ -97,7 +85,7 @@ pub enum WriteResult {
 }
 
 /// Reads are consistent; writes are atomic with PAP and never replace spec.
-/// Compare revision/status and only the runtime/deployment fields being written.
+/// Compare revision/phase and only the status explanation/deployments being written.
 /// Removal compares all reconciliation fields. Exact latest-write replay may be
 /// acknowledged within the current call, even after an intervening PAP write.
 /// Errors never establish target absence; no transaction spans remote I/O.
@@ -122,7 +110,6 @@ pub trait BindingStateRepository: Send + Sync {
 pub struct ReconcileCandidate {
     pub id: ResourceId,
     pub status: BindingStatus,
-    pub next_attempt_at: Option<u64>,
 }
 pub trait BindingReconcileCatalog: Send + Sync {
     /// # Errors

@@ -34,9 +34,14 @@ fn transition_binding(
     status: BindingStatus,
 ) {
     let current = repository.get_binding_state(id).unwrap().unwrap();
-    current.binding.status.validate_successor(status).unwrap();
+    current
+        .binding
+        .status
+        .phase
+        .validate_successor(status)
+        .unwrap();
     let mut next = current.clone();
-    next.binding.status = status;
+    next.binding.status.phase = status;
     assert_eq!(
         repository.compare_exchange_binding_state(&current, &BindingStateWrite::new(next)),
         Ok(WriteResult::Applied)
@@ -142,7 +147,7 @@ impl RecordingAdministration {
         Self {
             binding: BindingView {
                 spec,
-                status: BindingStatus::PendingApply,
+                status: (BindingStatus::PendingApply).into(),
             },
             calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -1402,7 +1407,7 @@ async fn real_uds_distinguishes_stale_references_and_binding_state_conflicts() {
         }}),
     )
     .await;
-    assert_eq!(identical_apply["result"]["status"], "APPLYING");
+    assert_eq!(identical_apply["result"]["status"]["phase"], "APPLYING");
     assert_eq!(identical_apply["result"]["spec"]["bindingRevision"], 1);
 
     let conflict = json!({
@@ -1429,14 +1434,14 @@ async fn real_uds_distinguishes_stale_references_and_binding_state_conflicts() {
         &json!({"method": "policy.bindings.delete", "params": {"id": binding_id}}),
     )
     .await;
-    assert_eq!(deletion["result"]["status"], "PENDING_DELETE");
+    assert_eq!(deletion["result"]["status"]["phase"], "PENDING_DELETE");
     let repeated_pending_deletion = support::request_json(
         &daemon.socket_path,
         &json!({"method": "policy.bindings.delete", "params": {"id": binding_id}}),
     )
     .await;
     assert_eq!(
-        repeated_pending_deletion["result"]["status"],
+        repeated_pending_deletion["result"]["status"]["phase"],
         "PENDING_DELETE"
     );
     assert_eq!(
@@ -1467,7 +1472,10 @@ async fn real_uds_distinguishes_stale_references_and_binding_state_conflicts() {
         &json!({"method": "policy.bindings.delete", "params": {"id": binding_id}}),
     )
     .await;
-    assert_eq!(repeated_running_deletion["result"]["status"], "DELETING");
+    assert_eq!(
+        repeated_running_deletion["result"]["status"]["phase"],
+        "DELETING"
+    );
     assert_eq!(
         repeated_running_deletion["result"]["spec"]["bindingRevision"],
         1
@@ -1518,4 +1526,101 @@ async fn real_uds_distinguishes_stale_references_and_binding_state_conflicts() {
 
     daemon.stop().await;
     assert_error_matrix(&failures);
+}
+
+#[tokio::test]
+async fn real_uds_scheduling_rejection_and_get_list_match_frozen_wire() {
+    struct Reject(asc_pap::EnqueueError);
+    impl asc_pap::BindingReconcileEnqueuer for Reject {
+        fn check_ready(&self) -> Result<(), asc_pap::PapError> {
+            Ok(())
+        }
+        fn enqueue(&self, _: &ResourceId) -> Result<(), asc_pap::EnqueueError> {
+            Err(self.0)
+        }
+    }
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../fixtures/reconciliation/admission-wire.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let mut binding: BindingView = serde_json::from_value(case["binding"].clone()).unwrap();
+        binding.status = BindingStatus::PendingApply.into();
+        binding.status.error = None;
+        let spec = binding.spec.clone();
+        let repo = Arc::new(
+            ProcessLocalPapRepository::with_binding_states(vec![
+                asc_policy_repository::BindingStateSnapshot {
+                    binding,
+                    deployments: vec![],
+                },
+            ])
+            .unwrap(),
+        );
+        let reason = if case["reason"] == "full" {
+            asc_pap::EnqueueError::Full
+        } else {
+            asc_pap::EnqueueError::Stopped
+        };
+        let pap = PapService::new(repo, Arc::new(PolicyTemplateCompiler))
+            .with_reconcile_enqueuer(Arc::new(Reject(reason)));
+        let daemon = RunningPapDaemon::start_with_application(
+            PrincipalRole::PolicyAdministrator,
+            4 * 1024 * 1024,
+            pap,
+        )
+        .await;
+        let operation = case["operation"].as_str().unwrap();
+        let params = if operation == "delete" {
+            json!({"id": spec.binding_id})
+        } else {
+            json!({"bindingId": spec.binding_id, "policyId": spec.policy.policy_id, "policyRevision": spec.policy.revision, "scopeId": spec.scope.scope_id, "scopeRevision": spec.scope.revision})
+        };
+        let request = format!(
+            "{}\n",
+            json!({"method": format!("policy.bindings.{operation}"), "params": params})
+        );
+        let response = uds_request(&daemon.socket_path, request.as_bytes()).await;
+        assert!(response.get("error").is_none());
+        assert_eq!(response["result"], case["binding"]);
+        let get = format!(
+            "{}\n",
+            json!({"method":"policy.bindings.get", "params":{"id":spec.binding_id}})
+        );
+        let response = uds_request(&daemon.socket_path, get.as_bytes()).await;
+        assert_eq!(response["result"], case["binding"]);
+        let response = uds_request(
+            &daemon.socket_path,
+            b"{\"method\":\"policy.bindings.list\",\"params\":{}}\n",
+        )
+        .await;
+        assert_eq!(response["result"]["items"], json!([case["binding"]]));
+        daemon.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn unavailable_preflight_returns_wire_error_without_creating_binding() {
+    let repo = Arc::new(ProcessLocalPapRepository::default());
+    let pap = PapService::new(repo, Arc::new(PolicyTemplateCompiler))
+        .with_reconcile_enqueuer(Arc::new(asc_daemon::UnavailableReconciliation));
+    let daemon = RunningPapDaemon::start_with_application(
+        PrincipalRole::PolicyAdministrator,
+        4 * 1024 * 1024,
+        pap,
+    )
+    .await;
+    let response = uds_request(&daemon.socket_path, b"{\"method\":\"policy.bindings.create\",\"params\":{\"policyId\":\"10000000-0000-4000-8000-000000000001\",\"policyRevision\":1,\"scopeId\":\"10000000-0000-4000-8000-000000000002\",\"scopeRevision\":1}}\n").await;
+    assert_eq!(
+        response["error"],
+        json!({"code":"unavailable", "message":"reconciliation runtime is unavailable"})
+    );
+    assert!(response.get("result").is_none());
+    let response = uds_request(
+        &daemon.socket_path,
+        b"{\"method\":\"policy.bindings.list\",\"params\":{}}\n",
+    )
+    .await;
+    assert_eq!(response["result"], json!({"items":[], "total":0}));
+    daemon.stop().await;
 }

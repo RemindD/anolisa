@@ -17,14 +17,14 @@ impl ExpectedBinding {
         Self {
             id: binding.spec.binding_id.clone(),
             revision: binding.spec.binding_revision,
-            status: binding.status,
+            status: binding.status.phase,
         }
     }
 
     pub fn matches(&self, binding: &BindingView) -> bool {
         self.id == binding.spec.binding_id
             && self.revision == binding.spec.binding_revision
-            && self.status == binding.status
+            && self.status == binding.status.phase
     }
 }
 
@@ -54,7 +54,7 @@ pub enum Disposition {
     /// Successful completion was committed: Apply/Update reached Ready, or Delete
     /// confirmed all targets absent and removed the Binding aggregate.
     Completed,
-    /// A retryable failure and its next deadline were committed. The caller
+    /// A retryable Pending/error was committed. The deadline is only in memory. The caller
     /// schedules a fresh attempt; no intermediate results survive this call.
     RetryAt {
         /// Deadline in milliseconds in the injected Clock's domain, not Unix time.
@@ -85,4 +85,31 @@ pub(crate) struct PreparedAttempt {
     pub revision: Revision,
     pub is_update: bool,
     pub prepared: PreparedApply,
+}
+
+/// Process-local attempt progress, owned by the scheduling caller, never stored.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttemptSchedule {
+    pub attempts_started: u32,
+    pub next_attempt_at: Option<u64>,
+    intent: Option<(Revision, bool)>,
+}
+impl AttemptSchedule {
+    pub(crate) fn observe(&mut self, binding: &BindingView) {
+        let deleting = matches!(
+            binding.status.phase,
+            BindingStatus::PendingDelete | BindingStatus::Deleting | BindingStatus::DeleteFailed
+        );
+        let intent = (binding.spec.binding_revision, deleting);
+        if self.intent != Some(intent)
+            || (matches!(
+                binding.status.phase,
+                BindingStatus::PendingApply | BindingStatus::PendingDelete
+            ) && binding.status.error.is_none())
+        {
+            self.attempts_started = 0;
+            self.next_attempt_at = None;
+        }
+        self.intent = Some(intent);
+    }
 }
