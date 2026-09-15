@@ -1,13 +1,31 @@
+
 %define anolis_release 1
 %global debug_package %{nil}
 
-# Use default zstd compression for the Rust/component payload.
+# Disable stripping of ELF binaries.  Bundled .so files (the crate-backed
+# agent_sec_cli._native extension and prebuilt wheel extensions such as
+# cryptography and pydantic-core) have precise ELF segment alignment that
+# `strip` breaks, causing "ELF load command address/offset not page-aligned"
+# at runtime.
+%global __strip /bin/true
+
+# Use default zstd compression (level 3) instead of -19 to speed up packaging
+# of bundled native extensions; -19 takes noticeably longer with no real gain.
 %define _binary_payload w.zstdio
 %define _source_payload w.zstdio
 %{!?_unitdir:%global _unitdir /usr/lib/systemd/system}
 
 # Preserve original shebang (#!/usr/bin/env bash) for cross-platform compatibility
 %undefine __brp_mangle_shebangs
+
+# Exclude bundled site-packages from RPM auto-dependency scanning.
+# Prebuilt wheel .so files reference host system libraries or use hash-named
+# internal libraries, neither of which must become hard RPM
+# Requires/Provides.
+# Using path-based exclusion instead of AutoReqProv:no so that other subpackages
+# (e.g. linux-sandbox in agent-sec-cosh-hook) retain proper auto-dependency detection.
+%global __requires_exclude_from /opt/agent-sec/lib/python3\.11/site-packages/.*
+%global __provides_exclude_from /opt/agent-sec/lib/python3\.11/site-packages/.*
 
 Name:           agent-sec-core
 Version:        @VERSION@
@@ -52,8 +70,13 @@ This metapackage installs all agent-sec-core components including CLI, hooks, an
 # =============================================================================
 %package -n agent-sec-cli
 Summary:        Agent Security CLI tool (Rust, daemon client)
+Requires:       python3 >= 3.11
+Requires:       python3 < 3.12
+Requires:       gnupg2 >= 2.0
+Requires:       loongshield >= 1.2.0
 Requires:       systemd
 Requires(pre):  /usr/bin/systemd-sysusers
+Recommends:     python3-pgpy >= 0.5
 
 %description -n agent-sec-cli
 Agent-sec-cli provides Policy, Scope and Binding administration commands.
@@ -134,8 +157,6 @@ Hooks into OpenClaw to perform code scanning before tool execution.
 Summary:        Hermes Agent plugin for agent security
 Requires:       agent-sec-cli = %{version}-%{release}
 Requires:       jq
-Requires:       python3 >= 3.11
-Requires:       python3 < 3.12
 
 %description -n agent-sec-hermes-hook
 Hermes Agent security plugin powered by agent-sec-core.

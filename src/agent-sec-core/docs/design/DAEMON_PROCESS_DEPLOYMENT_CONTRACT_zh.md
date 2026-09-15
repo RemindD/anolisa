@@ -279,11 +279,12 @@ framework 不能证明具体 PAP/Repository 内部没有全局 mutex、长 trans
 `MemoryDenyWriteExecute=true`，并保留空 `CapabilityBoundingSet`/`AmbientCapabilities`。
 打包 fixture 锁定这些生效指令；实际 syscall/W^X 兼容性需在目标发行版的 systemd
 服务下验收当前业务路径，不能用 unit 语法检查或普通进程测试替代。
-V2 CLI 子包不依赖 V1 Python、GPG/PGPy 或 loongshield，不再携带 wheel 专用的
-strip/自动依赖排除设置；Python hook 的解释器依赖由对应子包声明。
+V2 spec 暂保留原有 Python、GPG/PGPy、loongshield 依赖声明及 strip/自动依赖
+排除设置；发布前按能力迁移结果单独审计，不在本次 system-service 变更中清理。
 服务账户创建显式依赖 `/usr/bin/systemd-sysusers`。V1/V2 源包分别收录各自的 unit
-模板；V2 独立使用 `.anolisa/component-v2.toml`，声明 system scope 和 sysusers layout，
-V1 继续使用原 manifest。V2 安装态 CI 检查 system unit、sysusers 和服务账户，并拒绝遗留 user unit。
+模板；构建和安装继续复制共享的 `.anolisa/component.toml`。该 manifest 仍声明
+V1 user scope，尚未适配 V2 的 system-service 编排，不能作为 V2 服务管理的验收证据。
+V2 安装态 CI 检查 system unit、sysusers 和服务账户，并拒绝遗留 user unit。
 
 启动先逐级以 nofollow 打开并验证 runtime 目录：祖先属于 root 或服务 UID，不允许
 非 sticky 的 group/world 可写祖先；最终目录必须服务 UID 所有，普通权限位

@@ -319,12 +319,10 @@ stage-tools: ## Stage tools (sign-skill.sh) to BUILD_DIR
 	install -d -m 0755 $(BUILD_DIR)/tools
 	cp -p tools/sign-skill.sh $(BUILD_DIR)/tools/
 
-COMPONENT_MANIFEST ?= .anolisa/component.toml
-
 .PHONY: stage-component-manifest
 stage-component-manifest: ## Stage component.toml into BUILD_DIR
 	install -d -m 0755 $(BUILD_DIR)/share/anolisa/components/sec-core
-	install -p -m 0644 $(COMPONENT_MANIFEST) \
+	install -p -m 0644 .anolisa/component.toml \
 		$(BUILD_DIR)/share/anolisa/components/sec-core/component.toml
 
 .PHONY: build-all
@@ -332,7 +330,6 @@ build-all: $(call component_build_targets,build-cli) ## Build all components
 	@echo "📦 All artifacts collected to $(BUILD_DIR)/"
 
 .PHONY: build-all-v2
-build-all-v2: COMPONENT_MANIFEST := .anolisa/component-v2.toml
 build-all-v2: $(call component_build_targets,build-cli-v2) ## Build all components with the V2 Rust CLI/daemon
 	@echo "📦 All artifacts collected to $(BUILD_DIR)/"
 
@@ -580,7 +577,7 @@ install-cosh-hook: ## Install cosh hooks (linux-sandbox + extension)
 .PHONY: install-component-manifest
 install-component-manifest: ## Install component.toml to DESTDIR
 	install -d -m 0755 $(DESTDIR)$(COMPONENT_DIR)
-	install -m 0644 $(COMPONENT_MANIFEST) \
+	install -m 0644 .anolisa/component.toml \
 		$(DESTDIR)$(COMPONENT_DIR)/component.toml
 
 .PHONY: install-systemd-user
@@ -606,7 +603,6 @@ install-all-for-rpmbuild: install-cli-site $(RPM_INSTALL_COMMON_TARGETS) install
 
 # V2 installs a system-scope unit; the V1 raw/RPM user unit remains separate.
 .PHONY: install-all-for-rpmbuild-v2
-install-all-for-rpmbuild-v2: COMPONENT_MANIFEST := .anolisa/component-v2.toml
 install-all-for-rpmbuild-v2: OPENCLAW_PLUGIN_DIR := $(RPM_OPENCLAW_PLUGIN_DIR)
 install-all-for-rpmbuild-v2: HERMES_PLUGIN_DIR := $(RPM_HERMES_PLUGIN_DIR)
 install-all-for-rpmbuild-v2: QWEN_CODE_EXTENSION_DIR := $(RPM_QWEN_CODE_EXTENSION_DIR)
