@@ -375,7 +375,7 @@ build_agent_sec_core_v2() {
     stage_sec_core_payload "$pkg_dir"
     mkdir -p "$pkg_dir/packaging/systemd"
     cp -p "${SEC_DIR}/packaging/systemd/agent-sec-core-v2.service.in" \
-        "${SEC_DIR}/packaging/systemd/agent-sec-core-v2.sysusers" "$pkg_dir/packaging/systemd/"
+        "$pkg_dir/packaging/systemd/"
 
     # V2 layer: the Rust workspace replaces agent-sec-cli/ and the two Python
     # wrapper scripts, which are therefore absent from this tarball.
