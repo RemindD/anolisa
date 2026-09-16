@@ -240,16 +240,43 @@ WAL/SHM sidecar 受私有目录保护。绑定 UDS 前必须实际打开 JSONL�
 失败即非零退出；JSONL 失败只输出告警，daemon 仍启动并对该副本保持 best-effort 写入。成功
 启动后单侧瞬时写失败仍保持独立 fail-open，不改变 capability 的业务结果。
 
+scan composition root 还注入共享 telemetry sink。`AGENT_SEC_TELEMETRY_LOG_PATH` 沿用 V1，
+默认 uploader-owned JSONL。路径中的 `~` 优先使用 `HOME`，未设置时查询当前 UID 的系统
+用户数据库；`~user` 查询指定用户的 home，保持 V1 `Path.expanduser()` 对已有用户的展开行为。
+缺失/禁用 telemetry 不影响 daemon 启动或 audit。telemetry writer
+不创建目标/目录，不改变现有 system-owned audit 路径。handler 接收 Action application，
+不持有 Finalizer；生产 startup 显式注入 outputs。DPROC-SCAN-001–004 的真实进程、restart、
+独立 sink fault 和 UDS lifetime fixtures 见 [共享 scan lifecycle](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期)。
+这些 fixtures 不替代 RPM/systemd 或完整 DPROC 验收。
+
+Telemetry 目标必须是已有 regular file；V2 的版本化加固例外是拒绝最终路径分量为
+symlink，替代 V1 跟随目标 symlink 的行为。预检查使用 `symlink_metadata`，实际 open
+使用 `O_NOFOLLOW` 防止检查后被替换为 symlink；不新增祖先目录校验或文件管理职责。
+`asc-event-sink/tests/telemetry.rs` 覆盖目标 symlink、dangling symlink、检查后替换及恢复写入。
+
+进程 panic hook 向 stderr/journald 输出 `agent-sec-daemon: internal panic`，并在 location
+可用时追加 ` at <file>:<line>:<column>`，不输出 panic payload。源码位置用于诊断，不进入
+RPC error、SecurityEvent 或 telemetry。`agent-sec-daemon` binary 单元测试
+`panic_hook_reports_location_without_payload` 通过独立子进程验证位置输出与 payload 脱敏。
+
 该 slice 已由唯一的 concrete `DaemonDispatcher` 注册 first-version PAP daemon protocol，
 但尚未注册 `daemon.health`。dispatcher 完成 envelope decode、request ID、kernel peer
 credentials 到 trusted Principal 的绑定、method allowlist、authorization 和 response
 encode；PAP 是其中一组显式注册的方法，不增加第二个 service dispatch 层。当前 composition
 root 使用 `RootManagedPrincipalPolicy`：UID 0 始终具有 PAP 管理权限。部署者可用
-可重复的 `--policy-admin-uid <UID>` 在启动时配置额外管理员；省略时其它 UID 返回
+可重复的 `--policy-admin-uid <UID>` 在启动时配置额外管理员；省略时其它 UID 调用 PAP 方法返回
 `permission_denied`。值为十进制 u32，非法值启动失败；重复 UID 去重。启动配置由服务端
 部署者控制，匹配的是内核 peer UID，caller-supplied identity 不能覆盖该判断。名单每次
 启动重新构造，不带参数重启恢复 root-only。被配置的管理员没有继续委派权限；运行中的
 `allow_uid` API 仍要求 root。该选项不改变 OS 权限、socket mode 或 system-level 部署形态。
+
+**[TARGET V2][IMPLEMENTED] DPROC-UDS-001**：复用已合入的 system-service 接入权限：
+CLI 装配选择 `0666`，可复用 bootstrap 保持私有 `0600` 默认值。任何能连接 UDS 的调用方
+均可调用 code scan；其 `LocalUser` policy 不增加管理员或 UID allowlist 检查，peer credentials
+用于生成审计归属。PAP 仍由内核 peer credentials 和管理员名单授权。
+此 lifecycle 工作包不再修改 socket mode。
+`asc-daemon/tests/bootstrap.rs` 验证真实进程 scan 成功及 PAP 授权；系统运行目录、默认
+socket 权限和跨 UID 接入的部署测试沿用 `tests/v2/e2e/test_daemon_process_e2e.py`。
 
 当前 PAP 由 `PolicyTemplateCompiler` 和过渡性的 process-local Repository 组成。Policy、Scope
 和 Binding CRUD 可在同一 daemon 生命周期内经真实 UDS 执行，但所有状态在进程重启后丢失，
@@ -262,7 +289,7 @@ framework 不能证明具体 PAP/Repository 内部没有全局 mutex、长 trans
 
 本阶段交付 V2 RPM 的 system-scope unit（`packaging/systemd/agent-sec-core-v2.service.in`）。
 它以 `root:root` 运行，不创建专用 UID，systemd 创建 `/run/agent-sec-core`（0755），socket
-为 0666。普通用户无需加入服务组即可连接；方法授权仍检查内核 peer UID，
+为 0666。普通用户无需加入服务组即可连接；PAP 方法授权仍检查内核 peer UID，
 连接权限不授予 PAP 管理权限。
 **TODO（独立入口流量控制任务）**：当前全局 64 个连接名额可被单个普通 UID 占满，
 管理员请求也会被拒绝；方法授权不能解决该可用性问题。后续实现按身份隔离/管理员

@@ -8,9 +8,7 @@
 use serde_json::Map;
 use serde_json::Value;
 
-/// Registered action identities.
-///
-/// Add an identity only when its daemon method and capability are implemented.
+/// Implemented action identities used by the common lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionId {
     /// Scans Bash or Python code before execution.
@@ -70,6 +68,8 @@ pub struct ActionAttribution {
     pub caller: CallerIdentity,
     /// Business correlation fields.
     pub correlation: Correlation,
+    /// Optional Agent product attribution; never grants authority.
+    pub agent_name: Option<String>,
 }
 
 /// Result returned by a capability execution.
@@ -157,4 +157,17 @@ impl AuditProjection {
         }
         details
     }
+}
+
+/// Request accepted by the code-scan capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeScanRequest {
+    /// Code supplied by the caller.
+    pub code: String,
+    /// Language literal supplied by the caller.
+    pub language: String,
+    /// Optional selected rule IDs.
+    pub rules: Option<Vec<String>>,
+    /// Optional engine mode.
+    pub mode: Option<String>,
 }

@@ -1,8 +1,8 @@
 # V2 扫描能力开发指引
 
-本文说明如何在当前 V2 daemon 基础上接入 V1 的 Prompt Scan 和 Code Scan：先建立共享的
-Action 合同与执行生命周期，再接入独立的扫描 Capability，通过 daemon RPC 和 Rust CLI
-提供调用入口。
+当前 V2 仅接入 Code Scan；Prompt Scan 尚未迁入 V2。本文同时记录 Code Scan 的接入方式
+和 Prompt Scan 的后续迁移计划：两者复用共享 Action 合同与执行生命周期，具体能力通过
+各自的 Executor、daemon RPC 和 Rust CLI 接入。
 
 | 属性 | 值 |
 | --- | --- |
@@ -10,7 +10,8 @@ Action 合同与执行生命周期，再接入独立的扫描 Capability，通�
 | 核对日期 | 2026-09-07 |
 | 分支基线 | `feat/v2-agentsight-client` |
 | 源码基线 | `bc1b6fa4133031b8f4c55076aa2ad65788255577` |
-| 范围 | Prompt Scan、Code Scan，以及两者共享的 Action、daemon、事件和 CLI 接入 |
+| 当前实现 | Code Scan 与共享 Action Runtime、audit/telemetry 输出 |
+| 后续计划 | Prompt Scan 的 Executor、RPC 与 CLI 接入；不属于当前版本已支持能力 |
 | 路径约定 | 下文模块落点相对于组件根目录 `src/agent-sec-core/` |
 
 ## 1. 文档依据与使用方式
@@ -36,9 +37,15 @@ Action 合同与执行生命周期，再接入独立的扫描 Capability，通�
 文件划分和工作包顺序是实施建议。提案中仍标记为 `[OPEN]` 的 timeout、取消和持久化等
 决策，需要进入相应语言无关契约及 executable fixture 后才能作为实现常量。
 
-## 2. 当前代码基线
+## 2. 代码基线与后续接线
 
-### 2.1 V2 已有的接入基础
+**2026-09-16 更新：** 下面 2.1 节是 2026-09-07 的历史基线。当前已实现 code-scan RPC、
+共享 Action Runtime、daemon-core Action application、JSONL/SQLite audit 与独立 telemetry。
+新增 capability 应复用 [共享 lifecycle 装配](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期)，不能在 handler
+自行构造 runtime 或手动调用 sink。下文的建议模块按该实施记录区分已实现与后续目标。
+
+
+### 2.1 **[HISTORICAL]** 2026-09-07 接入基础
 
 | 已有模块 | 当前作用 | 扫描接入方式 |
 | --- | --- | --- |
@@ -66,7 +73,7 @@ Action 合同与执行生命周期，再接入独立的扫描 Capability，通�
 | Code Scan | [Python scanner](../../agent-sec-cli/src/agent_sec_cli/code_scanner/scanner.py)、[Python backend](../../agent-sec-cli/src/agent_sec_cli/security_middleware/backends/code_scan.py) | 移植规则引擎、输入处理、LLM 引擎及结果合同 |
 | 模型访问 | [Rust model-service](../../agent-sec-cli/crates/model-service/src/lib.rs)、[Python model_service](../../agent-sec-cli/src/agent_sec_cli/model_service/) | 建立 V2 共享模型 Client，按各消费者的 wire 行为验证 |
 
-V1 Prompt Scan 的 Python backend 通过 PyO3 调用 Rust；V2 直接调用 Rust 能力。
+V1 Prompt Scan 的 Python backend 通过 PyO3 调用 Rust；迁入 V2 时将直接调用 Rust 能力，当前尚未接入。
 Python/PyO3 只保留为迁移期间的 oracle 或兼容证据，不进入 V2 产品运行时。
 
 ## 3. 目标调用链与依赖规则
@@ -105,14 +112,14 @@ flowchart LR
 | 建议文件 | 内容 |
 | --- | --- |
 | `src/lib.rs` | 公共导出和领域边界说明 |
-| `src/action.rs` | 封闭的 `ActionId`，首批支持 CodeScan、PromptScan |
+| `src/action.rs` | 封闭的 `ActionId`，当前仅 CodeScan；新 identity 随对应能力提交加入 |
 | `src/code_scan.rs` | Code Scan request/output、language 和 mode 兼容表示 |
 | `src/prompt_scan.rs` | Prompt Scan request/output、mode、conversation 输入 |
 | `src/result.rs` | 执行状态、业务 verdict、产品错误、兼容结果投影所需的公共合同 |
 | `src/context.rs` | 有界的 Action attribution 值类型；不把客户端自报字段升级为可信 Principal |
 
 完整的 `ExecutionContext`、运行时取消句柄和资源策略由 Action Runtime 所有。
-daemon-core 将可信身份转换为运行时所需的授权后上下文，避免 runtime 反向依赖 core。
+daemon-core 将可信身份转换为运行时所需的审计归属上下文，避免 runtime 反向依赖 core。
 后续增加 Action 时扩展封闭注册；未实现的 Action 不提前对外注册。
 
 ### 4.2 安全事件合同
@@ -158,13 +165,14 @@ daemon-core 将可信身份转换为运行时所需的授权后上下文，避�
 
 **建议新增：** `v2/crates/daemon/asc-daemon-core/src/action/`，并从现有 `src/lib.rs` 导出。
 
-该模块接收授权所需的可信 Principal、执行上下文和扫描输入，调用 Action Runtime，返回
+该模块接收用于审计归属的可信 PeerCredentials、执行上下文和扫描输入，调用 Action Runtime，返回
 应用层结果。可使用一个有界的 Action 应用接口承载两个扫描用例；不需要每个方法再增加
 一层纯转发 service，也不把扫描算法放到 core。
 
-扫描调用权限需要单独定义：现有 Policy 管理权限不直接作为扫描权限。handler 根据
-method metadata 做入口检查，core 保证直接应用调用也不能绕过授权。角色绑定继续使用
-kernel peer credentials 和服务端策略，不能接受请求中的 UID/role 作为授权依据。
+当前 code scan 对任何能连接 UDS 的调用方开放；method metadata 的 `LocalUser` policy
+直接允许调用，core 不额外检查管理员角色或 UID allowlist。PeerCredentials 来自内核，
+用于审计 UID/PID 归属；scan handler/core 不接收 Principal 或角色。
+Policy 管理权限仅约束 PAP 方法，不作为扫描权限。
 
 ### 4.5 protocol 扫描方法族
 
@@ -180,8 +188,9 @@ kernel peer credentials 和服务端策略，不能接受请求中的 UID/role �
 本工作包注册 `action.code_scan` 作为唯一的 code scanner method；
 `action.prompt_scan` 仍是未注册的候选名称。该 compatibility slice 冻结
 `action.code_scan` 的 method、参数和结果投影，并保持 LocalUser 可调用、由 CLI transport
-deadline 限制的边界。Action Runtime、finalizer 与 audit/telemetry sink 仍需在后续工作包
-作为完整生命周期一起冻结；不增加接受任意 action name 的通用 RPC。
+deadline 限制的边界。共享 Runtime/finalizer 与 audit/telemetry 输出已按
+[共享执行生命周期](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期) 接线和冻结该子集；OTel、模型模式和
+Prompt/PII 真能力仍是后续工作。不增加接受任意 action name 的通用 RPC。
 
 当前 V2 响应是 `{requestId,result}` 或 `{requestId,error}`。应基于当前协议定义扫描
 result 及失败映射，不默认新增 V1/V2 双格式。如果有受支持的 V1 wire consumer，再以
@@ -196,9 +205,9 @@ result 及失败映射，不默认新增 V1/V2 双格式。如果有受支持的
 根据已解析方法选择唯一 Action，经 core 调用一次 Runtime，然后投影响应；业务校验、
 模型调用和 Finalizer 不在 handler 重复实现。
 
-当前 `DispatchRequest.control` 已有 deadline/cancellation，但 dispatcher 只在入口检查
-`is_cancelled()`，随后 `handle()` 没有把控制信息传给应用。扫描接入需把它转换为应用层
-执行控制，传到 core/runtime；不让下层直接依赖 transport 的 `DispatchRequest` 类型。
+当前 `DispatchRequest.control` 的 deadline 与 cancellation 入口快照转换为 `ExecutionControl`
+传给 core/runtime；下层不依赖 transport 的 `DispatchRequest`。入口快照不等于运行中取消，
+当前 regex scanner 不检查中途取消。
 
 当前 service 使用 `spawn_blocking` 调用同步 `RequestDispatcher::dispatch()`。
 可在保留该 port 的前提下桥接到进程装配的 Runtime，但需约束等待和工作容量，不能为
@@ -331,7 +340,7 @@ view、对应文档和合同测试，遵循组件 `AGENTS.md`。只有明确受�
 | --- | --- | --- |
 | A：Action/事件合同和扫描 oracle | 当前 V1 源码、行为契约 | 两种扫描的 schema、结果/事件 fixture；Runtime 和协议消费者可引用 |
 | B：Action Runtime | A 的 Action/事件 port | fake Executor 下的准入、错误、取消、Finalizer 和 Sink 测试 |
-| C：core/protocol/handler | A；联调使用 B 的最小实现 | 显式 RPC、扫描授权、执行控制、响应映射；真实 UDS + fake Executor |
+| C：core/protocol/handler | A；联调使用 B 的最小实现 | 显式 RPC、扫描开放访问与审计归属、执行控制、响应映射；真实 UDS + fake Executor |
 | D：Prompt Capability | A、B 的 executor port；模型模式另依赖模型 Client | Rust 引擎迁移；先 fast，后完整模式；Runtime 直接消费者测试 |
 | E：Code Capability | A、B 的 executor port；LLM 另依赖模型 Client | regex/LLM 迁移和完整结果差分；Runtime 直接消费者测试 |
 | F：daemon/CLI 与真实 Action Slice | B、C 和任一真实 Capability | 真实 binary + CLI/UDS + 扫描 + 事件；记录实际模式和 Sink 类型 |

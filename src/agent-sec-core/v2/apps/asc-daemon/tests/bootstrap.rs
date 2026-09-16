@@ -226,6 +226,18 @@ async fn run_binary_scenario(configure_admin: bool) {
     };
 
     wait_for_socket(&mut running).await;
+    // DPROC-UDS-001: local users can reach the service; PAP still requires an administrator.
+    assert_eq!(
+        std::fs::metadata(&running.socket_path).unwrap().mode() & 0o7777,
+        0o666
+    );
+    let scan = request(
+        &running.socket_path,
+        b"{\"method\":\"action.code_scan\",\"params\":{\"code\":\"echo socket-access\",\"language\":\"bash\",\"mode\":\"regex\"}}\n",
+    )
+    .await;
+    assert_eq!(scan["result"]["verdict"], "pass");
+    assert!(scan.get("error").is_none());
     // A read-only request exercises authorization without sending deployments
     // to the host's AgentSight. Binding delivery has separate component fixtures.
     let response = request(

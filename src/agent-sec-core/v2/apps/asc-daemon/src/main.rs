@@ -25,6 +25,7 @@ use crate::sinks::EventSinkAdapter;
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() -> ExitCode {
+    install_panic_hook();
     rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
     let outcome = match Cli::parse_from(std::env::args_os()) {
         Ok(outcome) => outcome,
@@ -107,10 +108,10 @@ async fn run(
         cli.policy_admin_uids,
     ));
     let policy_for_handler: Arc<dyn PrincipalPolicy> = principal_policy.clone();
-    let dispatcher = Arc::new(DaemonDispatcher::new_with_finalizer(
+    let dispatcher = Arc::new(DaemonDispatcher::new(
         pap,
         policy_for_handler,
-        finalizer,
+        asc_daemon::scan_application(finalizer),
     ));
     eprintln!("agent-sec-daemon: warning: PAP state is process-local and is lost on restart");
 
@@ -162,9 +163,30 @@ fn event_finalizer()
         eprintln!("agent-sec-daemon: warning: JSONL security event log unavailable: {error}");
     }
     Ok((
-        Finalizer::new(Arc::new(EventSinkAdapter::new(Arc::clone(&sinks)))),
+        Finalizer::new(
+            Arc::new(EventSinkAdapter::new(Arc::clone(&sinks))),
+            Arc::new(sinks::TelemetryAdapter(
+                asc_event_sink::telemetry::TelemetryWriter::new(
+                    asc_telemetry::config::TelemetryConfig::from_process(),
+                ),
+            )),
+            Arc::new(sinks::LifecycleDiagnostics),
+        ),
         sinks,
     ))
+}
+
+fn install_panic_hook() {
+    // Unwind conversion cannot suppress the default hook's raw payload output.
+    std::panic::set_hook(Box::new(|info| {
+        use std::io::Write;
+        let mut stderr = std::io::stderr().lock();
+        if let Some(location) = info.location() {
+            let _ = writeln!(stderr, "agent-sec-daemon: internal panic at {location}");
+        } else {
+            let _ = writeln!(stderr, "agent-sec-daemon: internal panic");
+        }
+    }));
 }
 
 fn report_error(problem: &dyn std::error::Error) {
@@ -196,4 +218,41 @@ fn watch_policy_health(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn panic_hook_reports_location_without_payload() {
+        const CHILD_ENV: &str = "ASC_PANIC_HOOK_TEST_CHILD";
+        const SECRET: &str = "SECRET_PANIC_PAYLOAD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            super::install_panic_hook();
+            assert!(std::panic::catch_unwind(|| panic!("{SECRET}")).is_err());
+            return;
+        }
+
+        // Isolate the process-global hook from the other tests and capture real stderr.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::panic_hook_reports_location_without_payload",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let location = stderr
+            .trim()
+            .strip_prefix("agent-sec-daemon: internal panic at ")
+            .expect("panic source location");
+        let mut coordinates = location.rsplitn(3, ':');
+        assert!(coordinates.next().unwrap().parse::<u32>().unwrap() > 0);
+        assert!(coordinates.next().unwrap().parse::<u32>().unwrap() > 0);
+        assert_eq!(coordinates.next().unwrap(), file!());
+        assert!(!stderr.contains(SECRET));
+        assert!(!String::from_utf8(output.stdout).unwrap().contains(SECRET));
+    }
 }

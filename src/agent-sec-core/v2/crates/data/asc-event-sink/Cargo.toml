@@ -14,6 +14,9 @@ publish.workspace = true
 testing = []
 
 [dependencies]
+asc-telemetry.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
 asc-event-log = { workspace = true }
 asc-observability = { workspace = true }
 asc-persistence-sqlite = { workspace = true }
@@ -26,7 +29,6 @@ asc-security-summary = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 rusqlite = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

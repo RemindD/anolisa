@@ -57,6 +57,7 @@ impl RunningDaemon {
         let dispatcher = Arc::new(DaemonDispatcher::new(
             application,
             Arc::new(FixedRolePolicy(role)),
+            asc_daemon::scan_application(asc_action_runtime::testing::discarding_finalizer()),
         ));
         let shutdown = asc_daemon_service::ShutdownToken::new();
         let service_shutdown = shutdown.clone();

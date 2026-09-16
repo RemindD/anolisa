@@ -1,12 +1,14 @@
 //! Process bootstrap and composition root for the `AgentSecCore` V2 daemon.
 //!
 //! The binary installs PAP handlers with a root-managed authorization policy
-//! and a replaceable process-local Repository. Durable persistence remains a
-//! later composition change.
+//! and a replaceable process-local PAP Repository. Scan lifecycle output uses
+//! explicitly configured durable audit sinks and independent telemetry.
 
 #![forbid(unsafe_code)]
 
+mod actions;
 mod bootstrap;
+pub use actions::scan_application;
 mod cli;
 mod reconciliation;
 mod runtime;

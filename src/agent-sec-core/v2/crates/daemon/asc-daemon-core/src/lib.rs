@@ -2,7 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod action;
 mod identity;
+pub use action::ActionService;
 mod pap;
 
 pub use identity::{

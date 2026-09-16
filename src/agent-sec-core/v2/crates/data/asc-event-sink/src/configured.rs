@@ -53,9 +53,8 @@ impl<T> Slot<T> {
 /// resolution. `JSONL` and `SQLite` initialization remain independent as in v1.
 #[derive(Debug)]
 pub struct ConfiguredSecurityEventSinks {
-    jsonl_path: PathBuf,
     sqlite_path: PathBuf,
-    jsonl: Slot<SecurityEventWriter>,
+    jsonl: SecurityEventWriter,
     sqlite: Slot<SqliteEventWriter>,
 }
 
@@ -64,20 +63,19 @@ impl ConfiguredSecurityEventSinks {
     #[must_use]
     pub fn new(jsonl_path: PathBuf, sqlite_path: PathBuf) -> Self {
         Self {
-            jsonl_path,
             sqlite_path,
-            jsonl: Slot::new(),
+            jsonl: SecurityEventWriter::new(jsonl_path),
             sqlite: Slot::new(),
         }
     }
 
-    /// Builds the JSONL writer at the configured path.
+    /// Prepares the JSONL file at the configured path.
     ///
     /// # Errors
     ///
-    /// Returns a construction error if the configured path cannot be prepared.
+    /// Returns an I/O error if the configured path cannot be prepared.
     pub fn warm_jsonl(&self) -> Result<(), SinkError> {
-        self.jsonl_writer()?.probe()?;
+        self.jsonl.probe()?;
         Ok(())
     }
 
@@ -93,11 +91,20 @@ impl ConfiguredSecurityEventSinks {
 
     /// Dual-writes one event while isolating the two persistence paths.
     pub fn log_event(&self, event: &SecurityEvent) {
-        if let Ok(writer) = self.jsonl_writer() {
-            writer.write(event);
+        let jsonl = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.jsonl.write(event);
+        }));
+        if jsonl.is_err() {
+            eprintln!("security_event_jsonl_callback_failed");
         }
-        if let Ok(writer) = self.sqlite_writer() {
-            writer.write(event);
+        let sqlite = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match self.sqlite_writer() {
+                Ok(writer) => writer.write(event),
+                Err(_) => eprintln!("security_event_sqlite_initialization_failed"),
+            }
+        }));
+        if sqlite.is_err() {
+            eprintln!("security_event_sqlite_callback_failed");
         }
     }
 
@@ -106,11 +113,6 @@ impl ConfiguredSecurityEventSinks {
         if let Some(writer) = self.sqlite.peek() {
             writer.close();
         }
-    }
-
-    fn jsonl_writer(&self) -> Result<Arc<SecurityEventWriter>, SinkError> {
-        self.jsonl
-            .get_or_try_init(|| Ok(SecurityEventWriter::new(&self.jsonl_path)))
     }
 
     fn sqlite_writer(&self) -> Result<Arc<SqliteEventWriter>, SinkError> {
@@ -134,6 +136,8 @@ mod tests {
         let sqlite = dir.path().join("events.db");
         let sinks = ConfiguredSecurityEventSinks::new(jsonl.clone(), sqlite.clone());
 
+        assert!(!jsonl.exists());
+        assert!(!sqlite.exists());
         sinks.warm_jsonl().expect("warm jsonl");
         sinks.warm_sqlite().expect("warm sqlite");
 
@@ -158,6 +162,18 @@ mod tests {
         assert!(sinks.warm_jsonl().is_err());
         sinks.warm_sqlite().expect("warm independent sqlite");
         assert!(sqlite.exists());
+
+        fs::remove_file(&blocked).expect("unblock path");
+        sinks.log_event(&SecurityEvent::new("code_scan", "code_scan", Map::new()));
+        assert_eq!(
+            fs::read_to_string(blocked.join("events.jsonl"))
+                .expect("recovered jsonl")
+                .lines()
+                .count(),
+            1
+        );
+        fs::remove_dir_all(&blocked).expect("remove recovered directory");
+        fs::write(&blocked, b"blocked").expect("block path again");
 
         let jsonl = dir.path().join("events.jsonl");
         let sinks = ConfiguredSecurityEventSinks::new(jsonl.clone(), blocked.join("events.db"));

@@ -13,6 +13,11 @@
 | 路径约定 | 下文模块落点相对于组件根目录 `src/agent-sec-core/` |
 | 验收类型 | MIGRATION_EQUIVALENCE（见[《Rust 迁移总计划》](AGENT_SEC_RUST_MIGRATION_zh.md) §5.1） |
 
+> 后续接线说明：本文描述 2026-09-11 的存储层迁移范围。当前 daemon 已使用显式路径的
+> security-event 双写，并接入共用 scan lifecycle 与独立 telemetry；详见
+> [共享执行生命周期](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期)。下文“不接 daemon”只描述原工作包边界，
+> 不代表当前 checkout 无生产消费者。observability ingestion/query 仍未接入 daemon。
+
 ## 1. 范围与非范围
 
 ### 1.1 迁入范围

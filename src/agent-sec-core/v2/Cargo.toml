@@ -17,6 +17,7 @@ members = [
     "crates/data/asc-event-sink",
     "crates/data/asc-observability",
     "crates/data/asc-security-events",
+    "crates/data/asc-telemetry",
     "crates/data/asc-security-summary",
     "crates/data/persistence/asc-persistence-sqlite",
     "crates/data/persistence/asc-sqlite-kernel",
@@ -67,11 +68,13 @@ asc-policy-target-contracts = { path = "crates/policy/asc-policy-target-contract
 asc-policy-repository = { path = "crates/policy/asc-policy-repository" }
 asc-policy-types = { path = "crates/policy/asc-policy-types" }
 asc-security-events = { path = "crates/data/asc-security-events" }
+asc-telemetry = { path = "crates/data/asc-telemetry" }
 asc-security-summary = { path = "crates/data/asc-security-summary" }
 asc-sqlite-kernel = { path = "crates/data/persistence/asc-sqlite-kernel" }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6", features = ["derive"] }
 fancy-regex = "0.16"
+nix = { version = "0.31", default-features = false, features = ["user"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rustix = { version = "1.1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }

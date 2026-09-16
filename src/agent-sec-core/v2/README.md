@@ -172,6 +172,12 @@ still requires root. The allowlist is process-local and must be supplied on each
 startup. Configuration-file loading, persistence and management RPCs remain later
 work. Authorization does not change OS socket permissions or deployment topology.
 
+Code scanning is available to any caller that can connect to the UDS. Its
+`LocalUser` access policy imposes no administrator or UID allowlist check;
+kernel peer credentials supply audit attribution. PAP methods still require root
+or an explicitly configured administrator. Audit storage remains private
+(`0700` directory, `0600` files).
+
 Run the daemon in the foreground (the existing directory must belong to the
 process UID, have mode 0700, 0750 or 0755, and have protected, non-symlink ancestors):
 
@@ -296,3 +302,19 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
+
+## Shared scan lifecycle
+
+Scan handlers now receive `asc-daemon-core::ActionService`; production runtime
+registration lives in `apps/asc-daemon/src/actions.rs`. The process constructs one
+shared finalizer with security-event, telemetry and diagnostic outputs. Each scan
+invocation automatically finalizes; handlers and capabilities do not own sinks.
+
+`asc-telemetry` provides the V1 scan field allowlist and policy gates;
+`asc-event-sink::telemetry::TelemetryWriter` appends only to an existing uploader-owned
+file. Audit JSONL/SQLite and telemetry attempts remain synchronous and independent.
+This change includes only the code-scan identity, telemetry projection and fixtures.
+Other scan capabilities will add their identities and projections in their own commits.
+
+See the [implementation, compatibility and acceptance record](../docs/design/RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期)
+for the exact scope, executable checks, deferred work, and rollback procedure.

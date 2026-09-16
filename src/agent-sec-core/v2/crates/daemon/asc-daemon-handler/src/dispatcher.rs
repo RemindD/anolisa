@@ -1,9 +1,8 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use asc_action_runtime::{Finalizer, SecurityEventSink};
 use asc_daemon_core::{
-    PeerCredentials, PolicyAdministration, Principal, PrincipalPolicy, PrincipalRole,
+    ActionService, PeerCredentials, PolicyAdministration, Principal, PrincipalPolicy, PrincipalRole,
 };
 use asc_daemon_protocol::method::{self, AccessPolicy, MethodId};
 use asc_daemon_protocol::{DaemonRequest, DaemonResponse, RequestId, error_code};
@@ -27,19 +26,11 @@ impl DaemonDispatcher {
     pub fn new(
         application: impl PolicyAdministration + 'static,
         principal_policy: Arc<dyn PrincipalPolicy>,
-    ) -> Self {
-        Self::new_with_finalizer(application, principal_policy, default_finalizer())
-    }
-
-    /// Composes dispatch with an explicitly configured action finalizer.
-    pub fn new_with_finalizer(
-        application: impl PolicyAdministration + 'static,
-        principal_policy: Arc<dyn PrincipalPolicy>,
-        finalizer: Finalizer,
+        actions: Arc<ActionService>,
     ) -> Self {
         Self {
             pap: PapHandler::new(application),
-            code_scan: CodeScanHandler::new(finalizer),
+            code_scan: CodeScanHandler::new(actions),
             principal_policy,
         }
     }
@@ -143,16 +134,6 @@ impl RequestDispatcher for DaemonDispatcher {
             &self.handle_with_control(request_id, peer, &request.control, decoded),
         )
     }
-}
-
-struct NoopEventSink;
-
-impl SecurityEventSink for NoopEventSink {
-    fn write(&self, _: &asc_security_events::SecurityEvent) {}
-}
-
-fn default_finalizer() -> Finalizer {
-    Finalizer::new(Arc::new(NoopEventSink))
 }
 
 pub(crate) fn new_request_id() -> RequestId {

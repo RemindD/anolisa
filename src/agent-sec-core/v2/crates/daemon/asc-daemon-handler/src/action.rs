@@ -1,36 +1,24 @@
-//! Code-scan Action adapter invoked by the daemon dispatcher.
-//!
-//! Translates one `action.code_scan` request into a capability call and back.
-//! The capability is pure and stateless, so this handler holds no application
-//! port: it decodes parameters, resolves the language, runs the scan, and
-//! projects the scan result as the method result.
+//! Code-scan protocol projection over the daemon Action application service.
 
-use asc_action_runtime::{ActionRuntime, ExecutionControl, Finalizer};
-use asc_action_types::{ActionAttribution, ActionId, CallerIdentity, Correlation};
-use asc_capability_code_scan::{CodeScanAuditProjector, CodeScanExecutor, CodeScanRequest};
-use asc_daemon_core::PeerCredentials;
+use asc_action_runtime::ExecutionControl;
+use asc_action_types::CodeScanRequest;
+use asc_daemon_core::{ActionService, PeerCredentials};
 use asc_daemon_protocol::{
     CodeScanParams, DaemonResponse, MAX_DAEMON_ERROR_MESSAGE_BYTES, RequestId, error_code,
 };
 use asc_daemon_service::DispatchControl;
+use std::sync::Arc;
 
 const INVALID_PARAMETER_MESSAGE: &str = "request parameters are invalid";
 
 /// Code-scan protocol adapter backed by the shared action runtime.
 pub(super) struct CodeScanHandler {
-    runtime: ActionRuntime<CodeScanExecutor, CodeScanAuditProjector>,
+    application: Arc<ActionService>,
 }
 
 impl CodeScanHandler {
-    pub(super) fn new(finalizer: Finalizer) -> Self {
-        Self {
-            runtime: ActionRuntime::new(
-                ActionId::CodeScan,
-                CodeScanExecutor,
-                CodeScanAuditProjector,
-                finalizer,
-            ),
-        }
+    pub(super) fn new(application: Arc<ActionService>) -> Self {
+        Self { application }
     }
 
     /// Runs one scan and projects its result or a parameter failure.
@@ -62,22 +50,20 @@ impl CodeScanHandler {
             rules: params.rules,
             mode: params.mode,
         };
-        let attribution = ActionAttribution {
-            caller: CallerIdentity {
-                uid: peer.uid(),
-                gid: peer.gid(),
-                pid: peer.pid(),
-            },
-            correlation: Correlation::default(),
-        };
-        let outcome = self.runtime.invoke(
+        let Ok(outcome) = self.application.code_scan(
+            peer,
             &ExecutionControl {
                 deadline: control.deadline(),
                 cancelled: control.is_cancelled(),
             },
-            &attribution,
             &request,
-        );
+        ) else {
+            return DaemonResponse::error(
+                request_id,
+                error_code::INTERNAL,
+                "capability execution failed",
+            );
+        };
         if outcome.error_type == "ErrUnsupportedLang" {
             let message = outcome
                 .error
@@ -123,7 +109,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use asc_action_runtime::SecurityEventSink;
+    use asc_action_runtime::{ActionRuntime, SecurityEventSink, testing::audit_finalizer};
+    use asc_action_types::ActionId;
+    use asc_capability_code_scan::{CodeScanAuditProjector, CodeScanExecutor};
     use asc_security_events::SecurityEvent;
 
     use super::*;
@@ -143,8 +131,17 @@ mod tests {
         }
     }
 
+    fn with_sink(sink: Arc<dyn SecurityEventSink>) -> CodeScanHandler {
+        CodeScanHandler::new(Arc::new(ActionService::new(ActionRuntime::new(
+            ActionId::CodeScan,
+            CodeScanExecutor,
+            CodeScanAuditProjector,
+            audit_finalizer(sink),
+        ))))
+    }
+
     fn handler() -> CodeScanHandler {
-        CodeScanHandler::new(Finalizer::new(Arc::new(NoopSink)))
+        with_sink(Arc::new(NoopSink))
     }
 
     fn response(params: serde_json::Value) -> DaemonResponse {
@@ -219,7 +216,7 @@ mod tests {
     #[test]
     fn event_uses_kernel_peer_identity_not_daemon_identity() {
         let sink = Arc::new(RecordingSink::default());
-        let handler = CodeScanHandler::new(Finalizer::new(sink.clone()));
+        let handler = with_sink(sink.clone());
         let control = DispatchControl::new(Instant::now() + Duration::from_secs(1));
         let response = handler.handle(
             RequestId::new("test").expect("non-empty request id"),
@@ -234,6 +231,47 @@ mod tests {
         assert_eq!(events[0].uid, 1001);
         assert_eq!(events[0].pid, 1003);
         assert_eq!(events[0].details["request"]["code"], "echo hi");
+    }
+
+    struct PanickingExecutor;
+    impl asc_action_runtime::CapabilityExecutor for PanickingExecutor {
+        type Request = CodeScanRequest;
+        fn execute(
+            &self,
+            _: &ExecutionControl,
+            _: &CodeScanRequest,
+        ) -> asc_action_types::ActionOutcome {
+            panic!("SECRET_EXECUTOR_PAYLOAD")
+        }
+    }
+
+    #[test]
+    fn unexpected_execution_failure_is_a_safe_core_error_after_finalization() {
+        let sink = Arc::new(RecordingSink::default());
+        let handler = CodeScanHandler::new(Arc::new(ActionService::new(ActionRuntime::new(
+            ActionId::CodeScan,
+            PanickingExecutor,
+            CodeScanAuditProjector,
+            audit_finalizer(sink.clone()),
+        ))));
+        let response = handler.handle(
+            RequestId::new("test").unwrap(),
+            PeerCredentials::new(1001, 1002, 1003),
+            &DispatchControl::new(Instant::now() + Duration::from_secs(1)),
+            serde_json::json!({"code":"SECRET_REQUEST", "language":"bash"}),
+        );
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["error"]["code"], error_code::INTERNAL);
+        assert_eq!(value["error"]["message"], "capability execution failed");
+        assert!(!value.to_string().contains("SECRET"));
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].details["error_type"], "InternalExecutionError");
+        assert!(
+            !serde_json::to_string(&events[0])
+                .unwrap()
+                .contains("SECRET")
+        );
     }
 
     #[test]

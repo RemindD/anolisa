@@ -23,6 +23,7 @@ pub mod observability;
 pub mod security_events;
 pub mod shutdown;
 pub mod singletons;
+pub mod telemetry;
 #[cfg(test)]
 mod test_support;
 

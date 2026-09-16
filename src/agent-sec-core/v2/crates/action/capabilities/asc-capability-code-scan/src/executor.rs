@@ -6,18 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::{Language, scan};
 
-/// Request accepted by the code-scan capability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodeScanRequest {
-    /// Code supplied by the caller.
-    pub code: String,
-    /// Language literal supplied by the caller.
-    pub language: String,
-    /// Optional selected rule IDs.
-    pub rules: Option<Vec<String>>,
-    /// Optional engine mode.
-    pub mode: Option<String>,
-}
+pub use asc_action_types::CodeScanRequest;
 
 /// Executes code scans through the shared action runtime.
 #[derive(Debug, Default, Clone, Copy)]
