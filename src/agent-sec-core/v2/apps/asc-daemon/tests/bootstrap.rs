@@ -1,4 +1,4 @@
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,18 +29,40 @@ impl Drop for RunningBinary {
     }
 }
 
-fn unique_directory() -> PathBuf {
-    std::env::temp_dir().join(format!(
+fn create_runtime_directory() -> PathBuf {
+    // Ignore TMPDIR: runner-owned ancestors may not satisfy the daemon contract.
+    let directory = Path::new("/tmp").join(format!(
         "asc-daemon-bootstrap-{}-{}",
         std::process::id(),
         DIRECTORY_ID.fetch_add(1, Ordering::Relaxed)
-    ))
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    directory
 }
 
-async fn wait_for_socket(path: &Path) {
-    tokio::time::timeout(Duration::from_secs(2), async {
+fn stderr_log(directory: &Path) -> Stdio {
+    std::fs::File::create(directory.join("stderr.log"))
+        .unwrap()
+        .into()
+}
+
+fn read_stderr(directory: &Path) -> String {
+    std::fs::read_to_string(directory.join("stderr.log")).unwrap()
+}
+
+async fn wait_for_socket(running: &mut RunningBinary) {
+    let result = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            match UnixStream::connect(path).await {
+            if let Some(status) = running.child.try_wait().unwrap() {
+                panic!(
+                    "daemon exited before accepting connections ({status}): {}",
+                    read_stderr(&running.directory)
+                );
+            }
+            match UnixStream::connect(&running.socket_path).await {
                 Ok(stream) => {
                     drop(stream);
                     return;
@@ -54,13 +76,24 @@ async fn wait_for_socket(path: &Path) {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) => {
-                    panic!("daemon bootstrap failed before accepting connections: {error}")
+                    panic!(
+                        "daemon bootstrap connection failed: {error}; stderr: {}",
+                        read_stderr(&running.directory)
+                    );
                 }
             }
         }
     })
-    .await
-    .expect("daemon bootstrap should accept connections");
+    .await;
+    if result.is_err() {
+        let _ = running.child.kill();
+        let status = running.child.wait().unwrap();
+        panic!(
+            "daemon bootstrap timed out; socket: {}; status after cleanup: {status}; stderr: {}",
+            running.socket_path.display(),
+            read_stderr(&running.directory)
+        );
+    }
 }
 
 async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
@@ -100,31 +133,38 @@ async fn dproc_configured_administrator_can_query_without_root() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn daemon_refuses_to_bind_when_sqlite_event_storage_is_unusable() {
-    let directory = unique_directory();
-    std::fs::create_dir(&directory).unwrap();
+    let directory = create_runtime_directory();
     let socket_path = directory.join("daemon.sock");
     let data_dir = directory.join("data");
     std::fs::create_dir(&data_dir).unwrap();
     std::fs::create_dir(data_dir.join("security-events.db")).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-sec-daemon"))
+    let child = Command::new(env!("CARGO_BIN_EXE_agent-sec-daemon"))
         .env("AGENT_SEC_DATA_DIR", &data_dir)
         .args(["serve", "--socket"])
         .arg(&socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr_log(&directory))
         .spawn()
         .unwrap();
 
-    assert!(!wait_for_exit(&mut child).await.success());
-    assert!(!socket_path.exists());
-    std::fs::remove_dir_all(directory).unwrap();
+    let mut running = RunningBinary {
+        child,
+        directory,
+        socket_path,
+    };
+    assert!(!wait_for_exit(&mut running.child).await.success());
+    let stderr = read_stderr(&running.directory);
+    assert!(
+        stderr.contains("security event storage unavailable"),
+        "{stderr}"
+    );
+    assert!(!running.socket_path.exists());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn daemon_binds_when_jsonl_event_storage_is_unusable() {
-    let directory = unique_directory();
-    std::fs::create_dir(&directory).unwrap();
+    let directory = create_runtime_directory();
     let socket_path = directory.join("daemon.sock");
     let data_dir = directory.join("data");
     std::fs::create_dir(&data_dir).unwrap();
@@ -135,7 +175,7 @@ async fn daemon_binds_when_jsonl_event_storage_is_unusable() {
         .arg(&socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr_log(&directory))
         .spawn()
         .unwrap();
     let mut running = RunningBinary {
@@ -144,8 +184,13 @@ async fn daemon_binds_when_jsonl_event_storage_is_unusable() {
         socket_path,
     };
 
-    wait_for_socket(&running.socket_path).await;
+    wait_for_socket(&mut running).await;
     assert!(data_dir.join("security-events.db").exists());
+    let stderr = read_stderr(&running.directory);
+    assert!(
+        stderr.contains("JSONL security event log unavailable"),
+        "{stderr}"
+    );
 
     let signal = Command::new("/bin/kill")
         .arg("-TERM")
@@ -157,9 +202,7 @@ async fn daemon_binds_when_jsonl_event_storage_is_unusable() {
 }
 
 async fn run_binary_scenario(configure_admin: bool) {
-    let directory = unique_directory();
-    std::fs::create_dir(&directory).unwrap();
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = create_runtime_directory();
     let socket_path = directory.join("daemon.sock");
     let data_dir = directory.join("data");
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-sec-daemon"));
@@ -173,7 +216,7 @@ async fn run_binary_scenario(configure_admin: bool) {
         .arg(&socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(stderr_log(&directory))
         .spawn()
         .unwrap();
     let mut running = RunningBinary {
@@ -182,7 +225,7 @@ async fn run_binary_scenario(configure_admin: bool) {
         socket_path,
     };
 
-    wait_for_socket(&running.socket_path).await;
+    wait_for_socket(&mut running).await;
     // A read-only request exercises authorization without sending deployments
     // to the host's AgentSight. Binding delivery has separate component fixtures.
     let response = request(
