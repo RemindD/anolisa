@@ -84,7 +84,7 @@ transport/输出边界验收，不用尚未实现的 V1 stub 或假设的通用�
 | CCLI-004 | 真实 CLI 子进程执行完整 15 步 CRUD，与 frozen 完整结果及 socket 请求比较 | `apps/asc-cli/tests/pap_process.rs::real_cli_processes_execute_the_complete_frozen_pap_crud_scenario` | PASS；测试服务端 PrincipalPolicy，真实 UDS，process-local Repository |
 | CCLI-005 | 15 method 均经服务端授权拒绝 | `pap_process.rs::unauthorized_cli_cannot_read_or_modify_any_pap_resource` | PASS |
 | CCLI-006 | 领域错误不被 CLI 改写、total 与单页、不隐式读取 | `pap_process.rs::domain_validation_and_pagination_are_owned_by_the_daemon` | PASS |
-| CCLI-007 | 分段 LF、不等待 EOF、EOF frame、typed daemon error、空/非法响应 | `crates/daemon/asc-daemon-client/tests/transport.rs` | PASS |
+| CCLI-007 | 分段 LF、不等待 EOF、EOF frame、typed daemon error、空/非法响应 | `crates/asc-daemon-client/tests/transport.rs` | PASS |
 | CCLI-008 | 总 deadline 覆盖 blocked write/分段 read、精确 LF-inclusive 边界、不自动重试 | `transport.rs` 的 deadline、frame limit、no replay assertions | PASS |
 | CCLI-009 | 真实 CLI＋daemon 非 root 授权与配置生命周期 | 暂无自动化入口 | DEFERRED：双进程 E2E 暂缓 |
 | CCLI-010 | 真实 CLI＋daemon 非 root 完整 CRUD | 暂无自动化入口 | DEFERRED：双进程 E2E 暂缓 |

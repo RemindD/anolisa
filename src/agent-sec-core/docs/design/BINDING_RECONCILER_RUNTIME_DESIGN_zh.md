@@ -43,20 +43,20 @@ error injection、进程崩溃和重启恢复测试在 persistent Repository 就
 | 单次临时数据 | plan、prepared request、create/update 判断及 Client 返回结果仅存活于本次调用，不进入 SQL schema |
 | 时间与恢复 | 预算和 deadline 仅存 WorkQueue，重启重置；状态、错误和目标责任由 Repository 保留 |
 
-源码入口：[内存布局](../../v2/crates/policy/asc-pap-repository-memory/src/lib.rs)、
-[部署存储适配](../../v2/crates/policy/asc-pap-repository-memory/src/binding_state.rs)、
-[共享存储类型](../../v2/crates/policy/asc-policy-repository/src/lib.rs)、
-[单次核心](../../v2/crates/policy/asc-pcp/src/reconciler.rs)、
+源码入口：[内存布局](../../v2/crates/asc-pap-repository-memory/src/lib.rs)、
+[部署存储适配](../../v2/crates/asc-pap-repository-memory/src/binding_state.rs)、
+[共享存储类型](../../v2/crates/asc-policy-repository/src/lib.rs)、
+[单次核心](../../v2/crates/asc-pcp/src/reconciler.rs)、
 [daemon 装配](../../v2/apps/asc-daemon/src/reconciliation.rs)。局部写接口明确字段所有权并减少
 无关字段冲突；存储实现不得依赖调用方把旧 spec 原样带回以维持正确性。
 
 ## 3. 代码放置与依赖方向
 
-实现放在 `v2/crates/policy/asc-policy-runtime/src/reconciliation/`。
+实现放在 `v2/crates/asc-policy-runtime/src/reconciliation/`。
 该 crate 属于迁移架构定义的 Policy Runtime；目录组织如下。
 
 ```text
-v2/crates/policy/asc-policy-runtime/
+v2/crates/asc-policy-runtime/
   src/lib.rs
   src/reconciliation/
     mod.rs                         worker、单调时钟、补扫和生命周期
@@ -66,11 +66,11 @@ v2/crates/policy/asc-policy-runtime/
 
 | 位置 | 职责 |
 |---|---|
-| `v2/crates/policy/asc-pcp/src/` | 单次认领、重新翻译/准备、远端执行、结果合并和退避计算；本次 slot 仅用于异常收尾，不含执行锁或跨调用缓存；中断尝试的领域恢复决策也归此处 |
-| `v2/crates/policy/asc-policy-repository/src/` | 持久化数据、一致读、局部条件写和显式事务端口；不含队列或 prepared 缓存 |
-| `v2/crates/policy/asc-pap/src/` | CRUD 语义、原子接受意图；声明窄 `BindingReconcileEnqueuer` 输出端口，提交后通知 |
-| `v2/crates/policy/asc-pap-repository-memory/src/` | 首阶段实现相同局部更新语义；不依赖核心实现，不承担执行缓存 |
-| `v2/crates/data/asc-persistence-sqlite/src/policy.rs` 与 `src/policy/`（拟建） | 后续 Binding/deployment 表、事务、扫描和数据库适配；SQLite migration 随该工作包定义 |
+| `v2/crates/asc-pcp/src/` | 单次认领、重新翻译/准备、远端执行、结果合并和退避计算；本次 slot 仅用于异常收尾，不含执行锁或跨调用缓存；中断尝试的领域恢复决策也归此处 |
+| `v2/crates/asc-policy-repository/src/` | 持久化数据、一致读、局部条件写和显式事务端口；不含队列或 prepared 缓存 |
+| `v2/crates/asc-pap/src/` | CRUD 语义、原子接受意图；声明窄 `BindingReconcileEnqueuer` 输出端口，提交后通知 |
+| `v2/crates/asc-pap-repository-memory/src/` | 首阶段实现相同局部更新语义；不依赖核心实现，不承担执行缓存 |
+| `v2/crates/asc-persistence-sqlite/src/policy.rs` 与 `src/policy/`（拟建） | 后续 Binding/deployment 表、事务、扫描和数据库适配；SQLite migration 随该工作包定义 |
 | `v2/apps/asc-daemon/src/reconciliation.rs` | 接收共享 Repository，选择并构造具体 Adapter/Client、核心与 Runtime；main 接 PAP notifier、健康和生命周期 |
 | `v2/apps/asc-daemon/tests/` | Runtime 集成阶段验证装配与生命周期的直接消费者；完整 CLI/daemon 进程链路归独立 E2E PR |
 | `v2/fixtures/reconciliation/` | 核心、调度、存储及恢复的完整数据/trace fixture；不同证据层分别记录 |
@@ -393,7 +393,7 @@ AgentSight `PreparedRequest` 在本次调用中保存 boot ID、包含 process s
 核心对不透明 TargetRef 的一致性检查仅覆盖实际保留的目标 ID、路由及清理参数。
 
 Delete 使用原 cleanup，不要求原进程仍然存活；已登记的 UNKNOWN 和清理责任继续保留。
-源码见 [Client reconciliation](../../v2/crates/integrations/asc-agentsight-client/src/client/reconciliation.rs)。
+源码见 [Client reconciliation](../../v2/crates/asc-agentsight-client/src/client/reconciliation.rs)。
 组件测试分别验证 Cleanup 的最小字段、重新准备采用当前身份，以及本次准备后身份改变时
 拒绝下发。远端重复请求的处理仍由 Client/目标协议决定；跨重启恢复及系统性 error injection
 等待 persistent Repository，不以本次校验宣称已解决跨次进程身份连续性。

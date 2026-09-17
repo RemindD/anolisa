@@ -466,4 +466,4 @@ DPROC-021 是进程内装配验收，Client 使用 scripted port；完整 CLI→
 - Rust DPROC-002/DPROC-003 与部分 DPROC-013 process fixture：
   v2/apps/asc-daemon/tests/bootstrap.rs；
 - Rust PAP 完整 serialized UDS scenario：
-  v2/crates/daemon/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json。
+  v2/crates/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json。

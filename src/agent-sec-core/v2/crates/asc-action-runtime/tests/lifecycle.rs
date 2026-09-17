@@ -103,7 +103,7 @@ impl AuditProjector for Projector {
 #[test]
 fn smc_004_005_012_013_code_scan_matches_v1_goldens() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../../tests/v2/fixtures/scan-lifecycle-v1.json"
+        "../../../../tests/v2/fixtures/scan-lifecycle-v1.json"
     ))
     .unwrap();
     for case in fixture["cases"].as_array().unwrap() {

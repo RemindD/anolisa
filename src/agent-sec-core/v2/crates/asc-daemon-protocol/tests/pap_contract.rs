@@ -79,7 +79,7 @@ fn every_pap_method_has_frozen_input_and_output_types() {
 #[test]
 fn method_results_reuse_complete_domain_contracts() {
     let binding: PreparedBinding = serde_json::from_str(include_str!(
-        "../../../policy/asc-policy-types/tests/fixtures/prepared-binding.json"
+        "../../asc-policy-types/tests/fixtures/prepared-binding.json"
     ))
     .unwrap();
     let policy = binding.policy.clone();

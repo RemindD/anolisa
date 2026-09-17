@@ -49,20 +49,20 @@
 
 | 已有模块 | 当前作用 | 扫描接入方式 |
 | --- | --- | --- |
-| `v2/crates/daemon/asc-daemon-service/` | UDS、帧边界、peer credentials、连接限制、dispatch deadline 和 drain | 复用 transport 和 `RequestDispatcher` port |
-| `v2/crates/daemon/asc-daemon-protocol/` | 请求/响应 envelope，15 个 PAP method | 增加扫描 method、DTO 和相关协议字段 |
-| `v2/crates/daemon/asc-daemon-handler/` | `DaemonDispatcher`、PAP 路由、授权和错误投影 | 增加 Action handler 分支 |
-| `v2/crates/daemon/asc-daemon-core/` | `identity.rs`、`pap.rs`，可信 Principal 和 Policy 应用接口 | 增加 Action 用例及扫描权限 |
+| `v2/crates/asc-daemon-service/` | UDS、帧边界、peer credentials、连接限制、dispatch deadline 和 drain | 复用 transport 和 `RequestDispatcher` port |
+| `v2/crates/asc-daemon-protocol/` | 请求/响应 envelope，15 个 PAP method | 增加扫描 method、DTO 和相关协议字段 |
+| `v2/crates/asc-daemon-handler/` | `DaemonDispatcher`、PAP 路由、授权和错误投影 | 增加 Action handler 分支 |
+| `v2/crates/asc-daemon-core/` | `identity.rs`、`pap.rs`，可信 Principal 和 Policy 应用接口 | 增加 Action 用例及扫描权限 |
 | `v2/apps/asc-daemon/` | 前台进程、Tokio runtime、PAP 装配、signal/shutdown | 装配 Action Runtime、Executor、Client 和 Sink |
-| `v2/crates/foundation/asc-foundation-types/` | `identifier.rs`、`revision.rs` 中的共享值类型 | 按需要复用；扫描专属类型放在 Action 领域 |
+| `v2/crates/asc-foundation-types/` | `identifier.rs`、`revision.rs` 中的共享值类型 | 按需要复用；扫描专属类型放在 Action 领域 |
 
 当前 `MethodId` 只有 `Pap`，`AccessPolicy` 只有 `PolicyAdministrator`。
 `v2/apps/asc-daemon/src/main.rs` 装配的是 `PapService`、编译器和 process-local Repository。
 `v2/crates/action/`、`v2/crates/data/`、`v2/apps/asc-cli/` 尚不存在。
 
-具体入口见 [dispatcher.rs](../../v2/crates/daemon/asc-daemon-handler/src/dispatcher.rs)、
-[method.rs](../../v2/crates/daemon/asc-daemon-protocol/src/method.rs)、
-[identity.rs](../../v2/crates/daemon/asc-daemon-core/src/identity.rs) 和
+具体入口见 [dispatcher.rs](../../v2/crates/asc-daemon-handler/src/dispatcher.rs)、
+[method.rs](../../v2/crates/asc-daemon-protocol/src/method.rs)、
+[identity.rs](../../v2/crates/asc-daemon-core/src/identity.rs) 和
 [main.rs](../../v2/apps/asc-daemon/src/main.rs)。
 
 ### 2.2 V1 两种扫描的实现不同
@@ -107,7 +107,7 @@ flowchart LR
 
 ### 4.1 Action 类型合同
 
-**建议新增：** `v2/crates/action/asc-action-types/`。
+**建议新增：** `v2/crates/asc-action-types/`。
 
 | 建议文件 | 内容 |
 | --- | --- |
@@ -124,7 +124,7 @@ daemon-core 将可信身份转换为运行时所需的审计归属上下文，�
 
 ### 4.2 安全事件合同
 
-**建议新增：** `v2/crates/data/asc-security-events/`。
+**建议新增：** `v2/crates/asc-security-events/`。
 
 先定义事件模型、owner attribution、schema version 和写入 port，可分别放在
 `src/event.rs`、`src/repository.rs`。Runtime 的 Finalizer 使用该合同，具体 Capability
@@ -135,7 +135,7 @@ daemon-core 将可信身份转换为运行时所需的审计归属上下文，�
 
 ### 4.3 Action Runtime
 
-**建议新增：** `v2/crates/action/asc-action-runtime/`。
+**建议新增：** `v2/crates/asc-action-runtime/`。
 
 | 建议文件 | 内容 |
 | --- | --- |
@@ -163,7 +163,7 @@ daemon-core 将可信身份转换为运行时所需的审计归属上下文，�
 
 ### 4.4 daemon-core 扫描用例
 
-**建议新增：** `v2/crates/daemon/asc-daemon-core/src/action/`，并从现有 `src/lib.rs` 导出。
+**建议新增：** `v2/crates/asc-daemon-core/src/action/`，并从现有 `src/lib.rs` 导出。
 
 该模块接收用于审计归属的可信 PeerCredentials、执行上下文和扫描输入，调用 Action Runtime，返回
 应用层结果。可使用一个有界的 Action 应用接口承载两个扫描用例；不需要每个方法再增加
@@ -176,7 +176,7 @@ Policy 管理权限仅约束 PAP 方法，不作为扫描权限。
 
 ### 4.5 protocol 扫描方法族
 
-**修改位置：** `v2/crates/daemon/asc-daemon-protocol/`。
+**修改位置：** `v2/crates/asc-daemon-protocol/`。
 
 - 新增 `src/action.rs`：扫描方法的 wire DTO 和响应投影合同，复用共享 Action 类型。
 - 扩展 `src/method.rs`：增加 Action method identity、精确方法解析和访问元数据。
@@ -199,7 +199,7 @@ result 及失败映射，不默认新增 V1/V2 双格式。如果有受支持的
 
 ### 4.6 handler 和 transport 控制传递
 
-**修改位置：** `v2/crates/daemon/asc-daemon-handler/`。
+**修改位置：** `v2/crates/asc-daemon-handler/`。
 
 新增 `src/action.rs`，并扩展 `dispatcher.rs` 的构造依赖和 `MethodId` 分支。handler
 根据已解析方法选择唯一 Action，经 core 调用一次 Runtime，然后投影响应；业务校验、
@@ -241,7 +241,7 @@ fallback。兼容命令名、flag 和 Hook 调用方式以实际消费者盘点�
 
 ## 5. Prompt Scan 的具体迁移
 
-**建议新增：** `v2/crates/action/capabilities/asc-capability-prompt-scan/`。
+**建议新增：** `v2/crates/asc-capability-prompt-scan/`。
 
 | 当前源码 | 目标内容 |
 | --- | --- |
@@ -257,7 +257,7 @@ fallback。兼容命令名、flag 和 Hook 调用方式以实际消费者盘点�
 
 现有 `PromptScanner::new()` 会内部构造 detector 和模型 client。迁入时需补充注入点，
 定义实例复用、并发、初始化计时和配置隔离；不能只给旧构造器套一个 async 函数。
-模型 HTTP/config 实现迁入 `v2/crates/integrations/asc-model-client/`；分类 prompt、
+模型 HTTP/config 实现迁入 `v2/crates/asc-model-client/`；分类 prompt、
 模型输出解析和 threat 判定仍归本 Capability。
 
 优先用 `fast` 模式完成第一个真实 Action Slice，然后接入 `standard/strict/multi_turn`。
@@ -266,7 +266,7 @@ fallback。兼容命令名、flag 和 Hook 调用方式以实际消费者盘点�
 
 ## 6. Code Scan 的具体迁移
 
-**建议新增：** `v2/crates/action/capabilities/asc-capability-code-scan/`。
+**建议新增：** `v2/crates/asc-capability-code-scan/`。
 
 | 当前 Python 文件/目录 | 建议 Rust 落点 | 必须覆盖的行为 |
 | --- | --- | --- |
@@ -315,10 +315,10 @@ Capability 处理。schema error 落在哪一层响应中，按 oracle 和选定
 
 | 模块 | 何时需要 | 内容和位置 |
 | --- | --- | --- |
-| `asc-model-client` | 接入 Prompt 模型模式或 Code LLM mode 时 | `v2/crates/integrations/asc-model-client/`；共享 HTTP、连接、超时、重试和配置校验。保留当前本地模型访问边界，并测试构造/注入路径 |
-| `asc-evidence-types` | 扫描结果有 PIP/Decision 等跨领域消费者时 | `v2/crates/action/asc-evidence-types/`；Evidence/Attribute 合同和受控 projector；不直接把完整扫描 JSON 送入 PDP |
-| `asc-persistence-sqlite`、`asc-sqlite-kernel` | 需要真实安全事件保留和重启后恢复时 | `v2/crates/data/persistence/asc-sqlite-kernel/`（与领域无关的连接、schema 收敛、写入阶梯、维护闸门）与 `v2/crates/data/persistence/asc-persistence-sqlite/src/{security_events,observability}/`（各自的 `table`/`repository`/`policy`/`migration`/`writer`/`reader`）。两条流的表契约、故障策略和迁移机制都不同，因此按流分目录而非合并为单个 `events.rs`；实现事件 port，验证真实存储和恢复 |
-| `asc-observability`、`asc-session`、`asc-event-log`、`asc-event-sink`、`asc-security-summary` | 需要授权事件查询、session 关联和读模型时 | `v2/crates/data/`；由 daemon query 用例提供访问，不由 CLI 直读数据库。JSONL 落盘、双写装配与摘要渲染已分别落在 `asc-event-log`、`asc-event-sink`、`asc-security-summary`；`asc-session` 尚未实现 |
+| `asc-model-client` | 接入 Prompt 模型模式或 Code LLM mode 时 | `v2/crates/asc-model-client/`；共享 HTTP、连接、超时、重试和配置校验。保留当前本地模型访问边界，并测试构造/注入路径 |
+| `asc-evidence-types` | 扫描结果有 PIP/Decision 等跨领域消费者时 | `v2/crates/asc-evidence-types/`；Evidence/Attribute 合同和受控 projector；不直接把完整扫描 JSON 送入 PDP |
+| `asc-persistence-sqlite`、`asc-sqlite-kernel` | 需要真实安全事件保留和重启后恢复时 | `v2/crates/asc-sqlite-kernel/`（与领域无关的连接、schema 收敛、写入阶梯、维护闸门）与 `v2/crates/asc-persistence-sqlite/src/{security_events,observability}/`（各自的 `table`/`repository`/`policy`/`migration`/`writer`/`reader`）。两条流的表契约、故障策略和迁移机制都不同，因此按流分目录而非合并为单个 `events.rs`；实现事件 port，验证真实存储和恢复 |
+| `asc-observability`、`asc-session`、`asc-event-log`、`asc-event-sink`、`asc-security-summary` | 需要授权事件查询、session 关联和读模型时 | `v2/crates/asc-*/`；由 daemon query 用例提供访问，不由 CLI 直读数据库。JSONL 落盘、双写装配与摘要渲染已分别落在 `asc-event-log`、`asc-event-sink`、`asc-security-summary`；`asc-session` 尚未实现 |
 | config/packaging/deploy | 从集成切片进入产品交付时 | `v2/config/`、`v2/packaging/`、`v2/deploy/`；规则资产、模型配置、系统路径、身份和启动就绪合同 |
 
 独立扫描 RPC 不要求先实现 Policy Runtime、PAP 扩展、PCP/Reconciler 或 AgentSight
@@ -361,11 +361,11 @@ acceptance type，盘点实际消费者，提出本工作包的兼容范围和�
 | 层次 | 建议位置 | 验证内容 |
 | --- | --- | --- |
 | 类型、Runtime、Capability | 各新增 crate 的 `tests/`，或必要的源码单元测试 | schema、差分、执行状态、事件和资源边界 |
-| 协议 | `v2/crates/daemon/asc-daemon-protocol/tests/fixtures/` 及 `tests/` | 精确 wire request/response、非法输入和显式方法集合 |
+| 协议 | `v2/crates/asc-daemon-protocol/tests/fixtures/` 及 `tests/` | 精确 wire request/response、非法输入和显式方法集合 |
 | 跨进程 | `v2/apps/asc-daemon/tests/` | 实际 binary、UDS、权限、并发、超时、断连和 shutdown |
 | CLI | `v2/apps/asc-cli/tests/` | 参数、stdin/文件输入、输出和退出码、daemon 不可用 |
 | 共享扫描 golden | `v2/fixtures/actions/prompt-scan/`、`code-scan/` | V1 冻结输入、完整输出及必要的事件和调用 trace |
-| 模型 Client | `v2/crates/integrations/asc-model-client/tests/` | 真实序列化请求、响应、超时、重试、地址限制和失败映射 |
+| 模型 Client | `v2/crates/asc-model-client/tests/` | 真实序列化请求、响应、超时、重试、地址限制和失败映射 |
 
 已有 Prompt 测试来源包括
 [Rust Scanner 测试及语料](../../agent-sec-cli/crates/prompt-scanner/)、

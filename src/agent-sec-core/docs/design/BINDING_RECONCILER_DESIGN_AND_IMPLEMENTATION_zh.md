@@ -219,9 +219,9 @@ BindingView，通过 status.phase/status.error 表达失败。详见
 
 | 范围 | 文件或入口 | 修正责任 |
 |---|---|---|
-| 领域定义 | `v2/crates/policy/asc-policy-types/src/binding.rs` 及 tests | binding revision 注释、request/worker 转移、公开投影 |
-| PAP | `v2/crates/policy/asc-pap/src/{service,repository,lib}.rs`、`tests/pap_service.rs` | 增版判断、请求 CAS、幂等、并发测试 |
-| 首阶段内存 adapter | `v2/crates/policy/asc-pap-repository-memory/src/lib.rs` | 实现新 repository contract，明确仅进程存活期间保存 |
+| 领域定义 | `v2/crates/asc-policy-types/src/binding.rs` 及 tests | binding revision 注释、request/worker 转移、公开投影 |
+| PAP | `v2/crates/asc-pap/src/{service,repository,lib}.rs`、`tests/pap_service.rs` | 增版判断、请求 CAS、幂等、并发测试 |
+| 首阶段内存 adapter | `v2/crates/asc-pap-repository-memory/src/lib.rs` | 实现新 repository contract，明确仅进程存活期间保存 |
 | daemon | `asc-daemon-protocol/src/pap.rs`、`asc-daemon-core/src/pap.rs`、`asc-daemon-handler/src/pap.rs` | 方法注释、直接领域类型、错误及 runtime 投影 |
 | wire fixtures | `asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json`、`pap-methods.json`、`pap-invalid-requests.json`、`tests/pap_contract.rs` | 完整结构、跨步骤引用、状态/error 场景 |
 | UDS | `v2/apps/asc-daemon/tests/pap_protocol.rs` | 完整 serialized scenario 与并发准入消费者测试 |
@@ -443,7 +443,7 @@ validate-only 调用；编译拒绝由 Apply 响应报告。因此 update 仍可
 具体结果见验收报告，不代表真实部署版本的编译兼容性。回退须一起恢复编译器调用、依赖、lockfile 和
 编译断言，无 wire/state 格式迁移；不得恢复仅凭本地编译成功宣称目标兼容的结论。
 
-当前 [AgentSight Client](../../v2/crates/integrations/asc-agentsight-client/README.md)
+当前 [AgentSight Client](../../v2/crates/asc-agentsight-client/README.md)
 实现 `asc-policy-target-contracts::TargetDeploymentClient`，只保留下列稳定准备/重放
 路径。旧 `apply(plan)` 和 `delete(binding_id, revision)` 入口已移除，避免同一 UUID
 下每次重新读取进程 start time；自定义 resolver 必须实现 boot identity：

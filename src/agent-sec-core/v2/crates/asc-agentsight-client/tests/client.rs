@@ -8,9 +8,9 @@ use asc_policy_types::target::{FailureKind, Presence};
 use common::*;
 
 const APPLY_REQUEST: &[u8] =
-    include_bytes!("../../../../fixtures/clients/agentsight/file-deletion/apply.request.json");
+    include_bytes!("../../../fixtures/clients/agentsight/file-deletion/apply.request.json");
 const RETRYABLE_ERROR_RESPONSE: &[u8] = include_bytes!(
-    "../../../../fixtures/clients/agentsight/file-deletion/retryable-error.response.json"
+    "../../../fixtures/clients/agentsight/file-deletion/retryable-error.response.json"
 );
 
 #[test]

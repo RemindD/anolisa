@@ -46,7 +46,7 @@ fn factory_defers_credentials_and_refreshes_them_between_attempts() {
     std::fs::write(&token_file, "second-token\n").unwrap();
     let second = factory.open().unwrap();
     let prepared: PreparedApply = serde_json::from_str(include_str!(
-        "../../../../fixtures/clients/agentsight/file-deletion/prepared-7.json"
+        "../../../fixtures/clients/agentsight/file-deletion/prepared-7.json"
     ))
     .unwrap();
     let target = prepared.target;

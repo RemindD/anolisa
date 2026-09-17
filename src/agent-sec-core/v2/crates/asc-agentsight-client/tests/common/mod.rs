@@ -11,13 +11,13 @@ pub const BOOT_ID: &str = "11111111-2222-4333-8444-555555555555";
 pub const ID7: &str = "d525d62c-2a3d-570b-9c25-d29c336c1d87";
 pub const ID8: &str = "57f6ffc6-7960-5e22-8aef-404c2178c266";
 pub const HEALTH: &[u8] =
-    include_bytes!("../../../../../fixtures/clients/agentsight/file-deletion/health.response.json");
+    include_bytes!("../../../../fixtures/clients/agentsight/file-deletion/health.response.json");
 pub const APPLY: &[u8] =
-    include_bytes!("../../../../../fixtures/clients/agentsight/file-deletion/apply.response.json");
+    include_bytes!("../../../../fixtures/clients/agentsight/file-deletion/apply.response.json");
 
 pub fn plan(revision: u32) -> TargetBindingPlan {
     let mut value: Value = serde_json::from_str(include_str!(
-        "../../../../../fixtures/clients/agentsight/file-deletion/deployment-plan.json"
+        "../../../../fixtures/clients/agentsight/file-deletion/deployment-plan.json"
     ))
     .unwrap();
     value["source"]["bindingRevision"] = json!(revision);
@@ -30,10 +30,10 @@ pub fn plan(revision: u32) -> TargetBindingPlan {
 pub fn prepared(revision: u32) -> PreparedApply {
     serde_json::from_str(match revision {
         7 => {
-            include_str!("../../../../../fixtures/clients/agentsight/file-deletion/prepared-7.json")
+            include_str!("../../../../fixtures/clients/agentsight/file-deletion/prepared-7.json")
         }
         8 => {
-            include_str!("../../../../../fixtures/clients/agentsight/file-deletion/prepared-8.json")
+            include_str!("../../../../fixtures/clients/agentsight/file-deletion/prepared-8.json")
         }
         _ => panic!("unregistered fixture revision"),
     })

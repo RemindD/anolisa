@@ -87,7 +87,7 @@ From `v2`:
 cargo test -p asc-pcp -p asc-policy-runtime --locked --offline
 ```
 
-The [acceptance standard](../../../fixtures/reconciliation/ACCEPTANCE.md) covers
+The [acceptance standard](../../fixtures/reconciliation/ACCEPTANCE.md) covers
 complete serialized records, dependency inputs/results and ordered traces. Tests
 also compose real PAP/memory and actual Adapter/Client/Ureq with a loopback mock.
 Storage is process-local memory. Full CLI/daemon E2E is a separate PR; SQL,

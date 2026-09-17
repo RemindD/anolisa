@@ -12,7 +12,7 @@ def dependencies(relative):
 
 
 def test_handlers_and_core_cannot_depend_on_concrete_scanners_or_output_writers():
-    for crate in ("crates/daemon/asc-daemon-handler", "crates/daemon/asc-daemon-core"):
+    for crate in ("crates/asc-daemon-handler", "crates/asc-daemon-core"):
         deps = dependencies(crate)
         assert not any(name.startswith("asc-capability-") for name in deps)
         assert not set(deps) & {
@@ -21,14 +21,14 @@ def test_handlers_and_core_cannot_depend_on_concrete_scanners_or_output_writers(
             "asc-persistence-sqlite",
             "rusqlite",
         }
-    for source in (V2 / "crates/daemon/asc-daemon-handler/src").glob("*.rs"):
+    for source in (V2 / "crates/asc-daemon-handler/src").glob("*.rs"):
         production = source.read_text().split("#[cfg(test)]")[0]
         assert "Finalizer" not in production
         assert "ActionRuntime" not in production
 
 
 def test_capabilities_cannot_write_events_or_telemetry_directly():
-    for crate in (V2 / "crates/action/capabilities").iterdir():
+    for crate in (V2 / "crates").glob("asc-capability-*"):
         if (crate / "Cargo.toml").is_file():
             deps = dependencies(crate.relative_to(V2))
             assert not set(deps) & {

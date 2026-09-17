@@ -70,7 +70,7 @@ fn wait(mut predicate: impl FnMut() -> bool) {
 fn configured_composition_delivers_pap_intent_and_joins_its_workers() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
     let mut spec: PreparedBinding = serde_json::from_str(include_str!(
-        "../../../crates/policy/asc-policy-types/tests/fixtures/prepared-binding.json"
+        "../../../crates/asc-policy-types/tests/fixtures/prepared-binding.json"
     ))
     .unwrap();
     spec.scope.revision = asc_foundation_types::Revision::new(1).unwrap();
@@ -132,7 +132,7 @@ fn configured_composition_delivers_pap_intent_and_joins_its_workers() {
 fn unavailable_reconciliation_only_rejects_binding_writes() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
     let spec: PreparedBinding = serde_json::from_str(include_str!(
-        "../../../crates/policy/asc-policy-types/tests/fixtures/prepared-binding.json"
+        "../../../crates/asc-policy-types/tests/fixtures/prepared-binding.json"
     ))
     .unwrap();
     repository.put_policy(&spec.policy).unwrap();

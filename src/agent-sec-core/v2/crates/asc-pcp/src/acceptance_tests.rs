@@ -231,16 +231,16 @@ impl BindingStateRepository for Harness {
 #[test]
 fn complete_serialized_core_cases() {
     let objects: BTreeMap<String, Value> = serde_json::from_str(include_str!(
-        "../../../../fixtures/reconciliation/objects.json"
+        "../../../fixtures/reconciliation/objects.json"
     ))
     .unwrap();
     let raw: Value = serde_json::from_str(include_str!(
-        "../../../../fixtures/reconciliation/core-cases.json"
+        "../../../fixtures/reconciliation/core-cases.json"
     ))
     .unwrap();
     let suite: Suite = serde_json::from_value(expand(raw, &objects)).unwrap();
     let required_list: Vec<String> = serde_json::from_str(include_str!(
-        "../../../../fixtures/reconciliation/required-variants.json"
+        "../../../fixtures/reconciliation/required-variants.json"
     ))
     .unwrap();
     let required: BTreeSet<_> = required_list.iter().cloned().collect();
@@ -347,17 +347,20 @@ fn actual_agentsight_adapter_uses_the_core_port_without_interface_changes() {
     };
 
     let objects: BTreeMap<String, Value> = serde_json::from_str(include_str!(
-        "../../../../fixtures/reconciliation/objects.json"
+        "../../../fixtures/reconciliation/objects.json"
     ))
     .unwrap();
     let raw = serde_json::from_str(include_str!(
-        "../../../../fixtures/reconciliation/core-cases.json"
+        "../../../fixtures/reconciliation/core-cases.json"
     ))
     .unwrap();
     let mut suite: Suite = serde_json::from_value(expand(raw, &objects)).unwrap();
     let case = suite.cases.remove(0);
     let mut step = case.steps.into_iter().next().unwrap();
-    let golden: AgentSightBindingPlan = serde_json::from_str(include_str!("../../../../fixtures/adapters/agentsight/prevent-file-deletion/agentsight-binding-plan.json")).unwrap();
+    let golden: AgentSightBindingPlan = serde_json::from_str(include_str!(
+        "../../../fixtures/adapters/agentsight/prevent-file-deletion/agentsight-binding-plan.json"
+    ))
+    .unwrap();
     let plan = TargetBindingPlan {
         format: AGENTSIGHT_BINDING_PLAN_FORMAT.into(),
         content: serde_json::to_vec(&golden).unwrap(),

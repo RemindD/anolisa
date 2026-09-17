@@ -125,7 +125,7 @@ repository 中对应目标已登记 UNKNOWN，测试结束拒绝未消费的预�
 ## Runtime 集成版本的内部契约与接入注意事项（79c460a8）
 
 共享 trait 位于 `asc-policy-target-contracts`，数据位于 `asc-policy-types::target`；
-Client 不依赖核心或 Repository。实现入口见 [asc-pcp](../../crates/policy/asc-pcp/README.md)。
+Client 不依赖核心或 Repository。实现入口见 [asc-pcp](../../crates/asc-pcp/README.md)。
 
 - `asc-policy-repository` 提供一致聚合读取及局部条件写，`ReconciliationPatch` 不携带 spec。
   PAP 与 Reconciler 共用 memory Repository 的权威 Binding 状态，不要求新增全局 resourceVersion。
@@ -294,13 +294,13 @@ git diff --check
 下面的 PASS 限定为设计第 10.2 节分配给 Runtime 集成的范围，不扩大到该行的持久化阶段要求。
 同一测试可覆盖多个门禁，因此不能用门禁行数充当测试数。缩写对应实际源码：
 
-- R：[Runtime 测试](../../crates/policy/asc-policy-runtime/src/reconciliation/tests.rs)。
-- S：[核心状态测试](../../crates/policy/asc-pcp/src/state_tests.rs)。
-- P：[Repository 契约测试](../../crates/policy/asc-pcp/tests/repository_contract.rs)。
-- L：[PAP 生命周期测试](../../crates/policy/asc-pcp/tests/pap_lifecycle.rs)。
-- H：[AgentSight 组合测试](../../crates/policy/asc-pcp/tests/agentsight_integration.rs)。
-- I：[Client 初始化测试](../../crates/policy/asc-pcp/tests/client_initialization.rs)。
-- U：[panic 收尾测试](../../crates/policy/asc-pcp/src/panic_recovery_tests.rs)。
+- R：[Runtime 测试](../../crates/asc-policy-runtime/src/reconciliation/tests.rs)。
+- S：[核心状态测试](../../crates/asc-pcp/src/state_tests.rs)。
+- P：[Repository 契约测试](../../crates/asc-pcp/tests/repository_contract.rs)。
+- L：[PAP 生命周期测试](../../crates/asc-pcp/tests/pap_lifecycle.rs)。
+- H：[AgentSight 组合测试](../../crates/asc-pcp/tests/agentsight_integration.rs)。
+- I：[Client 初始化测试](../../crates/asc-pcp/tests/client_initialization.rs)。
+- U：[panic 收尾测试](../../crates/asc-pcp/src/panic_recovery_tests.rs)。
 - C：[核心 JSON 场景](core-cases.json)，由 `acceptance_tests::complete_serialized_core_cases` 执行，
   与 [required-variants.json](required-variants.json) 严格对照，断言完整状态和有序 trace。
 

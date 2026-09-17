@@ -393,11 +393,11 @@ flowchart TD
 | --- | --- |
 | `v2/apps/asc-daemon/src/main.rs`、`sinks.rs` | system-owned 路径、具体 sink、共享 Finalizer；安装不输出 panic payload 的进程 hook |
 | `v2/apps/asc-daemon/src/actions.rs` | 唯一生产 capability inventory；把 Executor、AuditProjector 和共享 Finalizer 组成 runtime |
-| `v2/crates/daemon/asc-daemon-core/src/action.rs` | 接收内核来源的 PeerCredentials 并生成 caller attribution；scan handler/core 不接收角色，code scan 不按角色或 UID allowlist 限制调用；调用共享 runtime |
-| `v2/crates/daemon/asc-daemon-handler/src/action.rs` | DTO decode、控制信息适配、application 调用、wire projection；不构造 runtime/finalizer/sink |
-| `v2/crates/action/asc-action-runtime/src/{runtime,finalizer,ports}.rs` | timing、execution、terminalization、独立输出尝试和受控错误 |
-| `v2/crates/data/asc-telemetry/` | scan 共同字段、严格 allowlist、部署门控配置；不依赖具体 scanner |
-| `v2/crates/data/asc-event-sink/src/{configured,telemetry}.rs` | audit 双写和独立 telemetry writer |
+| `v2/crates/asc-daemon-core/src/action.rs` | 接收内核来源的 PeerCredentials 并生成 caller attribution；scan handler/core 不接收角色，code scan 不按角色或 UID allowlist 限制调用；调用共享 runtime |
+| `v2/crates/asc-daemon-handler/src/action.rs` | DTO decode、控制信息适配、application 调用、wire projection；不构造 runtime/finalizer/sink |
+| `v2/crates/asc-action-runtime/src/{runtime,finalizer,ports}.rs` | timing、execution、terminalization、独立输出尝试和受控错误 |
+| `v2/crates/asc-telemetry/` | scan 共同字段、严格 allowlist、部署门控配置；不依赖具体 scanner |
+| `v2/crates/asc-event-sink/src/{configured,telemetry}.rs` | audit 双写和独立 telemetry writer |
 
 新增 capability 必须提供 Executor 与安全 AuditProjector，在 composition root 注册后通过
 core application operation 调用。handler 和 capability 不直接依赖具体 writer。
@@ -724,17 +724,17 @@ module/crate 边界必须落在仓库迁移总计划定义的目标 workspace �
 ```text
 apps/asc-daemon/                         # process/composition root
 apps/asc-cli/                            # daemon client
-crates/daemon/asc-daemon-protocol/       # versioned wire contracts
-crates/daemon/asc-daemon-service/        # protocol-independent UDS transport
-crates/daemon/asc-daemon-handler/        # inbound protocol/application adapter
-crates/daemon/asc-daemon-core/           # application use cases
-crates/action/asc-action-types/          # ActionId/request/result
-crates/action/asc-evidence-types/        # Evidence/Attribute contracts
-crates/action/asc-action-runtime/        # supervisor/lifecycle/finalizer/ports
-crates/action/capabilities/asc-capability-*/
-crates/data/asc-security-events/         # event domain and Repository port
-crates/data/asc-observability/           # trajectory/read model/effect evidence
-crates/data/persistence/asc-persistence-sqlite/
+crates/asc-daemon-protocol/       # versioned wire contracts
+crates/asc-daemon-service/        # protocol-independent UDS transport
+crates/asc-daemon-handler/        # inbound protocol/application adapter
+crates/asc-daemon-core/           # application use cases
+crates/asc-action-types/          # ActionId/request/result
+crates/asc-evidence-types/        # Evidence/Attribute contracts
+crates/asc-action-runtime/        # supervisor/lifecycle/finalizer/ports
+crates/asc-capability-*/
+crates/asc-security-events/         # event domain and Repository port
+crates/asc-observability/           # trajectory/read model/effect evidence
+crates/asc-persistence-sqlite/
 ```
 
 ActionRuntime 依赖 executor port，不依赖具体 capability；capability 不依赖 daemon-core 或

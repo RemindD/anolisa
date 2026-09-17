@@ -77,7 +77,7 @@ impl BindingStateRepository for Blocking {
 
 pub(super) fn run(objects: &BTreeMap<String, Value>) -> BTreeSet<String> {
     let raw = serde_json::from_str(include_str!(
-        "../../../../../fixtures/reconciliation/concurrency.json"
+        "../../../../fixtures/reconciliation/concurrency.json"
     ))
     .unwrap();
     let cases: Vec<ThreadCase> = serde_json::from_value(expand(raw, objects)).unwrap();

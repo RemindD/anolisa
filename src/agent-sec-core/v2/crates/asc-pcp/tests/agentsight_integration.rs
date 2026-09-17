@@ -1,7 +1,7 @@
 //! Actual Adapter -> Reconciler -> actual Client/Ureq -> loopback HTTP PEP mock.
 #![allow(clippy::too_many_lines)]
 
-#[path = "../../../integrations/asc-agentsight-client/tests/common/mod.rs"]
+#[path = "../../asc-agentsight-client/tests/common/mod.rs"]
 mod common;
 #[path = "support/http.rs"]
 mod http;

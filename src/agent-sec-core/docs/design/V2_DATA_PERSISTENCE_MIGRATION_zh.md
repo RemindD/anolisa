@@ -26,13 +26,13 @@ v1 侧共约 3900 行 Python，落到 7 个新 crate：
 
 | crate | 路径 | 职责 | v1 来源 |
 | --- | --- | --- | --- |
-| `asc-security-events` | `v2/crates/data/asc-security-events/` | 事件值类型、时间戳规范化、路径三级降级、修订登记表 | `security_events/{schema,config}.py` |
-| `asc-observability` | `v2/crates/data/asc-observability/` | 六个 hook 的判别联合、metrics 白名单、相关 ID 截断 | `observability/{schema,models}.py` |
-| `asc-event-log` | `v2/crates/data/asc-event-log/` | JSONL 追加写、flock、轮转与备份保留 | `security_events/writer.py` |
-| `asc-sqlite-kernel` | `v2/crates/data/persistence/asc-sqlite-kernel/` | 与领域无关的 SQLite 内核：连接、schema 收敛、写入阶梯、维护闸门 | `security_events/orm_store.py` + 两个 `sqlite_writer.py` 的公共部分 |
-| `asc-persistence-sqlite` | `v2/crates/data/persistence/asc-persistence-sqlite/` | 两条流的领域绑定：表契约、仓储、故障策略、迁移器 | `*/models.py`、`*/repositories.py`、`*/sqlite_{writer,reader}.py` |
-| `asc-security-summary` | `v2/crates/data/asc-security-summary/` | 摘要文本渲染 | `security_events/summary_formatter.py` |
-| `asc-event-sink` | `v2/crates/data/asc-event-sink/` | 双写装配、进程级单例、关停 | `security_events/__init__.py`、`observability/__init__.py` |
+| `asc-security-events` | `v2/crates/asc-security-events/` | 事件值类型、时间戳规范化、路径三级降级、修订登记表 | `security_events/{schema,config}.py` |
+| `asc-observability` | `v2/crates/asc-observability/` | 六个 hook 的判别联合、metrics 白名单、相关 ID 截断 | `observability/{schema,models}.py` |
+| `asc-event-log` | `v2/crates/asc-event-log/` | JSONL 追加写、flock、轮转与备份保留 | `security_events/writer.py` |
+| `asc-sqlite-kernel` | `v2/crates/asc-sqlite-kernel/` | 与领域无关的 SQLite 内核：连接、schema 收敛、写入阶梯、维护闸门 | `security_events/orm_store.py` + 两个 `sqlite_writer.py` 的公共部分 |
+| `asc-persistence-sqlite` | `v2/crates/asc-persistence-sqlite/` | 两条流的领域绑定：表契约、仓储、故障策略、迁移器 | `*/models.py`、`*/repositories.py`、`*/sqlite_{writer,reader}.py` |
+| `asc-security-summary` | `v2/crates/asc-security-summary/` | 摘要文本渲染 | `security_events/summary_formatter.py` |
+| `asc-event-sink` | `v2/crates/asc-event-sink/` | 双写装配、进程级单例、关停 | `security_events/__init__.py`、`observability/__init__.py` |
 
 ### 1.2 明确不做
 
@@ -40,7 +40,7 @@ v1 侧共约 3900 行 Python，落到 7 个新 crate：
 - **不做 `asc-state-migrator`。** 那是产品入口层的工作包，本层只提供库内 schema 收敛。
 - **不迁调用方。** `correlation.py`、`review.py`、`cli.py`、`session_report.py` 以及各
   Agent Hook 都是本层的消费者，其测试不在搬迁范围（见
-  [`v2/crates/data/TEST_MIGRATION.md`](../../v2/crates/data/TEST_MIGRATION.md) §Out of scope）。
+  [`v2/crates/DATA_TEST_MIGRATION.md`](../../v2/crates/DATA_TEST_MIGRATION.md) §Out of scope）。
 
 ## 2. OPEN 项定案
 
@@ -369,7 +369,7 @@ writer/reader`），因为两条流的表契约、故障策略和迁移机制都
 | 差分矩阵 | 迁移期本地工具，27 项。两侧各有一个对偶探针，同一套子命令、同一输出格式，diff stdout。它不随仓库交付；结论已固化为 crate 内用例、API 台账与冻结 fixture |
 | API 台账 | `api_parity.rs`，见 §8 |
 | 冻结 fixture | `scripts/gen-v1-db-fixtures.sh` 生成 5 个历史版本库 + 9 份预期投影 JSON；`tests/v1_fixtures.rs` 只用 `cargo test` 就能验升级路径。**oracle 由 v1 生成**——从 v2 生成会让测试同义反复 |
-| 测试搬迁账本 | [`TEST_MIGRATION.md`](../../v2/crates/data/TEST_MIGRATION.md)：v1 16 个文件 322 个用例逐条映射到 v2 的 364 个用例，废弃项恰好 2 个且都是 SQLAlchemy 实现细节 |
+| 测试搬迁账本 | [`TEST_MIGRATION.md`](../../v2/crates/DATA_TEST_MIGRATION.md)：v1 16 个文件 322 个用例逐条映射到 v2 的 364 个用例，废弃项恰好 2 个且都是 SQLAlchemy 实现细节 |
 
 差分矩阵与账本分工不同：矩阵验「两个版本对同一个库行为一致」，账本验「v2 自身的分支
 覆盖不低于 v1」。

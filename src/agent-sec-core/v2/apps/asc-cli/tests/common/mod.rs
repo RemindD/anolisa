@@ -12,9 +12,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub const METHODS: &str =
-    include_str!("../../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-methods.json");
+    include_str!("../../../../crates/asc-daemon-protocol/tests/fixtures/pap-methods.json");
 pub const SCENARIO: &str =
-    include_str!("../../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json");
+    include_str!("../../../../crates/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json");
 
 pub struct Directory(pub PathBuf);
 impl Directory {

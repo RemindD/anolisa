@@ -330,9 +330,9 @@ PEP 速率限制、跨进程恢复与持久化队列不在本次范围。
 
 ## 源码与契约入口
 
-- [PAP repository](../../v2/crates/policy/asc-pap/src/repository.rs)：请求准入与条件更新端口。
-- [BindingView](../../v2/crates/policy/asc-policy-types/src/binding.rs)：spec/status 与生命周期类型。
-- [AgentSight Client](../../v2/crates/integrations/asc-agentsight-client/src/client.rs)：目标准备、执行和结果分类。
+- [PAP repository](../../v2/crates/asc-pap/src/repository.rs)：请求准入与条件更新端口。
+- [BindingView](../../v2/crates/asc-policy-types/src/binding.rs)：spec/status 与生命周期类型。
+- [AgentSight Client](../../v2/crates/asc-agentsight-client/src/client.rs)：目标准备、执行和结果分类。
 - [Runtime 设计](BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)：局部存储写、每次从头执行、调度及恢复边界。
 
 相关文件、变更记录编号与后续验收用例详见

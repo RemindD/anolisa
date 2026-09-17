@@ -144,7 +144,7 @@ struct RecordingAdministration {
 impl RecordingAdministration {
     fn new() -> Self {
         let spec: PreparedBinding = serde_json::from_str(include_str!(
-            "../../../crates/policy/asc-policy-types/tests/fixtures/prepared-binding.json"
+            "../../../crates/asc-policy-types/tests/fixtures/prepared-binding.json"
         ))
         .unwrap();
         Self {
@@ -354,7 +354,7 @@ fn all_frozen_methods_route_once_and_return_domain_values_directly() {
         asc_daemon::scan_application(asc_action_runtime::testing::discarding_finalizer()),
     );
     let fixtures: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-methods.json"
+        "../../../crates/asc-daemon-protocol/tests/fixtures/pap-methods.json"
     ))
     .unwrap();
 
@@ -820,7 +820,7 @@ fn unknown_param_message(specs: &[ParamSpec]) -> String {
 
 async fn run_method_param_error_matrix(path: &Path) -> Vec<String> {
     let methods: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-methods.json"
+        "../../../crates/asc-daemon-protocol/tests/fixtures/pap-methods.json"
     ))
     .unwrap();
     let mut failures = Vec::new();
@@ -896,7 +896,7 @@ async fn run_method_param_error_matrix(path: &Path) -> Vec<String> {
 
 async fn run_frozen_error_cases(path: &Path) -> Vec<String> {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-invalid-requests.json"
+        "../../../crates/asc-daemon-protocol/tests/fixtures/pap-invalid-requests.json"
     ))
     .unwrap();
     assert_eq!(fixture["schemaVersion"], 1);
@@ -954,7 +954,7 @@ fn assert_error_matrix(failures: &[String]) {
 async fn real_uds_executes_the_complete_pap_crud_fixture() {
     let daemon = RunningPapDaemon::start(PrincipalRole::PolicyAdministrator).await;
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json"
+        "../../../crates/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json"
     ))
     .unwrap();
     support::run_frozen_pap_crud_scenario(&daemon.socket_path, &fixture).await;
@@ -1103,7 +1103,7 @@ async fn real_uds_returns_exact_errors_for_invalid_envelopes_and_transport_frame
 async fn real_uds_denies_every_crud_method_with_the_exact_public_error() {
     let daemon = RunningPapDaemon::start(PrincipalRole::LocalUser).await;
     let fixtures: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../crates/daemon/asc-daemon-protocol/tests/fixtures/pap-methods.json"
+        "../../../crates/asc-daemon-protocol/tests/fixtures/pap-methods.json"
     ))
     .unwrap();
     let expected = json!({

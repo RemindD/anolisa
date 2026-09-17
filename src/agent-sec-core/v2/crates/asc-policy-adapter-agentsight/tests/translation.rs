@@ -12,9 +12,9 @@ use asc_policy_types::scope::ScopeSelector;
 use asc_policy_types::target::TranslationOutcome;
 
 const COMPLETE_BINDING_FIXTURE: &str =
-    include_str!("../../../asc-policy-types/tests/fixtures/prepared-binding.json");
+    include_str!("../../asc-policy-types/tests/fixtures/prepared-binding.json");
 const AGENTSIGHT_BINDING_PLAN_FIXTURE: &str = include_str!(
-    "../../../../../fixtures/adapters/agentsight/prevent-file-deletion/agentsight-binding-plan.json"
+    "../../../fixtures/adapters/agentsight/prevent-file-deletion/agentsight-binding-plan.json"
 );
 
 fn complete_binding_fixture() -> PreparedBinding {

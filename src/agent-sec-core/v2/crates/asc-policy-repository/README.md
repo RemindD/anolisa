@@ -36,4 +36,4 @@ only; process identity and request digest remain in call-local prepared data.
 The implementation is process-local memory. Rebuilding WorkQueue resets counts
 and deadlines; a future SQL implementation retains status/error and deployment
 responsibility, not retry progress. See the
-[runtime design](../../../../docs/design/BINDING_RECONCILER_RUNTIME_DESIGN_zh.md).
+[runtime design](../../../docs/design/BINDING_RECONCILER_RUNTIME_DESIGN_zh.md).

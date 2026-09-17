@@ -236,6 +236,10 @@ asc-state-migrator 必须定义并验证：
 
 ### 5.2 Crate 工作包边界
 
+现有库 crate 统一直接放在 `v2/crates/asc-*/`，产品入口保留在
+`v2/apps/`。action、daemon、data、foundation、integrations、policy 是逻辑分类，
+不再作为目录层级；目录扁平化不改变 package 名称、依赖、feature 或工作包边界。
+
 工作包采用本文定义的目标 workspace，至少包括：
 
 - 产品入口：asc-daemon、agent-sec-cli、asc-state-migrator；
@@ -258,9 +262,9 @@ composition root 负责注入。
 
 Policy reconciliation 的具体目录与边界见
 [调度、存储与恢复设计](BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)：拟建
-`v2/crates/policy/asc-policy-runtime/src/reconciliation/` 承载 WorkQueue、worker 和恢复调度，
+`v2/crates/asc-policy-runtime/src/reconciliation/` 承载 WorkQueue、worker 和恢复调度，
 `asc-pcp` 每次重新读取并从头执行，不保留跨调用计算缓存；共享 Repository 定义局部条件写，未来
-`v2/crates/data/asc-persistence-sqlite/` 实现持久化。daemon 只装配并管理进程生命周期。
+`v2/crates/asc-persistence-sqlite/` 实现持久化。daemon 只装配并管理进程生命周期。
 这是目标实施位置，不代表相应 crate、后台接线或恢复已交付。
 
 ### 5.3 Integration slices

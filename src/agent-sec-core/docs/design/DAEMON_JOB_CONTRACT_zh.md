@@ -479,7 +479,7 @@ Client；shutdown 先关闭请求准入并 drain 请求，再停止领取/扫描
 到期后只由进程退出结束剩余工作，不提前释放执行所有权。首版内存记录在重启后丢失；
 持久化后重启恢复须独立验收。服务不创建自定义 trace ID，OTel 集成沿用迁移架构的统一契约。
 
-以下均映射到 `v2/crates/policy/asc-policy-runtime/src/reconciliation/tests.rs` 的可执行测试：
+以下均映射到 `v2/crates/asc-policy-runtime/src/reconciliation/tests.rs` 的可执行测试：
 
 | ID | 行为 | fixture / test |
 |---|---|---|
