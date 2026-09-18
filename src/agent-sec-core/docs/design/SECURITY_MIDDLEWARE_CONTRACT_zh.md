@@ -314,8 +314,8 @@ scanner `elapsed_ms` 保持原始业务语义。生产 sink 不允许隐式 no-o
 
 本切片仅包含 code-scan 的 identity、真实能力、telemetry 投影及 fixture；其它扫描能力
 随各自后续提交加入共享机制，不预留未实现 identity 或 RPC。受控异常使用固定 `InternalExecutionError` 和空 request，明确替代
-Python 原始 exception 审计文本。现有正常 audit schema 不变，OTel 与 metadata ingress
-仍待后续工作，不能把本切片当作 SMC-017–023 完成。
+Python 原始 exception 审计文本。现有正常 audit schema 不变；请求 Context 已接入下述
+兼容 audit/telemetry 投影，但不能把本切片当作 SMC-017–023 完成。
 实现、fixture 对应表与回滚见 [共享生命周期验收记录](RUST_SECURITY_CORE_EXECUTION_ARCHITECTURE_zh.md#54-已实现的共享生命周期)。
 
 ## 6. SecurityEvent 契约
@@ -611,6 +611,23 @@ instrument future，不能跨 await 持有 entered guard。调用方仍通过既
 消费者可用 `validate_metadata(AgentRun/ModelCall/ToolCall)` 校验 session/run、以及 tool hook 的 tool_call_id；
 普通 PAP 调用不执行该必填校验。空字符串的兼容语义不在本 tracing 层擅自改为 trim/拒绝。
 
-本次仅实现适配与投影；V1 Action lifecycle、verdict、SecurityEvent schema、写入失败语义和
-历史数据均未由本改动替换。实际 Rust 业务 sink/observability 接口、本地链路重组另行迁移。
+**[PRESERVE V1] 当前 Rust code-scan 接线：** 共享 Finalizer 在构造输出记录前读取一次
+当前 Context 快照，复用于 SecurityEvent 和 TelemetryRecord；不通过 invocation 参数传递
+correlation/agent_name。既有 SecurityEvent 的 `trace_id`
+取兼容 extension 的 opaque 标签，缺失为空串；`session_id/run_id/call_id/tool_call_id`
+取对应 Agent Baggage，缺失为 null。Finalizer 在写入前补齐一次，JSONL 和 SQLite 使用同一记录，
+不以 SDK TraceId 或 daemon request ID 填补缺失值，不修改事件 schema。第 6.4 节的
+versioned SecurityEventV2 技术 TraceId/SpanId 仍是后续目标。
+
+`agent_name` 仅作为 telemetry projector 的候选产品名，经过既有产品白名单后写入
+`component.agent_name`；未知产品为空串，所有 correlation IDs 与未知 Baggage 均不进入
+telemetry JSONL。UID/PID 继续来自内核 peer credentials。快照和 audit sink 不依赖采样、
+Collector 或诊断日志开关。Finalizer 在调用任何 sink 前冻结关联信息，audit 失败不会阻止
+telemetry 使用同一快照的 agent_name。capability 和 invocation 无需读取或携带 Context；
+两个 sink 只写入已完整构造的记录，不再读取 Context 或修改归属。当前 Finalizer 在 request
+blocking thread 的 attached scope 内执行；以后将 finalization 移到其它任务/线程时必须传播 Context。
+进程验收见 `test_scan_lifecycle_process.py` 的成功/失败、原生/兼容输入和并发隔离用例。
+
+V1 Action lifecycle、verdict、SecurityEvent schema、写入失败语义和历史数据均未由本改动替换。
+实际 observability RPC、本地链路重组和其它 capability 的接入另行迁移。
 证据：[V2 OTel 验收](V2_OTEL_ACCEPTANCE_zh.md)。

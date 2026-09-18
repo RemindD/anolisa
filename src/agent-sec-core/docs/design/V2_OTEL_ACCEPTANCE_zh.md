@@ -1,7 +1,8 @@
 # V2 OTel tracing 实现与验收
 
-本工作包实现 Rust CLI → client → UDS → daemon → PAP/compiler 的 tracing，及未来
-SecurityEvent/observability 消费者使用的只读关联投影。它不实现本地链路重组、事件存储、
+本工作包实现 Rust CLI → client → UDS → daemon → PAP/compiler 的 tracing，及
+SecurityEvent/observability 消费者使用的只读关联投影。code-scan 已将快照接入现有
+SecurityEvent JSONL/SQLite 和 telemetry JSONL；不新增存储 schema、本地链路重组、
 历史查询或尚未迁移的安全 capability。架构设计见 [实现设计](V2_OTEL_IMPLEMENTATION_DESIGN_zh.md)。
 
 本次为首次 OTel 接入。V1/V2 是产品实现版本；V1 caller 的 trace-context/metadata 输入
@@ -75,8 +76,8 @@ watchdog 通过不表示精确测量或证明 50 ms / 2 s 的关闭开销。
 | UF-010 | 原 CLI goldens + process 关闭用例 | PASS：当前 PAP stdout、默认 stderr、退出码及公开 UUID；尚未迁移的真实 hook 整体超时未宣称通过 |
 | UF-011 | 冻结 `metadata.json` 的 138 个 V1 schema 输入 + context tests | PASS：AgentRun/ModelCall/ToolCall 的缺失/null/类型/别名/extra/空白/截断；带父值时仍先校验自身输入，可选字段清除；技术 parentage/agent_name/标签保留；子 span/task/carrier 投影及未采样读取。真实 observability RPC/存储仍属后续模块 |
 
-没有以 Markdown ID 的存在替代执行。未采样时的事件持久化“独立性”在本次体现为快照可读；
-不存在的 Rust SecurityEvent sink 不会被列为已经完成持久化验收。
+没有以 Markdown ID 的存在替代执行。初始 tracing 切片仅证明未采样快照可读；下述
+OTEL-CR-009 增加了真实 code-scan 的 JSONL/SQLite 持久化和 telemetry 隐私验收。
 
 标准语法校验仍依赖锁定的 SDK；例如 SDK 0.32 的 `TraceState` 构造会接受重复 vendor key，
 本轮没有将它扩展为独立的 W3C 全规范验证器。TO-005 的通过结论仅限已列出的正反例，
@@ -94,10 +95,39 @@ watchdog 通过不表示精确测量或证明 50 ms / 2 s 的关闭开销。
 | OTEL-CR-006 | 独立请求 propagation 容量 | 4 MiB 业务 + 32 KiB propagation；响应不扩容；raw whitespace 不被隐藏 |
 | OTEL-CR-007 | metadata 使用同一传播通道但保留自身值语义 | V1 trace-context trim；metadata 不 trim。SDK 注入会 trim，适配器以 percent encoding 保留原值 |
 | OTEL-CR-008 | metadata adapter 增加 hook kind，先校验再替换记录字段 | V1 必填/null/alias/extra 规则保持；父值不掩盖缺失，省略/null 的可选字段清除。agent_name 由原 trace-context/carrier 提供；只改内部 helper，无新增 RPC 或 caller 参数 |
+| OTEL-CR-009 | 共享 Finalizer 构造两类记录时复用一个 Context snapshot | 既有 audit 五个关联字段获得请求归属，trace_id 保持 opaque 兼容标签；telemetry 仅增加白名单 agent_name 值，无新字段、schema 或授权输入 |
 
-直接消费者：两个产品入口、同步 client、dispatcher/rejection encoder、PapService 和 compiler；
-对应测试已执行。仅新增 `traceContext/compatibility` wire 字段；没有修改 PAP domain model、
-revision、授权、资源 ID、事件文件、数据库或 Agent 插件配置。
+直接消费者：两个产品入口、同步 client、dispatcher/rejection encoder、PapService、compiler 和
+共享 Finalizer；ActionService 仅传递可信 CallerIdentity，Finalizer 构造两类记录时复用一次
+Context 快照，两个 sink 只写入完整记录。仅新增
+`traceContext/compatibility` wire 字段；没有修改 PAP domain model、revision、授权、
+资源 ID、事件/数据库 schema 或 Agent 插件配置。
+
+### OTEL-CR-009：Context 到扫描输出
+
+`tests/v2/e2e/test_scan_lifecycle_process.py` 使用真实 CLI、UDS、daemon 和独立 SQLite reader：
+
+- regex 成功与 llm 受控失败均保存五个兼容关联字段，JSONL/SQLite 值一致；
+- 同时提供原生未采样 traceparent/Baggage 和旧 trace-context 时，兼容输入覆盖业务归属，
+  SDK TraceId 不替换 event.trace_id；原生输入没有 opaque 标签时该列保持空串；
+- 后续无 context 的请求不继承前次字段；16 个并发请求的所有关联字段不串线；
+- audit 写失败时 telemetry 仍使用同一快照的 agent_name；telemetry 不可用时 audit 仍保存 correlation；
+- `codex`/`hermes` 产品名到达 telemetry；未知产品为空串，私有 correlation 和未知字段
+  canary 不进入 telemetry JSONL。生产 SDK 固定 AlwaysOff，测试不需要 Collector。
+
+`asc-action-runtime/tests/lifecycle.rs` 在不初始化 SDK 的条件下附加 Context，按相同
+8 个 V1 frozen cases 验证两个 sink 收到的完整 audit/telemetry 投影。
+移除内部 `ActionAttribution`/`Correlation`，`Invocation` 改为接收 `CallerIdentity`；
+外部 RPC 和事件 schema 不变。Finalizer 必须在有效 Context scope 内执行；sink 接收的记录已经包含所需归属。
+
+```bash
+uv run --project agent-sec-cli pytest tests/v2/e2e/test_scan_lifecycle_process.py tests/v2/test_action_architecture.py -q
+```
+
+这是源码构建进程验收，不代表 RPM/systemd、OTLP 导出或 versioned SecurityEventV2 已验收。
+本次验证：workspace Rust tests 786 passed；scan lifecycle/architecture pytest 8 passed；
+既有 OTel process pytest 14 passed；build、fmt、clippy（`-D warnings`）与 rustdoc 均通过。
+回滚该接线只需移除 Finalizer 的 Context 投影；既有记录和 SQLite schema 无需迁移。
 
 ## Review 修复验收
 
@@ -149,5 +179,5 @@ CLI 业务输出、daemon 参数错误/help 保持同步；SecurityEvent 仍由�
 再回滚 daemon；`RUST_LOG=off` 不关闭 carrier，不能替代协议回滚。
 没有状态 schema 迁移，生产没有 exporter 开关。
 
-后续工作：Action Runtime、安全事件 sink、实际 observability RPC、AgentSight 跨服务传播、
-历史查询与本地链路重组各自按其业务契约验收；本次没有把它们加入 tracing 实现范围。
+后续工作：versioned SecurityEventV2 技术 TraceId/SpanId、其它 capability、实际 observability RPC、
+AgentSight 跨服务传播、历史查询与本地链路重组各自按其业务契约验收。

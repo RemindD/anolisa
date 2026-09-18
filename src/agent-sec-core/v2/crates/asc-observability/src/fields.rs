@@ -126,7 +126,7 @@ pub(crate) fn agent_values(context: &Context) -> Vec<KeyValue> {
         .collect()
 }
 
-/// Independent, read-only snapshot for logs and future security-event sinks.
+/// Independent, read-only snapshot for logs and security-event attribution.
 /// Reading it never depends on recording, a collector, or an exporter.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CorrelationSnapshot {

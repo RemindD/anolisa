@@ -625,8 +625,10 @@ Telemetry projector 与 event projector 可以共享 enum 和字段定义，但�
 - code/prompt/PII、evidence、path、原始 error、correlation、未知扩展字段不进入 telemetry。
 - Projector 从相同 finalized outcome 取 allowlisted 字段，不依赖 audit projector 或落库成功。
   这是 V2 的失败隔离增强；正常投影输出与 V1 scan mapper 等价。
-- 可注入的 Agent product 仍须经过白名单；当前 RPC 尚未携带 Agent/session/run/call metadata，
-  core 保持默认空 attribution，不把 daemon request ID 当作 trace ID。
+- 共享 Finalizer 在调用任何 sink 前读取一次当前请求 Context；构造 SecurityEvent 时注入
+  session/run/call/tool-call 和 opaque 兼容 trace 标签，构造 TelemetryRecord 时使用同一快照的
+  白名单 Agent product。invocation 仅显式传递可信 CallerIdentity，无 correlation 参数；sink 只写入完整记录。
+  缺失字段保持空值，不把 SDK TraceId 或 daemon request ID 当作现有 event 的 opaque trace_id。
 - `written` 只表示完整 append；`skipped` 表示 policy/目标/锁导致跳过；`failed` 表示写入失败。
   这些状态不改变 capability 结果，也不意味着 fsync 或远端上传完成。
 
@@ -823,7 +825,7 @@ daemon handler 只接已冻结的 ActionSpec/MethodSpec，并验证 timeout、di
 | Gate | 证据与断言 |
 | --- | --- |
 | SMC-004/005，共享终态 | `asc-action-runtime/tests/lifecycle.rs`：使用 CodeScan Executor 替身验证共享 Finalizer；pass/warn/deny/error 各一次 audit + telemetry |
-| SMC-012 的共同字段子集 | `tests/v2/fixtures/scan-lifecycle-v1.json`：8 个由 V1 `post_action` 和真实 telemetry mapper 生成的 frozen cases；比较现有 outcome/audit/telemetry 字段 |
+| SMC-012 的共同字段子集 | `tests/v2/fixtures/scan-lifecycle-v1.json`：8 个由 V1 `post_action` 和真实 telemetry mapper 生成的 frozen cases；runtime tests 附加 Context 后比较完整 outcome/audit/telemetry goldens，不初始化 SDK |
 | SMC-006/014 的受控错误子集 | runtime unwind → 一条最小失败记录及受控 error；无 panic payload 进入 audit/telemetry/result |
 | SMC-007 | audit、telemetry、diagnostic callback 独立失败；原 outcome 不变；投影失败不跳过其它输出 |
 | 生命周期所有权 | `tests/v2/test_action_architecture.py`：handler/core 无具体 scanner/writer 依赖；handler 不装配 runtime/finalizer；capability 无具体 sink 依赖 |
@@ -832,6 +834,7 @@ daemon handler 只接已冻结的 ActionSpec/MethodSpec，并验证 timeout、di
 | DPROC-SCAN-002 | 同一进程测试：重启保留旧记录，继续 append 不重放 |
 | DPROC-SCAN-003 | 同一进程测试：运行中 JSONL 失败、SQLite busy、telemetry 锁/缺失目标/不可用目标独立注入；其它输出及业务结果保持 |
 | DPROC-SCAN-004 | `asc-daemon/tests/lifecycle_transport.rs`：受控慢 Executor + 真实 UDS；timeout、disconnect、graceful drain 后只 finalization 一次 |
+| SMC-011 / OTEL-CR-009，兼容关联接线 | `test_scan_lifecycle_process.py`：CLI → Context → Finalizer → SQLite/JSONL 五个关联字段；原生 Baggage、兼容输入覆盖、无输入清空、并发隔离；成功/失败均保留关联，telemetry 仅接收白名单 agent_name |
 
 lifecycle fixture 使用 code-scan identity 和预先安全投影的输入；不替代真实扫描算法或
 sanitizer 验收。异常审计的空 request + 固定错误类型是显式 V2 安全变化，不声明与 Python

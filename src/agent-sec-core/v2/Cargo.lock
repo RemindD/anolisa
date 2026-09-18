@@ -93,6 +93,7 @@ name = "asc-action-runtime"
 version = "0.12.0"
 dependencies = [
  "asc-action-types",
+ "asc-observability",
  "asc-security-events",
  "asc-telemetry",
  "serde_json",
