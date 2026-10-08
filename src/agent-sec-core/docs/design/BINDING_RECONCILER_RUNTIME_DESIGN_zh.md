@@ -3,6 +3,16 @@
 文档类型：`[TARGET V2]` 详细设计。本文定义目标行为、代码归属及分阶段验收要求；
 实现进度和验证结果由对应 PR、CI 与验收报告记录。
 
+SCOPE-CR-002 已接入 process-local 实现：不可变 Scope 快照、系统 Binding 准入、停止发现后
+异步清理和 Scope 显式重试。当前协议及测试入口见上述生命周期契约；旧 changed-spec
+测试继续覆盖底层 revision/CAS 兼容能力，不表示开放用户 Binding mutation。
+
+对象和意图来源以 [Policy/Scope/Binding 生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)
+为准：Policy 有 revision 且只保存 current；Scope 是无 revision 的不可变 Assignment，
+保存完整策略快照；Binding 不开放用户 mutation。本文旧 PAP Binding CRUD、changed-spec
+UPDATE 与 Scope revision 相关流程保留为历史实现基线。新入口由 Scope/实例生命周期
+产生 Binding 意图，复用本 Runtime 的调度、条件写和目标清理机制。
+
 本文遵循 [Rust 迁移架构](AGENT_SEC_RUST_MIGRATION_zh.md)，补充并局部替代
 [原详细方案](BINDING_RECONCILER_DESIGN_AND_IMPLEMENTATION_zh.md)的调度和存储提案。
 它不是新增的 V1 行为契约，也不是当前 daemon、SQL 或真实 PEP 的验收报告。
@@ -29,8 +39,9 @@ error injection、进程崩溃和重启恢复测试在 persistent Repository 就
 10. dirty 只表示运行期间又收到通知，任务退出后需重新排队；自动重试、dirty、新请求及
     进程重启全部采用同一执行路径，不增加 restart 标记或续做模式。
 
-重试预算、终态错误和下次时间是业务控制记录，不是翻译/准备的计算缓存。本设计保留
-“新意图重置、幂等通知和进程重启不重置预算”的约定；从头计算不代表重新获得无限预算。
+重试预算和下次时间是进程内控制记录，终态错误由 Repository 保存；它们不是翻译/准备
+的计算缓存。新意图重置预算，幂等通知不重置；进程重启按第 8.1 节从零开始。
+单次重新执行不重置预算。
 
 ## 2. 组件职责
 
@@ -211,8 +222,10 @@ sequenceDiagram
     W->>Q: finish(ID, result)，同时检查 dirty
 ```
 
-只有 Binding 写意图触发下发/删除。GET/LIST 不触发；Policy/Scope 更新不自动改写已有
-Binding 快照。PAP 的 no-op 不重置业务预算；重复通知到达核心仍受最新状态、预算和时间约束。
+只有已保存的 Binding 意图触发下发/删除。新模型中该意图由 Scope 创建后的实例发现、
+实例退出/失配和 Scope 删除产生，用户没有 Binding mutation 入口。GET/LIST 不触发；
+Policy 更新/删除不改变 Scope 内的快照，Scope 本身不可更新。no-op 和重复发现通知
+不重置业务预算；核心仍受最新状态、预算和时间约束。
 
 ### 5.1 Delete 在不同时间到达
 
@@ -382,6 +395,11 @@ tick 仍为 O(entries) 扫描。当前没有高负载性能证据，不引入额
 调用已退出时，即使进程未崩溃也不保留可补写缓存；后续依据持久化事实核对或安全重放。
 
 ### 8.3 重新准备与安全重放的 Client 契约
+
+**现有 Client 边界与目标差异**：以下重新解析 PID 的行为属于旧实现。新 Assignment
+Binding 必须保存发现时的具体进程身份，并跨尝试核对同一实例；PID reuse 应拒绝对旧
+Binding 的下发，由 Scope 为新实例生成另一个 Binding。每次重建 prepared 不能更换
+Binding 的实例身份。该修正尚待 Adapter/Client 接线及验收。
 
 AgentSight `PreparedRequest` 在本次调用中保存 boot ID、包含 process start time 的请求字节及
 请求摘要。Client 在下发前校验请求完整性，并检查当前进程身份仍与本次 prepare 一致。

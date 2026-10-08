@@ -456,6 +456,9 @@ dependencies = [
  "asc-policy-engine",
  "asc-policy-repository",
  "asc-policy-types",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

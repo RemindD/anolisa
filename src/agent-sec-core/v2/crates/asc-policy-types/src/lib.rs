@@ -12,6 +12,7 @@ pub mod error;
 pub mod identifiers;
 pub mod ir;
 pub mod policy;
+pub mod process_discovery;
 pub mod profile;
 pub mod resource;
 pub mod scope;

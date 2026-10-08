@@ -10,7 +10,12 @@ use serde_json::{Value, json};
 mod common;
 
 #[test]
-fn all_fifteen_commands_match_frozen_wire_parameters() {
+fn removed_probe_command_is_rejected() {
+    assert!(Cli::parse_from(["agent-sec-cli", "agent-probe", "create"]).is_err());
+}
+
+#[test]
+fn all_assignment_commands_match_frozen_wire_parameters() {
     let directory = common::Directory::new();
     let methods: Value = serde_json::from_str(common::METHODS).unwrap();
     let mut covered = std::collections::BTreeSet::new();
@@ -343,7 +348,12 @@ fn binary_help_version_and_failures_have_stable_exit_codes() {
     let mut help_cases = vec![vec!["--help"], vec!["--version"]];
     for resource in ["policy", "scope", "binding"] {
         help_cases.push(vec![resource, "--help"]);
-        for operation in ["create", "get", "list", "update", "delete"] {
+        let operations: &[&str] = match resource {
+            "policy" => &["create", "get", "list", "update", "delete"],
+            "scope" => &["create", "get", "list", "delete", "retry"],
+            _ => &["get", "list"],
+        };
+        for operation in operations {
             help_cases.push(vec![resource, operation, "--help"]);
         }
     }
@@ -473,5 +483,50 @@ fn skill_sec_uses_global_trace_context_without_business_fields() {
     assert_eq!(
         snapshot.agent.get("agent_name").map(String::as_str),
         Some("skill-agent")
+    );
+}
+
+#[test]
+fn scope_create_encodes_name_and_path_assignments() {
+    for (flag, matcher) in [
+        ("--process-name", json!({"processName":"scope-agent"})),
+        ("--executable", json!({"executable":"/opt/agent"})),
+    ] {
+        let value = if flag == "--process-name" {
+            "scope-agent"
+        } else {
+            "/opt/agent"
+        };
+        let request = Cli::parse_from([
+            "agent-sec-cli",
+            "scope",
+            "create",
+            flag,
+            value,
+            "--policy-id",
+            "policy-one",
+            "--policy-revision",
+            "2",
+        ])
+        .unwrap()
+        .request()
+        .unwrap();
+        assert_eq!(request.method, "policy.scopes.create");
+        assert_eq!(
+            request.params,
+            json!({"selector":{"kind":"process","match":matcher}, "policyTemplates":[{"policyId":"policy-one","policyRevision":2}]})
+        );
+    }
+    assert!(
+        Cli::parse_from([
+            "agent-sec-cli",
+            "scope",
+            "create",
+            "--process-name",
+            "agent",
+            "--executable",
+            "/bin/agent"
+        ])
+        .is_err()
     );
 }

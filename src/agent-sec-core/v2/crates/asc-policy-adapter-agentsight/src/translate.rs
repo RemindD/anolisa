@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use asc_policy_types::Validate;
+use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::PreparedBinding;
 use asc_policy_types::ir::{
     ActivationRequirement, DecisionTiming, EvidenceRequirement, Expression, Obligation,
@@ -12,7 +13,7 @@ use asc_policy_types::ir::{
 };
 use asc_policy_types::policy::PolicyEnvelope;
 use asc_policy_types::resource::{FileResolution, PathMatcher, ResourceSelector};
-use asc_policy_types::scope::{PreparedScope, ScopeSelector};
+use asc_policy_types::scope::ScopeSelector;
 use asc_policy_types::target::{
     AdapterFault, TargetBindingPlan, TranslationOutcome, TranslationRejection,
 };
@@ -60,7 +61,6 @@ impl AgentSightAdapter {
                 policy_id: binding.policy.policy_id.clone(),
                 policy_revision: binding.policy.revision,
                 scope_id: binding.scope.scope_id.clone(),
-                scope_revision: binding.scope.revision,
             },
             policy: AgentSightPolicyPlan {
                 media_type: ACTPLANE_POLICY_MEDIA_TYPE.to_owned(),
@@ -78,12 +78,16 @@ impl AgentSightAdapter {
     }
 }
 
-fn translate_scope(scope: &PreparedScope) -> Result<AgentSightScopePlan, TranslationRejection> {
-    let ScopeSelector::Pid { pid } = &scope.selector else {
+fn translate_scope(scope: &BindingScope) -> Result<AgentSightScopePlan, TranslationRejection> {
+    if matches!(scope.selector, ScopeSelector::CgroupId { .. }) {
         return Err(rejection("UNSUPPORTED_SCOPE_SELECTOR"));
-    };
-    let root_pid = i32::try_from(*pid).map_err(|_| rejection("UNSUPPORTED_SCOPE_PID_RANGE"))?;
-    Ok(AgentSightScopePlan::ProcessTree { root_pid })
+    }
+    let pid = scope.process.pid;
+    let root_pid = i32::try_from(pid).map_err(|_| rejection("UNSUPPORTED_SCOPE_PID_RANGE"))?;
+    Ok(AgentSightScopePlan::ProcessTree {
+        root_pid,
+        process: scope.process.clone(),
+    })
 }
 
 fn compile_policy(binding: &PreparedBinding) -> Result<String, TranslationRejection> {

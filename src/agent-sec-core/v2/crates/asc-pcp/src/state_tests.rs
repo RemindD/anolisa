@@ -286,7 +286,7 @@ fn repeated_admitted_intent_preserves_budget_and_new_revision_keeps_targets() {
     next.status = BindingStatus::PendingApply.into();
     next.spec.binding_revision = next.spec.binding_revision.checked_next().unwrap();
     // Existing PAP repository writes and worker transactions share one store.
-    next.spec.scope.revision = next.spec.scope.revision.checked_next().unwrap();
+    next.spec.scope.process.start_time += 1;
     repository
         .update_binding(Some(&ready.binding), &next)
         .unwrap();

@@ -83,10 +83,15 @@
   },
   "scope.pid-4242.rev-3": {
     "scopeId": "20000000-0000-4000-8000-000000000001",
-    "revision": 3,
     "selector": {
       "kind": "pid",
       "pid": 4242
+    },
+    "process": {
+      "bootId": "11111111-2222-4333-8444-555555555555",
+      "pidNamespace": "pid:[42]",
+      "pid": 4242,
+      "startTime": 987654
     }
   },
   "binding.rev-7": {
@@ -106,7 +111,7 @@
       "$ref": "policy.prevent-file-deletion"
     },
     "scope": {
-      "$ref": "scope.changed"
+      "$ref": "scope.pid-4242.next-instance"
     }
   },
   "target.binding-id": {
@@ -1578,10 +1583,28 @@
   },
   "scope.changed": {
     "scopeId": "20000000-0000-4000-8000-000000000001",
-    "revision": 4,
     "selector": {
       "kind": "pid",
       "pid": 4242
+    },
+    "process": {
+      "bootId": "11111111-2222-4333-8444-555555555555",
+      "pidNamespace": "pid:[42]",
+      "pid": 4242,
+      "startTime": 987654
+    }
+  },
+  "scope.pid-4242.next-instance": {
+    "scopeId": "20000000-0000-4000-8000-000000000001",
+    "selector": {
+      "kind": "pid",
+      "pid": 4242
+    },
+    "process": {
+      "bootId": "11111111-2222-4333-8444-555555555555",
+      "pidNamespace": "pid:[42]",
+      "pid": 4242,
+      "startTime": 987655
     }
   }
 }

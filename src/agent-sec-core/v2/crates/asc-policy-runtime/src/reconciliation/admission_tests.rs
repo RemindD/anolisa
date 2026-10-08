@@ -8,12 +8,14 @@ fn pap_with(
 ) -> PapService<ProcessLocalPapRepository, asc_policy_engine::PolicyTemplateCompiler> {
     PapService::new(repo, Arc::new(asc_policy_engine::PolicyTemplateCompiler))
         .with_reconcile_enqueuer(queue)
+        .with_scope_discovery(Arc::new(Discovery))
 }
 
 #[test]
 fn admission_full_failed_snapshot_stale_wakeup_and_explicit_retry() {
     for deleting in [false, true] {
         let mut initial = record(1);
+        initial.binding.status.phase = BindingStatus::ApplyFailed;
         if deleting {
             initial.binding.status.phase = BindingStatus::Ready;
             initial.deployments.push(asc_policy_repository::Deployment {
@@ -35,17 +37,15 @@ fn admission_full_failed_snapshot_stale_wakeup_and_explicit_retry() {
         let pap = pap_with(repo.clone(), queue.clone());
         let spec = &initial.binding.spec;
         let request = || {
-            if deleting {
-                pap.delete_binding(&id(1))
+            if deleting
+                && pap.get_scope(&spec.scope.scope_id)?.status
+                    == asc_policy_types::scope::ScopeStatus::Active
+            {
+                pap.delete_scope(&spec.scope.scope_id)?;
             } else {
-                pap.update_binding(
-                    &id(1),
-                    &spec.policy.policy_id,
-                    spec.policy.revision,
-                    &spec.scope.scope_id,
-                    spec.scope.revision,
-                )
+                pap.retry_scope(&spec.scope.scope_id)?;
             }
+            pap.get_binding(&id(1))
         };
         let returned = request().unwrap();
         let mut expected = initial.clone();
@@ -139,7 +139,8 @@ impl BindingReconcileEnqueuer for InterleavingEnqueuer {
 fn admission_worker_claim_wins_or_stopped_failure_is_recorded() {
     for claim in [false, true] {
         for deleting in [false, true] {
-            let initial = record(1);
+            let mut initial = record(1);
+            initial.binding.status.phase = BindingStatus::ApplyFailed;
             let repo = Arc::new(
                 ProcessLocalPapRepository::with_binding_states(vec![initial.clone()]).unwrap(),
             );
@@ -152,16 +153,11 @@ fn admission_worker_claim_wins_or_stopped_failure_is_recorded() {
             );
             let spec = &initial.binding.spec;
             let result = if deleting {
-                pap.delete_binding(&id(1))
+                pap.delete_scope(&spec.scope.scope_id).map(|_| ())
             } else {
-                pap.update_binding(
-                    &id(1),
-                    &spec.policy.policy_id,
-                    spec.policy.revision,
-                    &spec.scope.scope_id,
-                    spec.scope.revision,
-                )
-            };
+                pap.retry_scope(&spec.scope.scope_id).map(|_| ())
+            }
+            .and_then(|()| pap.get_binding(&id(1)));
             if claim {
                 let current = result.unwrap();
                 assert_eq!(
@@ -266,27 +262,30 @@ fn admission_create_reports_saved_identity_and_policy_scope_remain_available() {
         )
         .unwrap();
     let scope = pap
-        .create_scope(&asc_policy_types::scope::ScopeSelector::Pid { pid: 10 })
-        .unwrap();
-    let saved = pap
-        .create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
+        .create_scope_assignment(
+            &asc_policy_types::scope::ScopeSelector::Pid { pid: 4242 },
+            &[asc_policy_types::scope::PolicyReference {
+                policy_id: policy.policy_id.clone(),
+                policy_revision: policy.revision,
+            }],
         )
         .unwrap();
+    asc_pap::ScopeBindingSink::sync_instances(
+        &pap,
+        &scope.scope_id,
+        &[record(1).binding.spec.scope.process],
+    )
+    .unwrap();
+    let saved = pap.list_bindings(10, 0).unwrap().items.remove(0);
     let id = saved.spec.binding_id.clone();
     assert_eq!(saved.spec.binding_revision.get(), 1);
     assert_eq!(saved.status, BindingStatus::ApplyFailed);
     assert_eq!(saved.status.error, Some(EnqueueError::Full.failure()));
     assert_eq!(pap.get_binding(&id).unwrap(), saved);
     assert_eq!(repo.get_binding_state(&id).unwrap().unwrap().binding, saved);
-    pap.update_scope(
-        &scope.scope_id,
-        &asc_policy_types::scope::ScopeSelector::Pid { pid: 11 },
-    )
-    .unwrap();
+    assert_eq!(pap.get_scope(&scope.scope_id).unwrap(), scope);
+    pap.update_policy(&policy.policy_id, "new name", &policy.template)
+        .unwrap();
 }
 
 #[test]
@@ -416,14 +415,7 @@ fn claim_clears_previous_error_and_explicit_retry_resets_retained_progress() {
         .unwrap();
     let pap = pap_with(repo.clone(), Arc::new(WorkQueue::new(1, 4)));
     let spec = current.binding.spec;
-    pap.update_binding(
-        &id(1),
-        &spec.policy.policy_id,
-        spec.policy.revision,
-        &spec.scope.scope_id,
-        spec.scope.revision,
-    )
-    .unwrap();
+    pap.retry_scope(&spec.scope.scope_id).unwrap();
     core(repo.clone(), client, clock)
         .reconcile(&id(1), &mut schedule)
         .unwrap();

@@ -106,9 +106,7 @@ class DaemonHandle:
 def _daemon_settings(socket_path: Path) -> tuple[Path, dict[str, str]]:
     """Keep test keys and audit data separate from the installed system daemon."""
     if os.geteuid() != 0:
-        pytest.fail(
-            "V2 daemon E2E requires container root; clients may drop to an ordinary UID"
-        )
+        pytest.fail("V2 daemon E2E requires container root; clients may drop to an ordinary UID")
     config = socket_path.with_suffix(".skillsec.json")
     config.write_text(
         json.dumps(

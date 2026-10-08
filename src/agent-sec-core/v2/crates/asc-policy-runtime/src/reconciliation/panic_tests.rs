@@ -72,9 +72,12 @@ fn delete_during_attempt_panic_keeps_dirty_and_cleans_registered_target() {
         repo.clone(),
         Arc::new(asc_policy_engine::PolicyTemplateCompiler),
     )
-    .with_reconcile_enqueuer(queue.clone());
+    .with_reconcile_enqueuer(queue.clone())
+    .with_scope_discovery(Arc::new(Discovery));
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let accepted = pap.delete_binding(&id(1)).unwrap();
+    pap.delete_scope(&record(1).binding.spec.scope.scope_id)
+        .unwrap();
+    let accepted = pap.get_binding(&id(1)).unwrap();
     let mut expected = registered(&client, false);
     expected.binding = accepted;
 
@@ -266,8 +269,10 @@ fn unconfirmed_panic_stops_only_that_binding_until_new_notification() {
             inner.clone(),
             Arc::new(asc_policy_engine::PolicyTemplateCompiler),
         )
-        .with_reconcile_enqueuer(queue.clone());
-        pap.delete_binding(&id(1)).unwrap();
+        .with_reconcile_enqueuer(queue.clone())
+        .with_scope_discovery(Arc::new(Discovery));
+        pap.delete_scope(&record(1).binding.spec.scope.scope_id)
+            .unwrap();
         wait_until(|| {
             status(&inner, 1).is_none() && queue.state.lock().unwrap().entries.is_empty()
         });

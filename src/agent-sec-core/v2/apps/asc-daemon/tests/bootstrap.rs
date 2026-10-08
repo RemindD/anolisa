@@ -257,6 +257,88 @@ async fn daemon_binds_when_jsonl_event_storage_is_unusable() {
     assert!(wait_for_exit(&mut running).await.success());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dproc_scope_binary_starts_discovery_and_stops_it_on_sigterm() {
+    let directory = create_runtime_directory();
+    let socket_path = directory.join("daemon.sock");
+    let child = configured_command(&directory)
+        .env("AGENT_SEC_DATA_DIR", directory.join("data"))
+        .arg("--policy-admin-uid")
+        .arg(std::fs::metadata(&directory).unwrap().uid().to_string())
+        .args(["serve", "--socket"])
+        .arg(&socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr_log(&directory))
+        .spawn()
+        .unwrap();
+    let mut running = RunningBinary {
+        child,
+        directory,
+        socket_path,
+    };
+    if rejected_without_root(&mut running).await {
+        return;
+    }
+    wait_for_socket(&mut running).await;
+    let policy = request(&running.socket_path, b"{\"method\":\"policy.templates.create\",\"params\":{\"policyName\":\"scope-policy\",\"template\":{\"kind\":\"prevent_file_deletion\",\"files\":[\"/protected\"]}}}\n").await;
+    for _ in 0..2 {
+        let mut payload = serde_json::to_vec(&serde_json::json!({"method":"policy.scopes.create","params":{
+            "selector":{"kind":"process","match":{"executable":env!("CARGO_BIN_EXE_agent-sec-daemon")}},
+            "policyTemplates":[{"policyId":policy["result"]["policyId"],"policyRevision":policy["result"]["revision"]}]
+        }})).unwrap();
+        payload.push(b'\n');
+        let created = request(&running.socket_path, &payload).await;
+        assert!(created["result"]["scopeId"].is_string(), "{created}");
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if read_stderr(&running.directory).contains("selected new policy instances") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial scan should discover the daemon executable");
+    assert!(
+        Command::new("/bin/kill")
+            .arg("-TERM")
+            .arg(running.child.id().to_string())
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(wait_for_exit(&mut running).await.success());
+    assert!(!running.socket_path.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dproc_removed_probe_option_rejects_before_binding_socket() {
+    let directory = create_runtime_directory();
+    let socket_path = directory.join("daemon.sock");
+    let config = directory.join("probes.json");
+    let child = Command::new(env!("CARGO_BIN_EXE_agent-sec-daemon"))
+        .env("AGENT_SEC_DATA_DIR", directory.join("data"))
+        .args(["serve", "--socket"])
+        .arg(&socket_path)
+        .arg("--agent-probes")
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr_log(&directory))
+        .spawn()
+        .unwrap();
+    let mut running = RunningBinary {
+        child,
+        directory,
+        socket_path,
+    };
+    assert!(!wait_for_exit(&mut running).await.success());
+    assert!(!running.socket_path.exists());
+    assert!(read_stderr(&running.directory).contains("unknown argument: --agent-probes"));
+}
+
 async fn run_binary_scenario(configure_admin: bool) {
     let directory = create_runtime_directory();
     let socket_path = directory.join("daemon.sock");

@@ -289,8 +289,11 @@ fn failed_write_keeps_running_ownership_while_new_delete_wins_cas() {
         inner.clone(),
         Arc::new(asc_policy_engine::PolicyTemplateCompiler),
     )
-    .with_reconcile_enqueuer(queue.clone());
-    let accepted = pap.delete_binding(&id(1)).unwrap();
+    .with_reconcile_enqueuer(queue.clone())
+    .with_scope_discovery(Arc::new(Discovery));
+    pap.delete_scope(&record(1).binding.spec.scope.scope_id)
+        .unwrap();
+    let accepted = pap.get_binding(&id(1)).unwrap();
     assert!(queue.state.lock().unwrap().ready.is_empty());
     assert!(matches!(
         queue.state.lock().unwrap().entries.get(&id(1)),

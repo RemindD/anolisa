@@ -24,6 +24,22 @@ impl ProcessLocalPapRepository {
                     return Err(StoreError::Invalid);
                 }
             }
+            let owner = &record.binding.spec.scope;
+            let scope = state
+                .scopes
+                .entry(owner.scope_id.to_string())
+                .or_insert_with(|| asc_policy_types::scope::PreparedScope {
+                    scope_id: owner.scope_id.clone(),
+                    selector: owner.selector.clone(),
+                    policy_snapshots: Vec::new(),
+                    status: asc_policy_types::scope::ScopeStatus::Active,
+                });
+            if !scope.policy_snapshots.contains(&record.binding.spec.policy) {
+                scope
+                    .policy_snapshots
+                    .push(record.binding.spec.policy.clone());
+            }
+            state.scope_ids.insert(owner.scope_id.to_string());
             let id = record.binding.spec.binding_id.to_string();
             if state
                 .bindings
@@ -123,8 +139,10 @@ impl BindingStateRepository for ProcessLocalPapRepository {
             }
             data.last_write = Some(write.clone());
         } else {
+            let scope_id = current.binding.spec.scope.scope_id.to_string();
             state.bindings.remove(id);
             state.binding_states.remove(id);
+            crate::finalize_scope(&mut state, &scope_id);
         }
         Ok(WriteResult::Applied)
     }

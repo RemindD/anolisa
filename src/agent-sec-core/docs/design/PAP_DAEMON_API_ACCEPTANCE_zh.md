@@ -1,5 +1,16 @@
 # PAP daemon API V2 工作包验收记录
 
+SCOPE-CR-002 当前实现与验收入口见 [生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)。
+当前为 12 个 PAP 方法，Scope 保存无 revision 的完整策略快照，Binding 只读查询；
+Scope delete 返回完成标记，scope retry 重试所属失败。原 15-method 验收数字及旧源码基线
+在下文保留为历史记录，不代表当前 wire。
+
+本文保留原 15-method CRUD 工作包的历史验收结果。后续
+[Policy/Scope/Binding 生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)保留 Policy revision，
+引入无 revision 的不可变 Scope 快照及系统管理 Binding；Scope update、手动 Binding
+mutation 和旧 Scope revision 相关 PASS 不证明新目标已实现。新验收按该契约第 6 节执行，
+不要把历史结果改写为新模型已通过。
+
 | 属性 | 值 |
 | --- | --- |
 | 状态 | PAP integration ready；不是 distribution/release ready |

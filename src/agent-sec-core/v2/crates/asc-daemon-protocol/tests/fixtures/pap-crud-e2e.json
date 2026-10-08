@@ -3,8 +3,7 @@
   "dynamicValues": {
     "request_id": "a fresh UUID returned by the daemon for each response",
     "policy_id": "the UUID returned by create Policy and reused by later steps",
-    "scope_id": "the UUID returned by create Scope and reused by later steps",
-    "binding_id": "the UUID returned by create Binding and reused by later steps"
+    "scope_id": "the UUID returned by create Scope and reused by later steps"
   },
   "objects": {
     "policyV1": {
@@ -163,64 +162,18 @@
     },
     "scopeV1": {
       "scopeId": "${scope_id}",
-      "revision": 1,
       "selector": {
-        "kind": "pid",
-        "pid": 4242
-      }
-    },
-    "scopeV2": {
-      "scopeId": "${scope_id}",
-      "revision": 2,
-      "selector": {
-        "kind": "cgroup_id",
-        "cgroupId": 99
-      }
-    },
-    "bindingV1": {
-      "spec": {
-        "bindingId": "${binding_id}",
-        "bindingRevision": 1,
-        "policy": {
+        "kind": "process",
+        "match": {
+          "processName": "no-such-agent"
+        }
+      },
+      "policySnapshots": [
+        {
           "$ref": "policyV1"
-        },
-        "scope": {
-          "$ref": "scopeV1"
         }
-      },
-      "status": {
-        "phase": "PENDING_APPLY"
-      }
-    },
-    "bindingV2": {
-      "spec": {
-        "bindingId": "${binding_id}",
-        "bindingRevision": 2,
-        "policy": {
-          "$ref": "policyV2"
-        },
-        "scope": {
-          "$ref": "scopeV2"
-        }
-      },
-      "status": {
-        "phase": "PENDING_APPLY"
-      }
-    },
-    "bindingPendingDelete": {
-      "spec": {
-        "bindingId": "${binding_id}",
-        "bindingRevision": 2,
-        "policy": {
-          "$ref": "policyV2"
-        },
-        "scope": {
-          "$ref": "scopeV2"
-        }
-      },
-      "status": {
-        "phase": "PENDING_DELETE"
-      }
+      ],
+      "status": "ACTIVE"
     }
   },
   "steps": [
@@ -259,9 +212,17 @@
         "method": "policy.scopes.create",
         "params": {
           "selector": {
-            "kind": "pid",
-            "pid": 4242
-          }
+            "kind": "process",
+            "match": {
+              "processName": "no-such-agent"
+            }
+          },
+          "policyTemplates": [
+            {
+              "policyId": "${policy_id}",
+              "policyRevision": 1
+            }
+          ]
         }
       },
       "captures": [
@@ -275,31 +236,6 @@
         "requestId": "${request_id}",
         "result": {
           "$ref": "scopeV1"
-        }
-      }
-    },
-    {
-      "name": "create-binding",
-      "request": {
-        "method": "policy.bindings.create",
-        "params": {
-          "policyId": "${policy_id}",
-          "policyRevision": 1,
-          "scopeId": "${scope_id}",
-          "scopeRevision": 1
-        }
-      },
-      "captures": [
-        {
-          "name": "binding_id",
-          "pointer": "/result/spec/bindingId",
-          "format": "uuid"
-        }
-      ],
-      "expectedResponse": {
-        "requestId": "${request_id}",
-        "result": {
-          "$ref": "bindingV1"
         }
       }
     },
@@ -323,46 +259,6 @@
         "requestId": "${request_id}",
         "result": {
           "$ref": "policyV2"
-        }
-      }
-    },
-    {
-      "name": "update-scope",
-      "request": {
-        "method": "policy.scopes.update",
-        "params": {
-          "scopeId": "${scope_id}",
-          "selector": {
-            "kind": "cgroup_id",
-            "cgroupId": 99
-          }
-        }
-      },
-      "captures": [],
-      "expectedResponse": {
-        "requestId": "${request_id}",
-        "result": {
-          "$ref": "scopeV2"
-        }
-      }
-    },
-    {
-      "name": "update-binding",
-      "request": {
-        "method": "policy.bindings.update",
-        "params": {
-          "bindingId": "${binding_id}",
-          "policyId": "${policy_id}",
-          "policyRevision": 2,
-          "scopeId": "${scope_id}",
-          "scopeRevision": 2
-        }
-      },
-      "captures": [],
-      "expectedResponse": {
-        "requestId": "${request_id}",
-        "result": {
-          "$ref": "bindingV2"
         }
       }
     },
@@ -410,15 +306,14 @@
       "request": {
         "method": "policy.scopes.get",
         "params": {
-          "id": "${scope_id}",
-          "revision": 2
+          "id": "${scope_id}"
         }
       },
       "captures": [],
       "expectedResponse": {
         "requestId": "${request_id}",
         "result": {
-          "$ref": "scopeV2"
+          "$ref": "scopeV1"
         }
       }
     },
@@ -437,26 +332,10 @@
         "result": {
           "items": [
             {
-              "$ref": "scopeV2"
+              "$ref": "scopeV1"
             }
           ],
           "total": 1
-        }
-      }
-    },
-    {
-      "name": "get-binding",
-      "request": {
-        "method": "policy.bindings.get",
-        "params": {
-          "id": "${binding_id}"
-        }
-      },
-      "captures": [],
-      "expectedResponse": {
-        "requestId": "${request_id}",
-        "result": {
-          "$ref": "bindingV2"
         }
       }
     },
@@ -473,28 +352,8 @@
       "expectedResponse": {
         "requestId": "${request_id}",
         "result": {
-          "items": [
-            {
-              "$ref": "bindingV2"
-            }
-          ],
-          "total": 1
-        }
-      }
-    },
-    {
-      "name": "delete-binding",
-      "request": {
-        "method": "policy.bindings.delete",
-        "params": {
-          "id": "${binding_id}"
-        }
-      },
-      "captures": [],
-      "expectedResponse": {
-        "requestId": "${request_id}",
-        "result": {
-          "$ref": "bindingPendingDelete"
+          "items": [],
+          "total": 0
         }
       }
     },
@@ -516,19 +375,35 @@
       }
     },
     {
-      "name": "delete-scope",
+      "name": "retry-scope",
       "request": {
-        "method": "policy.scopes.delete",
+        "method": "policy.scopes.retry",
         "params": {
-          "id": "${scope_id}",
-          "revision": 2
+          "id": "${scope_id}"
         }
       },
       "captures": [],
       "expectedResponse": {
         "requestId": "${request_id}",
         "result": {
-          "$ref": "scopeV2"
+          "$ref": "scopeV1"
+        }
+      }
+    },
+    {
+      "name": "delete-scope",
+      "request": {
+        "method": "policy.scopes.delete",
+        "params": {
+          "id": "${scope_id}"
+        }
+      },
+      "captures": [],
+      "expectedResponse": {
+        "requestId": "${request_id}",
+        "result": {
+          "scopeId": "${scope_id}",
+          "completed": true
         }
       }
     }

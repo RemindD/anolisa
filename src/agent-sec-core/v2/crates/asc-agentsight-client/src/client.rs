@@ -22,8 +22,8 @@ pub use reconciliation::{
     AGENTSIGHT_PREPARED_APPLY_FORMAT, AgentSightClientFactory, DEFAULT_AGENTSIGHT_ROUTE,
 };
 
-const BINDING_PLAN_FORMAT: &str = "agentsight.actplane.binding.v1";
-const BINDING_PLAN_SCHEMA_VERSION: u16 = 1;
+const BINDING_PLAN_FORMAT: &str = "agentsight.actplane.binding.v2";
+const BINDING_PLAN_SCHEMA_VERSION: u16 = 2;
 const ACTPLANE_POLICY_MEDIA_TYPE: &str = "application/vnd.actplane.dsl.v1";
 const MAX_PLAN_BYTES: usize = 1024 * 1024;
 const BINDING_ID_NAME_PREFIX: &str = "urn:agentseccore:agentsight-binding:";
@@ -281,9 +281,6 @@ struct AgentSightSourceBinding {
     policy_id: ResourceId,
     policy_revision: Revision,
     scope_id: ResourceId,
-    // Earlier v1 plans omitted this informational field.
-    #[serde(default)]
-    scope_revision: Option<Revision>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,7 +298,10 @@ struct AgentSightPolicyPlan {
     deny_unknown_fields
 )]
 enum AgentSightScopePlan {
-    ProcessTree { root_pid: i32 },
+    ProcessTree {
+        root_pid: i32,
+        process: asc_policy_types::process_discovery::ProcessIdentity,
+    },
 }
 
 struct DecodedPlan {
@@ -312,6 +312,7 @@ struct DecodedPlan {
     policy_revision: Revision,
     root_pid: i32,
     policy_dsl: String,
+    process: asc_policy_types::process_discovery::ProcessIdentity,
 }
 
 impl DecodedPlan {
@@ -350,13 +351,16 @@ fn decode_plan(plan: &TargetBindingPlan) -> Result<DecodedPlan, AgentSightClient
         policy_id,
         policy_revision,
         scope_id: _scope_id,
-        scope_revision: _scope_revision,
     } = plan.source;
     if plan.policy.media_type != ACTPLANE_POLICY_MEDIA_TYPE || plan.policy.content.is_empty() {
         return Err(rejected("AGENTSIGHT_UNSUPPORTED_POLICY_ARTIFACT"));
     }
-    let AgentSightScopePlan::ProcessTree { root_pid } = plan.scope;
-    if root_pid <= 0 {
+    let AgentSightScopePlan::ProcessTree { root_pid, process } = plan.scope;
+    if root_pid <= 0
+        || u32::try_from(root_pid).ok() != Some(process.pid)
+        || process.start_time == 0
+        || process.pid_namespace.is_empty()
+    {
         return Err(rejected("AGENTSIGHT_INVALID_SCOPE"));
     }
     Ok(DecodedPlan {
@@ -367,6 +371,7 @@ fn decode_plan(plan: &TargetBindingPlan) -> Result<DecodedPlan, AgentSightClient
         policy_revision,
         root_pid,
         policy_dsl: plan.policy.content,
+        process,
     })
 }
 

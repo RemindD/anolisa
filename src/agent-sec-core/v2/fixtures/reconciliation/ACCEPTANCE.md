@@ -1,5 +1,12 @@
 # 首版 Binding Reconciler 验收标准
 
+对象以 [生命周期契约](../../../docs/design/POLICY_SCOPE_BINDING_CONTRACT_zh.md)为准：Scope
+无 revision，保存完整 Policy 快照；Binding 由系统管理。fixtures 已改为单策略 Binding +
+Scope 来源/实例身份，保留底层 changed-spec revision/CAS 回归；该兼容路径不是公开 API。
+PAP/Runtime 测试补充 Scope 所有权、模板快照独立、发现/删除竞争、失败重试及最终回收；
+真实 procfs + scripted Client 组合见 daemon `reconciliation.rs` 测试。历史 RESULTS 不代表
+本次本地测试或 durable recovery 结果。
+
 文档类型：`[TARGET V2]` 验收标准。核心与 Adapter/Client 组合使用 mock target 验证，
 不替代真实 AgentSight 或 kernel 验收。具体版本及运行结果见[执行报告](RESULTS.md)；
 Runtime 集成、完整 E2E 和持久化恢复按各自工作包验收。

@@ -149,6 +149,11 @@ async fn run(
     );
     let pap = PapService::new(repository, Arc::new(PolicyTemplateCompiler))
         .with_reconcile_enqueuer(enqueuer);
+    // The sink clone has no registry, avoiding a worker/service ownership cycle.
+    let discovery_registry = Arc::new(asc_daemon::ScopeDiscoveryRegistry::new(Arc::new(
+        pap.clone(),
+    )));
+    let pap = pap.with_scope_discovery(discovery_registry.clone());
     let principal_policy = Arc::new(RootManagedPrincipalPolicy::with_admin_uids(
         cli.policy_admin_uids,
     ));
@@ -181,7 +186,7 @@ async fn run(
         health_task.abort();
     }
     // UDS has stopped admission and completed its request drain before workers stop.
-    let exit_code = if drain_runtimes(skill_worker, policy_runtime).await {
+    let exit_code = if drain_runtimes(skill_worker, discovery_registry, policy_runtime).await {
         match result {
             Ok(_) => ExitCode::SUCCESS,
             Err(problem) => {
@@ -259,17 +264,35 @@ fn recover_and_start_skills(
 
 async fn drain_runtimes(
     worker: Arc<asc_daemon::SkillWorker>,
+    discovery_registry: Arc<asc_daemon::ScopeDiscoveryRegistry>,
     policy: Option<ReconciliationRuntime>,
 ) -> bool {
     // Both joins remain tracked by Tokio after timeout; process exit is the final cutoff.
     let skill = tokio::task::spawn_blocking(move || worker.shutdown());
     let policy =
-        tokio::task::spawn_blocking(move || policy.map_or(Ok(()), ReconciliationRuntime::shutdown));
+        tokio::task::spawn_blocking(move || stop_background_jobs(&discovery_registry, policy));
     let (skill, policy) = tokio::join!(
         tokio::time::timeout(Duration::from_secs(65), skill),
         tokio::time::timeout(Duration::from_secs(30), policy),
     );
-    matches!(skill, Ok(Ok(Ok(())))) && matches!(policy, Ok(Ok(Ok(()))))
+    matches!(skill, Ok(Ok(Ok(())))) && matches!(policy, Ok(Ok(true)))
+}
+
+fn stop_background_jobs(
+    discovery_registry: &asc_daemon::ScopeDiscoveryRegistry,
+    policy_runtime: Option<ReconciliationRuntime>,
+) -> bool {
+    let discovery_ok = match discovery_registry.shutdown() {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::error!(target: "asc_process_diagnostic", %error, "scope discovery shutdown failed");
+            false
+        }
+    };
+    let policies_ok = policy_runtime
+        .map_or(Ok(()), ReconciliationRuntime::shutdown)
+        .is_ok();
+    discovery_ok && policies_ok
 }
 
 fn event_finalizer(

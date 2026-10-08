@@ -1,10 +1,7 @@
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Mutex};
 
 use asc_foundation_types::{ResourceId, Revision};
-use asc_pap::{
-    Page, PapError, PapRepository, PapService, PolicyCompiler, PolicyRevisionState,
-    ScopeRevisionState,
-};
+use asc_pap::{Page, PapError, PapRepository, PapService, PolicyCompiler, PolicyRevisionState};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_policy_repository::{
     BindingStateRepository, BindingStateSnapshot, BindingStateWrite, WriteResult,
@@ -23,14 +20,8 @@ const COMPLETE_BINDING: &str =
 struct FakeRepository {
     inner: ProcessLocalPapRepository,
     failure_write_mode: std::sync::atomic::AtomicUsize,
-    scope_read_gate: Mutex<ScopeReadGate>,
     policy_read_override: Mutex<Option<PolicyRevisionState>>,
-}
-
-#[derive(Default)]
-struct ScopeReadGate {
-    barrier: Option<Arc<Barrier>>,
-    remaining: usize,
+    scope_cleanup_failure: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeRepository {
@@ -54,28 +45,6 @@ impl FakeRepository {
                 .compare_exchange_binding_state(&current, &BindingStateWrite::new(next)),
             Ok(WriteResult::Applied)
         );
-    }
-
-    fn synchronize_next_scope_reads(&self, participants: usize) {
-        let mut gate = self.scope_read_gate.lock().unwrap();
-        assert!(gate.barrier.is_none());
-        gate.barrier = Some(Arc::new(Barrier::new(participants)));
-        gate.remaining = participants;
-    }
-
-    fn take_scope_read_barrier(&self) -> Result<Option<Arc<Barrier>>, PapError> {
-        let mut gate = self
-            .scope_read_gate
-            .lock()
-            .map_err(|_| PapError::Persistence)?;
-        let Some(barrier) = gate.barrier.clone() else {
-            return Ok(None);
-        };
-        gate.remaining -= 1;
-        if gate.remaining == 0 {
-            gate.barrier = None;
-        }
-        Ok(Some(barrier))
     }
 }
 
@@ -114,33 +83,44 @@ impl PapRepository for FakeRepository {
         self.inner.put_scope(scope)
     }
 
-    fn get_scope_revision_state(
-        &self,
-        id: &ResourceId,
-    ) -> Result<Option<ScopeRevisionState>, PapError> {
-        let result = self.inner.get_scope_revision_state(id)?;
-        if let Some(barrier) = self.take_scope_read_barrier()? {
-            barrier.wait();
-        }
-        Ok(result)
-    }
-
-    fn get_scope(&self, id: &ResourceId, revision: Revision) -> Result<PreparedScope, PapError> {
-        self.inner.get_scope(id, revision)
+    fn get_scope(&self, id: &ResourceId) -> Result<PreparedScope, PapError> {
+        self.inner.get_scope(id)
     }
 
     fn list_scopes(&self, limit: u32, offset: u32) -> Result<Page<PreparedScope>, PapError> {
         self.inner.list_scopes(limit, offset)
     }
 
-    fn delete_scope_revision(
+    fn begin_scope_delete(&self, id: &ResourceId) -> Result<Option<PreparedScope>, PapError> {
+        if self
+            .scope_cleanup_failure
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            return Err(PapError::Persistence);
+        }
+        self.inner.begin_scope_delete(id)
+    }
+    fn finish_scope_discovery(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
+        if self
+            .scope_cleanup_failure
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 2
+        {
+            return Err(PapError::Persistence);
+        }
+        self.inner.finish_scope_discovery(id)
+    }
+    fn sync_scope_instances(
         &self,
         id: &ResourceId,
-        revision: Revision,
-    ) -> Result<PreparedScope, PapError> {
-        self.inner.delete_scope_revision(id, revision)
+        instances: &[asc_policy_types::process_discovery::ProcessIdentity],
+    ) -> Result<Vec<BindingView>, PapError> {
+        self.inner.sync_scope_instances(id, instances)
     }
-
+    fn retry_scope(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
+        self.inner.retry_scope(id)
+    }
     fn update_binding(
         &self,
         expected: Option<&BindingView>,
@@ -297,368 +277,6 @@ fn policy_crud_keeps_only_the_current_record_and_never_reuses_revisions() {
 }
 
 #[test]
-fn scope_crud_keeps_only_the_current_record_and_preserves_revision_heads() {
-    let (pap, repository) = service();
-    let first = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    assert_eq!(first.revision.get(), 1);
-    assert_eq!(
-        pap.update_scope(&first.scope_id, &ScopeSelector::Pid { pid: 4242 })
-            .unwrap(),
-        first
-    );
-
-    let second = pap
-        .update_scope(&first.scope_id, &ScopeSelector::CgroupId { cgroup_id: 99 })
-        .unwrap();
-    assert_eq!(second.revision.get(), 2);
-    assert_eq!(pap.list_scopes(100, 0).unwrap().items, vec![second.clone()]);
-    assert_eq!(
-        pap.get_scope(&first.scope_id, first.revision),
-        Err(PapError::NotFound)
-    );
-    pap.delete_scope_revision(&first.scope_id, second.revision)
-        .unwrap();
-    assert_eq!(pap.list_scopes(100, 0).unwrap().total, 0);
-    let third = pap
-        .update_scope(&first.scope_id, &ScopeSelector::Pid { pid: 7 })
-        .unwrap();
-    assert_eq!(third.revision.get(), 3);
-    assert_eq!(pap.list_scopes(100, 0).unwrap().items, vec![third]);
-    assert_eq!(repository.list_scopes(100, 0).unwrap().total, 1);
-    assert_eq!(
-        repository
-            .get_scope_revision_state(&first.scope_id)
-            .unwrap()
-            .unwrap()
-            .last_allocated_revision
-            .get(),
-        3
-    );
-
-    assert!(matches!(
-        pap.create_scope(&ScopeSelector::Pid { pid: 0 }),
-        Err(PapError::InvalidScope(_))
-    ));
-    let missing = ResourceId::new("missing-scope").unwrap();
-    assert_eq!(
-        pap.update_scope(&missing, &ScopeSelector::Pid { pid: 9 }),
-        Err(PapError::NotFound)
-    );
-}
-
-#[test]
-fn concurrent_scope_updates_retry_after_repository_cas_conflict() {
-    let (pap, repository) = service();
-    let first = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    repository.synchronize_next_scope_reads(2);
-
-    let left = {
-        let pap = pap.clone();
-        let scope_id = first.scope_id.clone();
-        std::thread::spawn(move || pap.update_scope(&scope_id, &ScopeSelector::Pid { pid: 7 }))
-    };
-    let right = {
-        let pap = pap.clone();
-        let scope_id = first.scope_id.clone();
-        std::thread::spawn(move || {
-            pap.update_scope(&scope_id, &ScopeSelector::CgroupId { cgroup_id: 99 })
-        })
-    };
-
-    let mut updates = [
-        left.join().unwrap().unwrap(),
-        right.join().unwrap().unwrap(),
-    ];
-    updates.sort_by_key(|scope| scope.revision);
-
-    assert_eq!(updates[0].revision.get(), 2);
-    assert_eq!(updates[1].revision.get(), 3);
-    assert_ne!(updates[0].selector, updates[1].selector);
-    assert_eq!(
-        pap.get_scope(&first.scope_id, updates[0].revision),
-        Err(PapError::NotFound)
-    );
-    assert_eq!(
-        pap.get_scope(&first.scope_id, updates[1].revision).unwrap(),
-        updates[1]
-    );
-}
-
-#[test]
-fn binding_revision_tracks_spec_and_delete_intent_is_irreversible() {
-    let (pap, repository) = service();
-    let policy = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let first = pap
-        .create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-        .unwrap();
-    let id = &first.spec.binding_id;
-    let apply = |policy: &PreparedPolicy| {
-        pap.update_binding(
-            id,
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-    };
-    assert_eq!(first.spec.binding_revision.get(), 1);
-    assert_eq!(apply(&policy).unwrap(), first);
-    repository.transition(id, BindingStatus::Applying);
-    assert_eq!(apply(&policy).unwrap().status, BindingStatus::Applying);
-    let changed = pap
-        .update_policy(
-            &policy.policy_id,
-            "changed",
-            &policy_template("/workspace/b"),
-        )
-        .unwrap();
-    assert_eq!(apply(&changed), Err(PapError::OperationInProgress));
-    repository.transition(id, BindingStatus::ApplyFailed);
-    let retry = apply(&policy).unwrap();
-    assert_eq!(retry, first, "same-spec retry preserves revision");
-    let updated = apply(&changed).unwrap();
-    assert_eq!(updated.spec.binding_revision.get(), 2);
-    let deletion = pap.delete_binding(id).unwrap();
-    assert_eq!(deletion.spec, updated.spec);
-    assert_eq!(deletion.status, BindingStatus::PendingDelete);
-    for status in [
-        BindingStatus::PendingDelete,
-        BindingStatus::Deleting,
-        BindingStatus::DeleteFailed,
-    ] {
-        if status != BindingStatus::PendingDelete {
-            repository.transition(id, status);
-        }
-        assert_eq!(apply(&changed), Err(PapError::OperationInProgress));
-        assert_eq!(
-            apply(&policy),
-            Err(PapError::OperationInProgress),
-            "changed spec cannot cancel deletion"
-        );
-        if status != BindingStatus::DeleteFailed {
-            assert_eq!(pap.delete_binding(id).unwrap().status, status);
-        }
-    }
-    assert_eq!(
-        pap.delete_binding(id).unwrap(),
-        deletion,
-        "failed deletion retries at the same revision"
-    );
-    assert_eq!(pap.list_bindings(100, 0).unwrap().items, vec![deletion]);
-}
-
-#[test]
-fn delete_supersedes_running_apply_without_rewriting_spec() {
-    let (pap, repository) = service();
-    let policy = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let binding = pap
-        .create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-        .unwrap();
-    repository.transition(&binding.spec.binding_id, BindingStatus::Applying);
-    let applying = repository.binding_state(&binding.spec.binding_id);
-    let deletion = pap.delete_binding(&binding.spec.binding_id).unwrap();
-    assert_eq!(deletion.spec, binding.spec);
-    assert_eq!(deletion.status, BindingStatus::PendingDelete);
-    assert_eq!(
-        repository.inner.compare_exchange_binding_state(
-            &applying,
-            &BindingStateWrite::new({
-                let mut completed = applying.clone();
-                completed.binding.status.phase = BindingStatus::Ready;
-                completed
-            })
-        ),
-        Ok(WriteResult::Conflict)
-    );
-}
-
-#[test]
-fn binding_requires_exact_policy_and_scope_revisions() {
-    let (pap, _) = service();
-    let policy = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let missing = ResourceId::new("missing").unwrap();
-
-    assert_eq!(
-        pap.create_binding(
-            &missing,
-            Revision::new(1).unwrap(),
-            &scope.scope_id,
-            scope.revision,
-        ),
-        Err(PapError::ReferencedPolicyRevisionNotFound)
-    );
-    assert_eq!(
-        pap.create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &missing,
-            Revision::new(1).unwrap(),
-        ),
-        Err(PapError::ReferencedScopeRevisionNotFound)
-    );
-    assert_eq!(
-        pap.update_binding(
-            &missing,
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        ),
-        Err(PapError::NotFound)
-    );
-}
-
-#[test]
-fn existing_binding_can_reuse_embedded_sources_after_current_records_advance() {
-    let (pap, repository) = service();
-    let policy_v1 = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope_v1 = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let binding = pap
-        .create_binding(
-            &policy_v1.policy_id,
-            policy_v1.revision,
-            &scope_v1.scope_id,
-            scope_v1.revision,
-        )
-        .unwrap();
-
-    pap.update_policy(
-        &policy_v1.policy_id,
-        "protect more files",
-        &policy_template("/workspace/b"),
-    )
-    .unwrap();
-    pap.update_scope(
-        &scope_v1.scope_id,
-        &ScopeSelector::CgroupId { cgroup_id: 99 },
-    )
-    .unwrap();
-
-    repository.transition(&binding.spec.binding_id, BindingStatus::Applying);
-    repository.transition(&binding.spec.binding_id, BindingStatus::ApplyFailed);
-    let reapplied = pap
-        .update_binding(
-            &binding.spec.binding_id,
-            &policy_v1.policy_id,
-            policy_v1.revision,
-            &scope_v1.scope_id,
-            scope_v1.revision,
-        )
-        .unwrap();
-    assert_eq!(reapplied.spec.binding_revision.get(), 1);
-    assert_eq!(reapplied.spec.policy, policy_v1);
-    assert_eq!(reapplied.spec.scope, scope_v1);
-    assert_eq!(reapplied.status, BindingStatus::PendingApply);
-
-    assert_eq!(
-        pap.create_binding(
-            &reapplied.spec.policy.policy_id,
-            reapplied.spec.policy.revision,
-            &reapplied.spec.scope.scope_id,
-            reapplied.spec.scope.revision,
-        ),
-        Err(PapError::ReferencedPolicyRevisionNotFound),
-        "a new Binding cannot select source revisions no longer current"
-    );
-}
-
-#[test]
-fn repository_atomically_rejects_a_binding_update_after_worker_claim() {
-    let (pap, repository) = service();
-    let policy = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let binding = pap
-        .create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-        .unwrap();
-    let mut stale_replacement = binding.clone();
-    stale_replacement.spec.binding_revision = Revision::new(2).unwrap();
-
-    repository.transition(&binding.spec.binding_id, BindingStatus::Applying);
-
-    assert_eq!(
-        repository.update_binding(Some(&binding), &stale_replacement),
-        Err(PapError::Conflict),
-        "the repository gate must close the service-read/worker-claim race"
-    );
-}
-
-#[test]
-fn repository_rejects_stale_worker_revision_while_status_is_unchanged() {
-    let (pap, repository) = service();
-    let policy = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap();
-    let scope = pap.create_scope(&ScopeSelector::Pid { pid: 4242 }).unwrap();
-    let binding = pap
-        .create_binding(
-            &policy.policy_id,
-            policy.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-        .unwrap();
-    let pending = repository.binding_state(&binding.spec.binding_id);
-    let changed = pap
-        .update_policy(
-            &policy.policy_id,
-            "changed",
-            &policy_template("/workspace/b"),
-        )
-        .unwrap();
-    let updated = pap
-        .update_binding(
-            &binding.spec.binding_id,
-            &changed.policy_id,
-            changed.revision,
-            &scope.scope_id,
-            scope.revision,
-        )
-        .unwrap();
-    assert_eq!(updated.status, pending.binding.status.phase);
-    assert_ne!(
-        updated.spec.binding_revision,
-        pending.binding.spec.binding_revision
-    );
-    let mut claimed = pending.clone();
-    claimed.binding.status.phase = BindingStatus::Applying;
-    assert_eq!(
-        repository
-            .inner
-            .compare_exchange_binding_state(&pending, &BindingStateWrite::new(claimed)),
-        Ok(WriteResult::Conflict)
-    );
-    assert_eq!(pap.get_binding(&binding.spec.binding_id).unwrap(), updated);
-}
-
-#[test]
 fn compiler_output_identity_is_checked_before_storage() {
     let repository = Arc::new(FakeRepository::default());
     let compiler = Arc::new(FixtureCompiler {
@@ -721,18 +339,26 @@ fn scheduling_failure_write_error_does_not_claim_terminal_state() {
         let (pap, repo) = service();
         repo.failure_write_mode
             .store(mode, std::sync::atomic::Ordering::SeqCst);
-        let pap = pap.with_reconcile_enqueuer(Arc::new(Reject));
+        let pap = pap
+            .with_reconcile_enqueuer(Arc::new(Reject))
+            .with_scope_discovery(Arc::new(Discovery));
         let policy = pap
             .create_policy("test", &policy_template("/workspace/a"))
             .unwrap();
-        let scope = pap.create_scope(&ScopeSelector::Pid { pid: 10 }).unwrap();
-        let error = pap
-            .create_binding(
-                &policy.policy_id,
-                policy.revision,
-                &scope.scope_id,
-                scope.revision,
+        let scope = pap
+            .create_scope_assignment(
+                &ScopeSelector::Pid { pid: 4242 },
+                &[asc_policy_types::scope::PolicyReference {
+                    policy_id: policy.policy_id.clone(),
+                    policy_revision: policy.revision,
+                }],
             )
+            .unwrap();
+        let process = serde_json::from_str::<PreparedBinding>(COMPLETE_BINDING)
+            .unwrap()
+            .scope
+            .process;
+        let error = asc_pap::ScopeBindingSink::sync_instances(&pap, &scope.scope_id, &[process])
             .unwrap_err();
         let PapError::SchedulingRejected { id, .. } = error else {
             panic!("expected scheduling rejection")
@@ -740,5 +366,252 @@ fn scheduling_failure_write_error_does_not_claim_terminal_state() {
         let state = repo.binding_state(&id);
         assert_eq!(state.binding.status.phase, BindingStatus::PendingApply);
         assert_eq!(state.binding.status.error, None);
+    }
+}
+
+struct Discovery;
+impl asc_pap::ScopeDiscovery for Discovery {
+    fn start(&self, _: &PreparedScope) -> Result<(), PapError> {
+        Ok(())
+    }
+    fn stop(&self, _: &ResourceId) -> Result<(), PapError> {
+        Ok(())
+    }
+}
+
+fn assignment(pap: &Service, policy: &PreparedPolicy) -> PreparedScope {
+    pap.create_scope_assignment(
+        &ScopeSelector::Pid { pid: 4242 },
+        &[asc_policy_types::scope::PolicyReference {
+            policy_id: policy.policy_id.clone(),
+            policy_revision: policy.revision,
+        }],
+    )
+    .unwrap()
+}
+
+#[test]
+fn assignment_snapshots_survive_policy_update_delete_and_later_discovery() {
+    use asc_pap::ScopeBindingSink;
+    let (pap, repo) = service();
+    let pap = pap.with_scope_discovery(Arc::new(Discovery));
+    let original = pap.create_policy("old", &policy_template("/a")).unwrap();
+    let scope = assignment(&pap, &original);
+    let updated = pap
+        .update_policy(&original.policy_id, "new", &policy_template("/b"))
+        .unwrap();
+    assert_eq!(updated.revision.get(), 2);
+    assert!(matches!(
+        pap.create_scope_assignment(
+            &scope.selector,
+            &[asc_policy_types::scope::PolicyReference {
+                policy_id: original.policy_id.clone(),
+                policy_revision: original.revision
+            }]
+        ),
+        Err(PapError::ReferencedPolicyRevisionNotFound)
+    ));
+    pap.delete_policy_revision(&updated.policy_id, updated.revision)
+        .unwrap();
+    assert_eq!(pap.get_scope(&scope.scope_id).unwrap(), scope);
+    let instance = serde_json::from_str::<PreparedBinding>(COMPLETE_BINDING)
+        .unwrap()
+        .scope
+        .process;
+    pap.sync_instances(&scope.scope_id, std::slice::from_ref(&instance))
+        .unwrap();
+    pap.sync_instances(&scope.scope_id, std::slice::from_ref(&instance))
+        .unwrap();
+    let bindings = pap.list_bindings(10, 0).unwrap();
+    assert_eq!(bindings.total, 1);
+    assert_eq!(bindings.items[0].spec.policy, original);
+    assert_eq!(bindings.items[0].spec.scope.process, instance);
+    let wire = serde_json::to_value(&scope).unwrap();
+    assert!(wire.get("revision").is_none());
+    assert!(wire.get("policyTemplates").is_none());
+    assert_eq!(wire["policySnapshots"], serde_json::json!([original]));
+    assert_eq!(repo.list_policies(10, 0).unwrap().total, 0);
+}
+
+#[test]
+fn snapshot_admission_races_policy_mutation_atomically() {
+    use std::sync::Barrier;
+    for delete in [false, true] {
+        for iteration in 0..32 {
+            let (pap, repo) = service();
+            let original = pap.create_policy("old", &policy_template("/a")).unwrap();
+            let candidate = PreparedScope {
+                scope_id: ResourceId::new(format!("scope-{iteration}")).unwrap(),
+                selector: ScopeSelector::Pid { pid: 4242 },
+                policy_snapshots: vec![original.clone()],
+                status: asc_policy_types::scope::ScopeStatus::Active,
+            };
+            let gate = Arc::new(Barrier::new(2));
+            let admission = {
+                let gate = gate.clone();
+                let repo = repo.clone();
+                let candidate = candidate.clone();
+                std::thread::spawn(move || {
+                    gate.wait();
+                    repo.put_scope(&candidate)
+                })
+            };
+            gate.wait();
+            if delete {
+                pap.delete_policy_revision(&original.policy_id, original.revision)
+                    .unwrap();
+            } else {
+                pap.update_policy(&original.policy_id, "new", &original.template)
+                    .unwrap();
+            }
+            match admission.join().unwrap() {
+                Ok(saved) => assert_eq!(saved, candidate),
+                Err(error) => assert_eq!(error, PapError::ReferencedPolicyRevisionNotFound),
+            }
+            if let Ok(saved) = pap.get_scope(&candidate.scope_id) {
+                assert_eq!(saved.policy_snapshots, vec![original]);
+            }
+        }
+    }
+}
+
+#[test]
+fn deleting_scope_fences_discovery_and_retains_failures_until_explicit_retry() {
+    use asc_pap::ScopeBindingSink;
+    let (pap, repo) = service();
+    let pap = pap.with_scope_discovery(Arc::new(Discovery));
+    let policy = pap.create_policy("policy", &policy_template("/a")).unwrap();
+    let scope = assignment(&pap, &policy);
+    let other = assignment(&pap, &policy);
+    let instance = serde_json::from_str::<PreparedBinding>(COMPLETE_BINDING)
+        .unwrap()
+        .scope
+        .process;
+    for scope in [&scope, &other] {
+        pap.sync_instances(&scope.scope_id, std::slice::from_ref(&instance))
+            .unwrap();
+    }
+    let binding = pap
+        .list_bindings(10, 0)
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|b| b.spec.scope.scope_id == scope.scope_id)
+        .unwrap();
+    repo.transition(&binding.spec.binding_id, BindingStatus::Applying);
+    let stale_apply = repo.binding_state(&binding.spec.binding_id);
+    pap.delete_scope(&scope.scope_id).unwrap();
+    assert_eq!(
+        pap.sync_instances(&scope.scope_id, &[instance]),
+        Err(PapError::OperationInProgress)
+    );
+    let mut late_ready = stale_apply.clone();
+    late_ready.binding.status = BindingStatus::Ready.into();
+    assert_eq!(
+        repo.inner
+            .compare_exchange_binding_state(&stale_apply, &BindingStateWrite::new(late_ready)),
+        Ok(WriteResult::Conflict)
+    );
+    repo.transition(&binding.spec.binding_id, BindingStatus::Deleting);
+    repo.transition(&binding.spec.binding_id, BindingStatus::DeleteFailed);
+    let failed = pap.get_binding(&binding.spec.binding_id).unwrap();
+    pap.delete_scope(&scope.scope_id).unwrap();
+    assert_eq!(pap.get_binding(&binding.spec.binding_id).unwrap(), failed);
+    assert_eq!(pap.get_scope(&other.scope_id).unwrap(), other);
+    pap.retry_scope(&scope.scope_id).unwrap();
+    assert_eq!(
+        pap.get_binding(&binding.spec.binding_id).unwrap().status,
+        BindingStatus::PendingDelete
+    );
+    assert_eq!(
+        pap.get_binding(&binding.spec.binding_id).unwrap().spec,
+        binding.spec
+    );
+    assert_eq!(pap.list_bindings(10, 0).unwrap().total, 2);
+}
+
+#[test]
+fn instance_reuse_retires_old_binding_and_creates_distinct_identity() {
+    use asc_pap::ScopeBindingSink;
+    let (pap, _) = service();
+    let pap = pap.with_scope_discovery(Arc::new(Discovery));
+    let policy = pap.create_policy("policy", &policy_template("/a")).unwrap();
+    let scope = assignment(&pap, &policy);
+    let mut instance = serde_json::from_str::<PreparedBinding>(COMPLETE_BINDING)
+        .unwrap()
+        .scope
+        .process;
+    pap.sync_instances(&scope.scope_id, std::slice::from_ref(&instance))
+        .unwrap();
+    let first = pap.list_bindings(10, 0).unwrap().items.remove(0);
+    instance.start_time += 1;
+    pap.sync_instances(&scope.scope_id, std::slice::from_ref(&instance))
+        .unwrap();
+    assert_eq!(
+        pap.get_binding(&first.spec.binding_id).unwrap().status,
+        BindingStatus::PendingDelete
+    );
+    let all = pap.list_bindings(10, 0).unwrap();
+    assert_eq!(all.total, 2);
+    let second = all
+        .items
+        .iter()
+        .find(|b| b.spec.binding_id != first.spec.binding_id)
+        .unwrap();
+    assert_eq!(second.spec.scope.process, instance);
+    assert_eq!(second.status, BindingStatus::PendingApply);
+}
+
+#[test]
+fn discovery_start_error_survives_compensation_failures() {
+    struct UnavailableDiscovery;
+    impl asc_pap::ScopeDiscovery for UnavailableDiscovery {
+        fn start(&self, _: &PreparedScope) -> Result<(), PapError> {
+            Err(PapError::Unavailable)
+        }
+        fn stop(&self, _: &ResourceId) -> Result<(), PapError> {
+            panic!("failed start must not leave a worker to stop")
+        }
+    }
+    for failure in 0..=2 {
+        let (pap, repo) = service();
+        repo.scope_cleanup_failure
+            .store(failure, std::sync::atomic::Ordering::SeqCst);
+        let pap = pap.with_scope_discovery(Arc::new(UnavailableDiscovery));
+        let policy = pap
+            .create_policy("test", &policy_template("/protected"))
+            .unwrap();
+        assert_eq!(
+            pap.create_scope_assignment(
+                &ScopeSelector::Pid { pid: 4242 },
+                &[asc_policy_types::scope::PolicyReference {
+                    policy_id: policy.policy_id.clone(),
+                    policy_revision: policy.revision,
+                }],
+            ),
+            Err(PapError::Unavailable),
+            "compensation failure at step {failure} must not replace the startup error"
+        );
+        let remaining = pap.list_scopes(10, 0).unwrap();
+        if failure == 0 {
+            assert_eq!(remaining.total, 0);
+        } else {
+            assert_eq!(remaining.total, 1);
+            let scope = &remaining.items[0];
+            assert_eq!(scope.policy_snapshots, vec![policy]);
+            assert_eq!(
+                scope.status,
+                if failure == 1 {
+                    asc_policy_types::scope::ScopeStatus::Active
+                } else {
+                    asc_policy_types::scope::ScopeStatus::Deleting
+                }
+            );
+            repo.scope_cleanup_failure
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+            // After the storage failure clears, explicit deletion can finish cleanup.
+            let pap = pap.with_scope_discovery(Arc::new(Discovery));
+            assert!(pap.delete_scope(&scope.scope_id).unwrap().completed);
+        }
     }
 }

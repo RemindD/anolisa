@@ -429,6 +429,11 @@ next offset。items 按 `(timestamp_epoch, kind)` 升序排列：
 
 ### 6.11 **[TARGET V2]** PAP administration
 
+本节 15-method CRUD 表描述现有 V2 实现基线。新的对象目标以
+[生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)和第 14 节为准：保留 Policy update，
+Scope 无自身 revision 且不可更新；Binding 仅供用户查询。实施前不把旧方法表当作新目标，
+也不把目标文档变化解释为当前二进制已经移除相应方法。
+
 PAP administration 是新增的 V2 method family，不是九个 V1 method 之一。第一版接口采用
 互斥的 `{requestId,result}` 或 `{requestId,error}` 响应，不保留 POC 的 `poc.*` method、
 `ok/data/stdout/stderr/exit_code` envelope 或兼容分支。输入和输出以
@@ -501,8 +506,10 @@ Delete 和 DeleteFailed 重试均保留 revision。Delete 保留完整 spec 与�
 允许在 Applying 时受理；PendingDelete/Deleting/DeleteFailed 拒绝所有 UPDATE，不能
 撤销删除。全部目标确认 Absent 后，Reconciler 原子移除 Binding 及运行记录；此后
 GET/UPDATE/DELETE 返回 not_found，LIST 不包含该 ID。重新部署须 CREATE 新 ID、revision 1。
-`Deleted` 只作内部完成标记，不作为持久化 current record。当前 daemon 尚未接入后台
-reconcile worker；硬删除行为由 PAP + Reconciler 内存组合测试验证。
+`Deleted` 只作内部完成标记，不作为持久化 current record。现有 daemon 已接入后台
+reconcile Runtime；硬删除的历史证据来自 PAP + Reconciler 内存组合测试，daemon 接线
+范围见 [进程部署契约](DAEMON_PROCESS_DEPLOYMENT_CONTRACT_zh.md)。这不表示新的 Scope
+自动 Binding 已接线，也不表示具备磁盘耐久性或真实 PEP 验收。
 
 Policy CREATE/UPDATE 在 PAP 内同步调用 `PolicyCompiler::lower(TemplateEnvelope) ->
 PolicyEnvelope`。当前产品 compiler 只实现 `prevent_file_deletion`，其输入与完整 Canonical
@@ -513,9 +520,10 @@ Policy IR 输出由
 保护范围内。其它 `PolicyTemplate` kind 在各自 lowering 与直接 Adapter conformance 完成前
 返回 `invalid_argument`，不得生成占位 IR。
 
-参数 object 拒绝未知字段。ScopeSelector 只包含正数 PID 或 cgroup ID；PreparedScope
+参数 object 拒绝未知字段。基线 ScopeSelector 支持正数 PID 或 cgroup ID；第 14 节
+SCOPE-CR-001 扩展 name/path process selector 与 policyTemplates assignment。PreparedScope
 必须显式包含 selector，缺失或 null 均拒绝，不再从 scopeId 推导执行域身份。
-PreparedScope 的输出仅含 `scopeId`、`revision`、`selector`；不再包含自动填充的
+Legacy PreparedScope 的输出含 `scopeId`、`revision`、`selector`，assignment 增加 `policyTemplates`；不再包含自动填充的
 `template` 或 `templateDigest`。读取时显式携带这两个已移除字段会被拒绝，不能
 把其中的 lifetime 等约束静默丢弃。Scope Update 直接按 selector 比较内容是否相同；
 PreparedPolicy 保留 policyId/policyName/revision/template/canonicalPolicy，移除
@@ -959,3 +967,40 @@ server frame proof。普通 V2 请求仍由原 closed envelope 解析，不接�
 完整输入、错误、部分成功语义、V1 CLI 兼容边界与 OBS-001..006 executable fixtures 见
 [V2 可观测单条采集契约](V2_OBSERVABILITY_INGESTION_zh.md)。这不是 V1 新增 RPC，
 不改变本文 CURRENT V1 方法清单；本批没有新增查询接口。
+
+## 16. [TARGET V2][IMPLEMENTED, PROCESS-LOCAL] Scope assignment（SCOPE-CR-002）
+
+对象与生命周期权威定义为
+[Policy/Scope/Binding 生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)。本节替代第 6.11
+节及 SCOPE-CR-001 中 Scope revision、引用阻止模板更新/删除和手动 Binding CRUD 语义。
+
+当前公开 12 个 PAP 方法：`policy.templates.{create,update,get,list,delete}`、
+`policy.scopes.{create,get,list,delete,retry}`、`policy.bindings.{get,list}`。
+Scope update、Binding mutation 返回 `unknown_method`；Scope revision 参数拒绝。
+
+```json
+{"method":"policy.scopes.create","params":{"selector":{"kind":"process","match":{"processName":"openclaw"}},"policyTemplates":[{"policyId":"policy-one","policyRevision":1}]}}
+```
+
+`policyTemplates` 对全部 selector 均必填，1–32 个不同 Policy；服务端解析并在提交锁内
+核对精确 current revision。并发更新/删除导致该版本不可用时返回 `not_found`，不替换版本。
+Scope 返回 `scopeId`、`selector`、`policySnapshots`（完整 PreparedPolicy）和 `status:ACTIVE`；
+没有 revision，不可 update。模板更新/删除不影响该 Scope 或未来实例。
+
+`match` 必须且只能包含 `processName` 或 `executable`。名称精确匹配 `/proc/PID/comm`
+（1–15 bytes），路径精确匹配 `/proc/PID/exe` 的规范化绝对路径；不做 glob/前缀匹配。
+PID selector 固定首次观察到的实例；当前拒绝 cgroup assignment。未配置发现、调度不可用或
+32 个 discovery jobs 容量耗尽时返回 unavailable。
+
+Scope get/delete/retry 参数均为 `{"id":"scope-id"}`。删除关闭准入、停止发现并清理所属
+Binding，返回 `{"scopeId":"scope-id","completed":false}`，完成时 completed 为 true。
+未完成 Scope 为 `DELETING`；重复 delete 不重置预算，完成后可按 ID 墓碑幂等删除。
+`scope retry` 返回 Scope 快照，仅重试所属终态失败 Binding。Binding 查询包含单策略快照、
+Scope 来源和固定进程身份，不包含完整 Scope 或 scopeRevision。
+
+编码后 Policy/Scope 单记录上限 1 MiB，列表条目预算 3 MiB。`total` 是分页前总数，
+下页 offset 按实际 items 数推进。方法/字段/错误由 `pap-methods.json`、
+`pap-invalid-requests.json`、`pap-crud-e2e.json` 冻结，CLI 与 daemon 成套升级。
+
+真实 procfs + scripted Client 组合验证自动下发/清理；UDS、CLI 和 bootstrap 验证公开接口。
+这不构成磁盘恢复、真实 AgentSight 或 kernel enforcement 证据。旧 Probe 入口继续拒绝。

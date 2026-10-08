@@ -1,6 +1,5 @@
 use asc_foundation_types::Revision;
 use asc_policy_types::policy::PreparedPolicy;
-use asc_policy_types::scope::PreparedScope;
 use serde::{Deserialize, Serialize};
 
 /// Durable allocation state for one Policy identity.
@@ -10,15 +9,6 @@ pub struct PolicyRevisionState {
     pub last_allocated_revision: Revision,
     /// Current Policy content, or `None` when the identity is tombstoned.
     pub current: Option<PreparedPolicy>,
-}
-
-/// Durable allocation state for one Scope identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScopeRevisionState {
-    /// Highest revision ever allocated, including deleted revisions.
-    pub last_allocated_revision: Revision,
-    /// Current Scope content, or `None` when the identity is tombstoned.
-    pub current: Option<PreparedScope>,
 }
 
 /// Bounded query result with the total before pagination.

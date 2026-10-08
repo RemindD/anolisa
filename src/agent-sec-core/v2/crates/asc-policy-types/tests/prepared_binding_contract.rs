@@ -1,8 +1,8 @@
 use asc_policy_types::Validate;
+use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
 use asc_policy_types::identifiers::Revision;
 use asc_policy_types::policy::{PolicyEnvelope, PreparedPolicy};
-use asc_policy_types::scope::PreparedScope;
 
 const COMPLETE_BINDING: &str = include_str!("fixtures/prepared-binding.json");
 
@@ -18,7 +18,7 @@ fn complete_binding_round_trips_and_validates_as_one_boundary_document() {
     binding.validate().unwrap();
     assert_eq!(binding.binding_revision.get(), 7);
     assert_eq!(binding.policy.revision.get(), 1);
-    assert_eq!(binding.scope.revision.get(), 3);
+    assert_eq!(binding.scope.process.start_time, 987_654);
     assert_eq!(serde_json::to_value(binding).unwrap(), expected);
 }
 
@@ -39,13 +39,13 @@ fn scope_requires_an_explicit_supported_selector_including_inside_bindings() {
         } else {
             binding["scope"].as_object_mut().unwrap().remove("selector");
         }
-        assert!(serde_json::from_value::<PreparedScope>(binding["scope"].clone()).is_err());
+        assert!(serde_json::from_value::<BindingScope>(binding["scope"].clone()).is_err());
         assert!(serde_json::from_value::<PreparedBinding>(binding).is_err());
     }
 }
 
 #[test]
-fn scope_contains_only_identity_revision_and_selector_and_rejects_removed_fields() {
+fn binding_scope_contains_provenance_instance_and_rejects_removed_fields() {
     let complete: serde_json::Value = serde_json::from_str(COMPLETE_BINDING).unwrap();
     for selector in [
         serde_json::json!({"kind": "pid", "pid": 4242}),
@@ -53,10 +53,10 @@ fn scope_contains_only_identity_revision_and_selector_and_rejects_removed_fields
     ] {
         let expected = serde_json::json!({
             "scopeId": complete["scope"]["scopeId"],
-            "revision": complete["scope"]["revision"],
+            "process": complete["scope"]["process"],
             "selector": selector,
         });
-        let scope: PreparedScope = serde_json::from_value(expected.clone()).unwrap();
+        let scope: BindingScope = serde_json::from_value(expected.clone()).unwrap();
         scope.validate().unwrap();
         assert_eq!(serde_json::to_value(scope).unwrap(), expected);
     }
@@ -74,7 +74,7 @@ fn scope_contains_only_identity_revision_and_selector_and_rejects_removed_fields
     ] {
         let mut binding = complete.clone();
         binding["scope"][key] = value;
-        assert!(serde_json::from_value::<PreparedScope>(binding["scope"].clone()).is_err());
+        assert!(serde_json::from_value::<BindingScope>(binding["scope"].clone()).is_err());
         assert!(serde_json::from_value::<PreparedBinding>(binding).is_err());
     }
 }
@@ -224,7 +224,7 @@ fn removed_legacy_fields_and_unknown_fields_are_rejected() {
 
         let mut scope = complete.clone();
         scope["scope"]["retired"] = retired;
-        assert!(serde_json::from_value::<PreparedScope>(scope["scope"].clone()).is_err());
+        assert!(serde_json::from_value::<BindingScope>(scope["scope"].clone()).is_err());
         assert!(serde_json::from_value::<PreparedBinding>(scope).is_err());
     }
 

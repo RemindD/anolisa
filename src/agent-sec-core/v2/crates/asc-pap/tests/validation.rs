@@ -76,18 +76,21 @@ fn validated_construction_still_produces_valid_policy_and_scope_snapshots() {
         assert_eq!(policy.policy_name, name);
         policy.validate().unwrap();
     }
-    for selector in [
-        ScopeSelector::Pid { pid: 1 },
-        ScopeSelector::CgroupId { cgroup_id: 1 },
-    ] {
-        pap.create_scope(&selector).unwrap().validate().unwrap();
-    }
+    let mut scope = asc_policy_types::scope::PreparedScope {
+        scope_id: binding().scope.scope_id,
+        selector: ScopeSelector::Pid { pid: 1 },
+        policy_snapshots: vec![binding().policy],
+        status: asc_policy_types::scope::ScopeStatus::Active,
+    };
+    scope.validate().unwrap();
+    scope.policy_snapshots.clear();
+    assert!(scope.validate().is_err());
     for (selector, path) in [
         (ScopeSelector::Pid { pid: 0 }, "pid"),
         (ScopeSelector::CgroupId { cgroup_id: 0 }, "cgroupId"),
     ] {
         assert_eq!(
-            pap.create_scope(&selector),
+            pap.create_scope_assignment(&selector, &[]),
             Err(PapError::InvalidScope(ValidationError::new(
                 path,
                 "must be positive"

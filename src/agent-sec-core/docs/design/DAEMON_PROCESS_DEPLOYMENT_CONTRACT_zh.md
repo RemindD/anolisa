@@ -447,7 +447,7 @@ CRUD request 不传递目标凭据。每次 reconcile 尝试创建 Client 并读
 
 启动顺序是构造 Repository、Client factory/核心并尝试启动 Runtime，再开放 UDS 请求。
 Runtime 初始化失败时记录安全错误并注入不可用通知入口，Binding mutation 返回既有准入错误；
-Policy/Scope CRUD、读查询及其它 daemon 服务继续工作。不能以不注入通知入口的方式静默接受 Binding 写请求。目标尚未
+Policy CRUD、Scope 查询/删除及其它 daemon 服务继续工作。不能以不注入通知入口的方式静默接受新 Scope。目标尚未
 READY 或暂时不可连接也不阻止 daemon 启动。shutdown 先停止 UDS 新准入并 drain 已准入请求，再停止 Runtime
 领取和扫描，最多等待 30s join 活跃调用；随后沿用进程外层 1s Tokio shutdown 上限。超时
 不会伪装成同步调用已取消或清理成功。单次 reconcile panic 在 worker 调用边界隔离：
@@ -595,3 +595,25 @@ RPM 安装套件通过 914 项，并单独通过修正后的 systemd 生命周�
 DPROC-022 的 executable fixture 为
 `tests/v2/e2e/test_observability_record_e2e.py::test_v1_cli_records_persist_and_survive_restart`；
 验证源码二进制的目录权限、双落盘与进程重启，不替代 RPM/systemd 或跨 UID 验收。
+
+## 13. [TARGET V2][IMPLEMENTED, PROCESS-LOCAL] 通过 Scope 启动 discovery
+
+对象语义见 [生命周期契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md)（SCOPE-CR-002）：Policy
+保留 revision；Scope 无 revision，保存所选版本完整快照；系统自动创建并清理子 Binding。
+删除模板不撤销分配。Policy Administrator、可信 peer、UID/socket 和进程部署边界不变。
+
+```bash
+agent-sec-cli --socket "$SOCKET" scope create --process-name openclaw --policy-id "$POLICY_ID" --policy-revision 1
+agent-sec-cli --socket "$SOCKET" scope create --executable /opt/agent/bin/agent --policy-id "$POLICY_ID" --policy-revision 1
+agent-sec-cli --socket "$SOCKET" scope delete --scope-id "$SCOPE_ID"
+agent-sec-cli --socket "$SOCKET" scope retry --scope-id "$SCOPE_ID"
+```
+
+RPC 支持多策略，CLI 当前创建单策略 assignment。PID 也要求策略引用；cgroup 当前拒绝。
+Scope update、Scope revision 参数及手动 Binding mutation 已移除，应成套升级 CLI/daemon。
+新 Scope 要求 Reconciler readiness；Policy 操作、查询和 Scope 删除仍可受理。删除会关闭
+准入、join worker 并异步清理全部部署；响应 completed 为 true 才表示回收完成。
+
+单进程 Scope/Binding 快照不构成 daemon 重启恢复证据。procfs/runtime/Adapter 的 scripted
+Client 组合验证自动 Binding 和清理；bootstrap SIGTERM 验证任务停止，CLI/UDS 验证权限与
+公开接口。本节不声明 RPM/systemd 实测、真实 AgentSight 或 kernel enforcement。

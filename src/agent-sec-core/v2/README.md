@@ -38,14 +38,14 @@ Individual reconcile panics are caught per attempt; core bookkeeping preserves
 completed results and cleanup responsibility, and the worker continues other Bindings.
 Unconfirmed outcomes stop that ID's automatic execution until a new notification.
 Reconciliation startup, timer or worker scheduling failure leaves the daemon serving queries and
-other services, while Binding mutations are rejected using the existing unavailable
-admission error. Policy/Scope CRUD is independent of reconciliation readiness.
+other services, while new Scope assignments are rejected using the unavailable admission error.
+Policy writes, queries and Scope deletion remain available.
 Individual Binding errors are rescheduled without closing PAP admission; exhausted
 CAS contention is distinct from storage unavailability. There is no automatic restart of a failed reconciliation runtime.
-CRUD responses confirm intent admission, and GET/LIST expose subsequent completion.
+Scope responses confirm intent admission, and GET/LIST expose subsequent completion.
 No process restart recovery is available with memory storage.
 
-The Rust `agent-sec-cli` exposes all 15 Policy, Scope and Binding CRUD commands through
+The Rust `agent-sec-cli` exposes 12 Policy, Scope and Binding administration commands through
 an explicit daemon socket. Its Cargo package and source directory remain `asc-cli`;
 the executable target is `agent-sec-cli`. See the [CLI reference](../../../docs/user-guide/en/agent-security/agent-sec-core/policy-cli.md)
 and [CLI acceptance record](../docs/design/POLICY_CLI_ACCEPTANCE_zh.md).
@@ -60,7 +60,7 @@ The current crates are:
   explicitly unsupported until their lowering and Adapter evidence are defined.
   The implemented template covers path-entry deletion only; rename, move, and
   other namespace mutations are outside its contract.
-- `asc-policy-adapter-agentsight`: deterministic file-deletion and PID-Scope
+- `asc-policy-adapter-agentsight`: deterministic file-deletion and pinned-process
   translation into an AgentSight/ActPlane plan, with semantic and encoding checks.
   Compiler acceptance belongs to the deployed target, not an embedded compiler.
 - `asc-agentsight-client`: health-gated AgentSight apply/delete transport for
@@ -74,13 +74,13 @@ The current crates are:
   repository, Adapter and Client ports, with fresh preparation on every attempt.
 - `asc-policy-runtime`: bounded Binding queue, workers, retry timers, compensation
   scans and owned shutdown; the daemon supplies target-specific composition.
-- `asc-pap`: transport-independent current-record Policy/Scope/Binding CRUD with
-  monotonic revisions over explicit compiler and repository ports.
+- `asc-pap`: transport-independent revisioned Policies, immutable Scope assignments and
+  system-owned Binding admission over compiler and repository ports.
 - `asc-pap-repository-memory`: explicitly temporary process-local Repository
   adapter used only to keep daemon/PAP integration runnable before durable
   persistence lands; also implements consistent reads and reconciliation patches over PAP's Binding map.
 - `asc-daemon-protocol`: strict request/response contracts and an explicit
-  allowlist for 15 Policy, Scope, and Binding administration methods.
+  allowlist for 12 Policy, Scope, and Binding administration methods.
 - `asc-daemon-handler`: inbound protocol adapter that decodes daemon requests,
   applies server-owned authorization, routes PAP methods, and projects protocol
   responses without depending on a concrete Repository or compiler.
@@ -232,103 +232,72 @@ rejection path remain independent of PAP, its compiler, and its repository.
 
 ## PAP RPC contract
 
-The closed method inventory contains create, update, exact get, bounded list,
-and delete for each of Policy, Scope, and Binding. Successful responses are
-`{requestId,result}` and failures are `{requestId,error}`. The result is the
-domain record itself; list is the sole shared `{items,total}` shape. Exact inputs
-and output type names are frozen by
-`asc-daemon-protocol/tests/fixtures/pap-methods.json`.
+The closed inventory has 12 methods: Policy create/update/get/list/delete; Scope
+create/get/list/delete/retry; Binding get/list. Scope update and Binding mutation
+methods return `unknown_method`. Scope requests no longer accept a revision.
+Success uses `{requestId,result}` and failure uses `{requestId,error}`. Results
+are `PreparedPolicy`, `PreparedScope`, `BindingView`, `{items,total}` lists, or
+`ScopeDeletion {scopeId,completed}` for deletion.
 
-The stateful `asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json` scenario
-freezes complete request and response values for all 15 methods, including
-Canonical Policy IR, Scope templates, embedded Binding snapshots, revisions,
-statuses, and deterministic digests. Server-generated request and resource UUIDs
-use named placeholders so the same fixture can assert their format and identity
-flow across later requests. A UDS integration E2E always executes the complete
-scenario with a server-authorized test principal. The `asc-daemon` bootstrap E2E
-also starts the real binary with `--policy-admin-uid` set to the test UID and
-executes the complete scenario without root. A separate default-config case
-verifies non-root `permission_denied` (or full CRUD when root). CLI process tests
-use an in-process daemon service; a combined CLI and daemon binary E2E is deferred.
+Exact inputs/results are frozen in `asc-daemon-protocol/tests/fixtures/pap-methods.json`.
+The stateful `pap-crud-e2e.json` fixture covers assignment admission, template
+changes, saved snapshots, queries and deletion. Rust CLI/UDS/bootstrap tests and
+`tests/v2/e2e/test_policy_cli_e2e.py` exercise the public surface. Real procfs to
+PAP/runtime/Adapter integration uses a scripted Client; AgentSight HTTP tests use
+a mock endpoint. These checks do not prove live kernel enforcement.
 
-New Binding intent normally returns `status: {phase: PENDING_APPLY}` for create/update
-or `status: {phase: PENDING_DELETE}` for delete; no-ops return the current lifecycle.
-After saving intent, queue rejection conditionally records Failed and `status.error`
-and returns the complete BindingView in the same result envelope. Mutation callers
-must inspect status.phase; the CLI prints Failed results to stdout and exits 1,
-while GET/LIST remain successful queries. A concurrent worker claim
-returns the current record; unconfirmed termination returns internal. These
-successful responses prove PAP acceptance only. They do not
-mean target enforcement or deletion completed. LIST is integration-ready but is
-not distribution-ready until a server-owned aggregate encoded-byte budget is
-passed through Repository, PAP, and transport.
+Policy and complete Scope admission reject encoded records larger than 1 MiB
+before mutation. List pages stop at a 3 MiB item budget, leaving room in the default
+4 MiB response frame. Advance offset by `items.len()`, not by the requested limit.
+`total` is the count before pagination. Large templates can therefore pass CLI file
+validation but fail daemon admission.
 
-TODO(policy-response-bounds): direct `PreparedPolicy` and `BindingView` mutation
-results can exceed the response-frame limit after process-local state has already
-changed, while embedded snapshots can also make Binding GET/LIST oversized.
-Before a durable Repository or distribution gate, converge the public result and
-storage shapes and enforce server-owned encoded-size budgets for mutations,
-single-record GET, and LIST; increasing the transport limit alone is not the fix.
+## Policy revisions and immutable Scope assignments
 
-## Current-record revision boundary
+The [lifecycle contract](../docs/design/POLICY_SCOPE_BINDING_CONTRACT_zh.md) is implemented
+with process-local storage. Policies retain a stable ID and only their current
+complete record. Changed content advances a never-reused revision; identical content
+is idempotent. Deletion retains the allocation head. Old revisions are not queryable.
 
-Policy, Scope, and Binding each retain one current record per stable identity.
-Changed writes advance a positive, never-reused revision and atomically replace
-the previous current content. An exact GET for an older revision returns
-not-found, and LIST returns at most one current record per identity.
+Scope creation receives `policyTemplates: [{policyId,policyRevision}]` and stores
+full server-resolved `policySnapshots`. The repository verifies all snapshots under
+the same lock as Policy mutation. Concurrent update/deletion either follows successful
+admission or causes it to fail; it never substitutes a newer revision. Existing
+Scopes and future matching instances keep their saved snapshots after Policy changes.
+A Scope has no revision, and its selector/policies cannot be updated.
 
-Deleting current Policy or Scope content retains its allocation head as a
-tombstone, so a later update of the same identity advances rather than reuses a
-revision. A `PreparedBinding` embeds complete Policy and Scope snapshots; an
-existing Binding therefore remains deterministic after either source record is
-updated or deleted. A new Binding can select only a currently retained source
-revision. PAP does not expose historical resource-version CRUD; durable
-operation/audit history belongs to later work packages.
+Name/path selectors continuously match processes; PID selection pins its first
+observed instance. Cgroup assignment is unsupported. Discovery submits complete
+known instance sets to PAP, which deduplicates and writes real Binding intents.
+Unreadable processes remain selected; only confirmed exit or mismatch retires them.
+Each Binding contains one Policy snapshot plus Scope provenance and a process
+identity, not a copy of all the Scope's policies. Boot ID, PID namespace, PID and
+start time remain fixed through retries; the Client rechecks them before target I/O.
 
-## Binding spec and lifecycle boundary
+## Scope deletion and Binding lifecycle
 
-`PreparedBinding` is an immutable Policy/Scope snapshot. `(binding_id,
-binding_revision)` identifies that spec; `BindingView { spec, status }` projects
-its current lifecycle. Only spec changes increment `bindingRevision`.
+Deleting a Scope atomically marks it `DELETING` and closes child admission, then
+cancels/joins discovery and requests deletion of every owned Binding. Existing
+Reconciler workers serialize target calls, preserve observations from an in-flight
+Apply, and clean all known or uncertain deployments. An old Apply cannot restore
+`READY` over deletion intent. The Scope and snapshots remain until all owned
+Bindings are removed after confirmed cleanup.
 
-| Current | Request | Result | Revision |
-|---|---|---|---|
-| absent | CREATE | fresh server-generated ID, `PENDING_APPLY` | 1 |
-| `PENDING_APPLY`, `APPLYING`, `READY` | identical UPDATE | no-op | unchanged |
-| `APPLY_FAILED` | identical UPDATE | `PENDING_APPLY`, clear status.error, retain cleanup targets | unchanged |
-| `PENDING_APPLY`, `READY`, `APPLY_FAILED` | changed-spec UPDATE | `PENDING_APPLY`, prepare afresh, retain cleanup targets | +1 |
-| `APPLYING` | changed-spec UPDATE | `OperationInProgress` | unchanged |
-| `PENDING_DELETE`, `DELETING`, `DELETE_FAILED` | any UPDATE | `OperationInProgress`; deletion is irreversible | unchanged |
-| Apply-side states, `DELETE_FAILED` | DELETE | `PENDING_DELETE`, clear status.error, retain spec/targets | unchanged |
-| `PENDING_DELETE`, `DELETING` | DELETE | no-op | unchanged |
-| absent | GET / UPDATE / DELETE | `NotFound` | — |
+`scope delete` returns `completed:false` while cleanup remains; `completed:true`
+means the Scope was removed. Repeating it does not reset retry budgets. An ID-only
+tombstone makes completed deletion idempotent during this daemon lifetime. Other
+Scopes and the source Policy are unaffected. `scope retry` resets only failed
+owned Bindings (`APPLY_FAILED`/`DELETE_FAILED`) to pending, preserving deployment
+responsibility. Queries remain successful even when status reports failure.
 
-Workers claim pending work as `APPLYING` or `DELETING`. Apply success becomes
-`READY`; retryable failure returns to the corresponding pending state with a
-WorkQueue-owned deadline; permanent/exhausted failure becomes `APPLY_FAILED` or `DELETE_FAILED`.
-Attempt counts and deadlines are process-local; explicit pending requests without
-an error reset that progress on the next attempt. The table describes Repository
-admission before queue notification; queue rejection can replace Pending with Failed.
-Delete success atomically removes the Binding and its deployment records only after
-all targets are confirmed absent. `Deleted` remains an internal completion marker
-in the state machine, never a persisted current status. LIST omits removed rows.
-Re-deployment uses CREATE with a new ID at revision 1.
+Bindings start at internal `bindingRevision:1`. Scope/instance lifecycle drives
+`PENDING_APPLY` -> `APPLYING` -> `READY` and `PENDING_DELETE` -> `DELETING` -> removal.
+Permanent or exhausted failures remain queryable. Reconciler CAS, serial execution,
+retry budgets and lower-level changed-spec revision regression coverage are retained;
+there is no public changed-spec Binding mutation. Queue notifications carry only IDs.
 
-PAP writes compare the complete expected Binding under the same transaction as
-request admission. `update_binding(None, next)` inserts a fresh ID;
-`update_binding(Some(expected), next)` updates only an existing record. It cannot
-resurrect a record removed between the service read and repository write.
-Reconciler patches compare revision/phase and the status/error or deployment fields
-being written; attempt counts and deadlines are not Repository fields. Patches carry no spec and cannot erase
-a newer intent or target observation. A Delete accepted while Apply is running
-keeps the same revision, and the old Apply still records its target observations
-before the next cleanup attempt.
-
-PAP request semantics, the synchronous core and background Runtime are tested with
-the memory repository. The daemon wires post-commit notifications and timers
-through an attempt-local Client factory. PAP acceptance still does not imply target
-completion. Full process E2E, durable storage, cross-process recovery and outbox
-remain separate work. The compiler is limited to the golden-backed
+The repository and retry timers are process-local. Durable storage, restart recovery
+and outbox guarantees remain separate work. The compiler currently supports the
 `prevent_file_deletion` lowering described above.
 
 Dependency sources, TLS/unsafe boundaries and release audit requirements are

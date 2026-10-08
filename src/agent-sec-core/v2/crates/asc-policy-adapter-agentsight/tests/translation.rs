@@ -5,7 +5,6 @@ use asc_policy_adapter_agentsight::{
 };
 use asc_policy_types::Validate;
 use asc_policy_types::binding::PreparedBinding;
-use asc_policy_types::identifiers::Revision;
 use asc_policy_types::ir::SubjectRemediation;
 use asc_policy_types::resource::{FileResolution, PathMatcher, ResourceSelector};
 use asc_policy_types::scope::ScopeSelector;
@@ -68,7 +67,10 @@ fn complete_binding_translates_to_the_frozen_agentsight_output() {
     );
     assert_eq!(
         decoded_plan.scope,
-        AgentSightScopePlan::ProcessTree { root_pid: 4242 }
+        AgentSightScopePlan::ProcessTree {
+            root_pid: 4242,
+            process: complete_binding_fixture().scope.process
+        }
     );
     assert_eq!(plan.format, AGENTSIGHT_BINDING_PLAN_FORMAT);
 }
@@ -82,22 +84,21 @@ fn translation_is_deterministic_for_the_complete_binding() {
 }
 
 #[test]
-fn source_preserves_scope_revision_independently_of_binding_revision() {
-    for revision in [3, 4] {
-        let mut binding = complete_binding_fixture();
-        binding.scope.revision = Revision::new(revision).unwrap();
-        let TranslationOutcome::Translated(plan) = AgentSightAdapter.translate(&binding).unwrap()
-        else {
-            panic!("expected translated target plan");
-        };
-        let decoded: AgentSightBindingPlan = serde_json::from_slice(&plan.content).unwrap();
-        assert_eq!(decoded.source.scope_revision, binding.scope.revision);
-        assert_eq!(decoded.source.binding_revision, binding.binding_revision);
-        assert_ne!(
-            decoded.source.scope_revision,
-            decoded.source.binding_revision
-        );
-    }
+fn source_preserves_assignment_and_pinned_instance() {
+    let binding = complete_binding_fixture();
+    let TranslationOutcome::Translated(plan) = AgentSightAdapter.translate(&binding).unwrap()
+    else {
+        panic!("expected plan")
+    };
+    let decoded: AgentSightBindingPlan = serde_json::from_slice(&plan.content).unwrap();
+    assert_eq!(decoded.source.scope_id, binding.scope.scope_id);
+    assert_eq!(decoded.source.binding_revision, binding.binding_revision);
+    let value: serde_json::Value = serde_json::from_slice(&plan.content).unwrap();
+    assert!(value["source"].get("scopeRevision").is_none());
+    assert_eq!(
+        value["scope"]["process"],
+        serde_json::to_value(&binding.scope.process).unwrap()
+    );
 }
 
 #[test]

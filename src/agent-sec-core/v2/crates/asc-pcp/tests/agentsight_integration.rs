@@ -45,7 +45,7 @@ fn spec(revision: u32) -> PreparedBinding {
     ))
     .unwrap();
     spec.binding_revision = Revision::new(revision).unwrap();
-    spec.scope.revision = Revision::new(revision).unwrap();
+    spec.policy.policy_name = format!("prevent deletion {revision}");
     spec
 }
 
@@ -422,14 +422,12 @@ fn result_storage_failure_reprepares_and_safely_replays_http() {
 }
 
 #[test]
-fn retry_prepares_current_process_identity_without_storing_it_in_cleanup() {
+fn retry_rejects_reused_process_identity_and_retains_unknown_cleanup() {
     let mut schedule = AttemptSchedule::default();
     for change_boot in [false, true] {
         let repo =
             Arc::new(ProcessLocalPapRepository::with_binding_states(vec![initial()]).unwrap());
         let wire = Wire::new([
-            Ok(response(200, HEALTH)),
-            Err(AgentSightTransportError::Unavailable),
             Ok(response(200, HEALTH)),
             Err(AgentSightTransportError::Unavailable),
         ]);
@@ -465,19 +463,14 @@ fn retry_prepares_current_process_identity_without_storing_it_in_cleanup() {
         clock.0.store(100, Ordering::SeqCst);
         assert_eq!(
             core.reconcile(&id, &mut schedule).unwrap(),
-            Disposition::RetryAt { at: 250 }
+            Disposition::Failed {
+                error: Failure::new(FailureKind::Rejected, "AGENTSIGHT_PROCESS_IDENTITY_CHANGED")
+            }
         );
         let after = repo.read(&id).unwrap().unwrap();
         assert_eq!(after.binding.spec, previous.binding.spec);
         assert_eq!(after.deployments, previous.deployments);
-        assert_eq!(schedule.attempts_started, 2);
-        let requests = wire.requests();
-        assert_eq!(requests.len(), 4);
-        let body: Value = serde_json::from_slice(requests[3].body.as_ref().unwrap()).unwrap();
-        assert_eq!(
-            body["process_start_time"],
-            if change_boot { 987_654 } else { 987_655 }
-        );
+        assert_eq!(wire.requests().len(), 2);
         let cleanup: Value = serde_json::from_slice(&after.deployments[0].target.cleanup).unwrap();
         assert_eq!(
             cleanup,
