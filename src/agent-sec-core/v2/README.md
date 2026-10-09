@@ -250,8 +250,16 @@ Exact inputs/results are frozen in `asc-daemon-protocol/tests/fixtures/pap-metho
 The stateful `pap-crud-e2e.json` fixture covers assignment admission, template
 changes, saved snapshots, queries and deletion. Rust CLI/UDS/bootstrap tests and
 `tests/v2/e2e/test_policy_cli_e2e.py` exercise the public surface. Real procfs to
-PAP/runtime/Adapter integration uses a scripted Client; AgentSight HTTP tests use
-a mock endpoint. These checks do not prove live kernel enforcement.
+PAP/runtime/Adapter component tests use a scripted Client.
+`tests/v2/e2e/test_policy_delivery_e2e.py` additionally runs real CLI and daemon
+processes through SQLite, discovery, the Adapter and the production Client to an
+HTTP mock at `127.0.0.1:7396`. It reuses the Binding/template and AgentSight wire
+fixtures, checks delivery of the Scope's saved revision after a template update,
+then verifies remote deletion and local Scope/Binding cleanup. Run it in the root
+E2E environment with that port available; an existing token file is preserved,
+and only a token created by the test is removed. The existing
+`make test-e2e-rpm-v2` target collects it. These checks do not prove live kernel
+enforcement.
 
 Policy and complete Scope admission reject encoded records larger than 1 MiB
 before mutation. List pages stop at a 3 MiB item budget, leaving room in the default

@@ -604,6 +604,15 @@ root/CAP_CHOWN/mount 专用测试。随后新增批量事务、迁移入口及�
 共享生成器验证 `STRICT` 类型和表级约束，Policy 初始化验证停止屏障、完整写回执、实例唯一性及
 Scope 外键限制；事件库既有建表与旧版本迁移 fixtures 均通过。
 
+补充 [CLI→daemon→HTTP mock E2E](../../tests/v2/e2e/test_policy_delivery_e2e.py)：真实二进制、
+SQLite、procfs、Adapter 和 Client 贯穿同一用例；Scope 建立后先更新模板，再启动匹配进程，
+验证下发旧 revision、完整请求 fixture、Ready 数据行、远端删除及 Binding/Scope 回收。
+与既有 Policy CLI 测试合跑 **3 passed、0 failed**，环境为 Python 3.11.6、source-built
+debug 二进制及隔离的 user/mount/network namespace，使用私有 `/tmp`、`/var/log` 和 loopback。
+默认 AgentSight 端口由 mock 占用，不新增配置入口；已有 token 保留，测试临时创建的 token
+才由测试清理。预置 token 的独立复跑 **1 passed**，确认文件内容、inode、修改时间及权限均
+保持不变。该证据不等同于真实 AgentSight/内核验收，也没有新增崩溃窗口覆盖。
+
 | 覆盖 | 可执行证据及范围 |
 |---|---|
 | PSQL-01～05 | [共享契约](../../v2/crates/asc-policy-repository-sqlite/tests/contracts.rs) 在 memory/SQLite 两个后端验证 ABA、迟到入队失败、旧 Apply 观察合并、no-op 版本、去重/排序/分页、并发模板更新/删除与 Scope 准入、32 Scope 上限；PAP/PCP 的既有完整 fixtures 同步版本并回归 |

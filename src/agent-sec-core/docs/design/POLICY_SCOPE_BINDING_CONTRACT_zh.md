@@ -173,6 +173,10 @@ SQLite 使用实例/策略身份的唯一约束，准入事务在已保存集合
   procfs、PAP、runtime、Adapter 和 scripted Client，覆盖模板更新/删除后新增进程及最终回收。
 - 协议/CLI：完整 method/错误/scenario fixtures、UDS、bootstrap、CLI process 和 Python
   `test_policy_assignment_snapshot_and_cleanup`；包括重复已完成删除、旧接口拒绝。
+- 完整下发链路：[HTTP mock E2E](../../tests/v2/e2e/test_policy_delivery_e2e.py) 经真实
+  CLI/daemon、SQLite、discovery、Adapter 和 Client，验证模板更新后新发现进程仍使用 Scope
+  的旧快照，完整 HTTP 请求匹配既有 fixture；Ready 落库后删除 Scope，验证远端 DELETE
+  与本地 Binding/Scope 回收。mock 只替代 AgentSight 服务端，不验证实际内核执行。
 - 大小：超限单记录保存前拒绝；列表遵守字节预算且分页可继续。
 
 运行门禁：在 `v2/` 执行 `cargo fmt --all -- --check`、

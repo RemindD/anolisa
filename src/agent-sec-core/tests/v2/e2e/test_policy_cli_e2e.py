@@ -1,6 +1,6 @@
 """Real CLI/daemon assignment lifecycle over UDS, without a matching target.
 
-Target execution is covered by the Rust procfs/runtime/Client composition tests.
+See test_policy_delivery_e2e.py for real discovery and HTTP delivery to a mock.
 """
 
 import json

@@ -461,10 +461,14 @@ READY 或暂时不可连接也不阻止 daemon 启动。shutdown 先停止 UDS �
 | ID | 必须验证 | 可执行 fixture |
 |---|---|---|
 | DPROC-020 | 默认凭据不参与 daemon 启动；PAP 读查询和信号退出可用；reconciliation 不可用时仅拒绝 Binding 写入，Policy/Scope CRUD 仍可完成 | `v2/apps/asc-daemon/tests/bootstrap.rs`；`tests/reconciliation.rs::unavailable_reconciliation_only_rejects_binding_writes` |
-| DPROC-021 | daemon 注入真实 Adapter/核心/Runtime，PAP 接受后下发，Delete 清理及 owned shutdown | `v2/apps/asc-daemon/tests/reconciliation.rs::configured_composition_delivers_pap_intent_and_joins_its_workers` |
+| DPROC-021 | daemon 注入真实 Adapter/核心/Runtime，PAP 接受后下发，Delete 清理及 owned shutdown；真实 CLI/daemon 经生产 Client 发出完整 HTTP 请求 | `v2/apps/asc-daemon/tests/reconciliation.rs::configured_composition_delivers_pap_intent_and_joins_its_workers`；`tests/v2/e2e/test_policy_delivery_e2e.py::test_discovered_binding_delivers_saved_revision_and_cleans_up` |
 
-DPROC-021 是进程内装配验收，Client 使用 scripted port；完整 CLI→daemon 进程 E2E 是单独 PR，
-不能由此宣称真实 AgentSight/kernel 生效或持久化恢复通过。
+DPROC-021 的 Rust 组合测试使用 scripted Client；Python E2E 使用真实 CLI/daemon、SQLite、
+procfs、Adapter 和生产 Client，仅 AgentSight HTTP 服务端为 mock。mock 监听默认地址，
+验证 health→apply→delete 请求，apply 内容与既有 fixture 完整比较，仅替换动态身份字段。
+已有 token 文件保留；文件不存在时独占创建测试 token 并在结束后删除。不新增 daemon 配置参数。
+测试要求隔离的 root E2E 环境及空闲的 7396 端口；不能由此宣称真实 AgentSight/kernel
+生效或崩溃恢复通过。
 
 ## 10. 当前实现证据
 
