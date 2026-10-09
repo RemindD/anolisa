@@ -830,3 +830,134 @@ fn batch_discovery_and_cleanup_keep_all_children_atomic() {
         );
     }
 }
+
+#[test]
+fn general_policy_rules_survive_reopen_in_current_scope_and_binding_snapshots() {
+    let dir = private_dir();
+    let path = dir.path().join("policy-state.db");
+    let repo = SqlitePolicyRepository::open(&path).unwrap();
+    let binding: PreparedBinding = serde_json::from_str(include_str!(
+        "../../asc-policy-types/tests/fixtures/prepared-binding.json"
+    ))
+    .unwrap();
+    let mut policy = binding.policy;
+    policy.template = serde_json::from_value(serde_json::json!({
+        "specVersion":"0.1", "description":"Reusable policy requiring review",
+        "rules":[{"effect":"require_confirmation","category":"file","action":"exec",
+            "target":{"type":"file","path":"/usr/bin/git"},
+            "where":{"and":[{"argsPrefix":{"eq":["push"]}},{"cwd":{"eq":"/workspace"}}]},
+            "previous":{"category":"file","action":"read","target":{"type":"file","path":"/secrets/**"}},
+            "because":"Review before pushing"}]
+    })).unwrap();
+    repo.put_policy(&policy).unwrap();
+    let mut scopes = Vec::new();
+    let mut bindings = Vec::new();
+    for id in ["assignment-one", "assignment-two"] {
+        let scope = PreparedScope {
+            scope_id: ResourceId::new(id).unwrap(),
+            selector: binding.scope.selector.clone(),
+            policy_snapshots: vec![policy.clone()],
+            status: ScopeStatus::Active,
+        };
+        repo.put_scope(&scope).unwrap();
+        bindings.extend(
+            repo.sync_scope_instances(
+                &scope.scope_id,
+                std::slice::from_ref(&binding.scope.process),
+            )
+            .unwrap(),
+        );
+        scopes.push(scope);
+    }
+    drop(repo);
+    let repo = SqlitePolicyRepository::open(&path).unwrap();
+    assert_eq!(
+        repo.get_policy(&policy.policy_id, policy.revision).unwrap(),
+        policy
+    );
+    for scope in &scopes {
+        assert_eq!(repo.get_scope(&scope.scope_id).unwrap(), *scope);
+    }
+    for receipt in &bindings {
+        let restored = repo
+            .get_binding_state(&receipt.spec.binding_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.binding.spec.policy, policy);
+        assert_eq!(restored.binding.spec, receipt.spec);
+    }
+    repo.delete_policy_revision(&policy.policy_id, policy.revision)
+        .unwrap();
+    drop(repo);
+    let repo = SqlitePolicyRepository::open(&path).unwrap();
+    for scope in &scopes {
+        assert_eq!(repo.get_scope(&scope.scope_id).unwrap(), *scope);
+    }
+    for receipt in &bindings {
+        assert_eq!(
+            repo.get_binding_state(&receipt.spec.binding_id)
+                .unwrap()
+                .unwrap()
+                .binding
+                .spec
+                .policy,
+            policy
+        );
+    }
+}
+
+#[test]
+fn legacy_policy_payloads_are_rejected_without_discarding_saved_responsibility() {
+    for (table, column, json_path) in [
+        ("policies", "current_json", "$.template"),
+        ("scopes", "assignment_json", "$.policySnapshots[0].template"),
+        ("bindings", "spec_json", "$.policy.template"),
+    ] {
+        let dir = private_dir();
+        let path = dir.path().join("policy-state.db");
+        let repo = SqlitePolicyRepository::open(&path).unwrap();
+        let initial = seed(&repo);
+        let mut registered = initial.clone();
+        registered.deployments.push(Deployment {
+            target: target(),
+            revision: initial.binding.spec.binding_revision,
+            presence: Presence::Unknown,
+            last_confirmed: None,
+        });
+        repo.compare_exchange_binding_state(&initial, &BindingStateWrite::new(registered))
+            .unwrap();
+        if table != "policies" {
+            repo.delete_policy_revision(
+                &initial.binding.spec.policy.policy_id,
+                initial.binding.spec.policy.revision,
+            )
+            .unwrap();
+        }
+        drop(repo);
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute(
+            &format!("UPDATE {table} SET {column}=json_set({column},?1,json(?2))"),
+            rusqlite::params![
+                json_path,
+                r#"{"kind":"prevent_file_deletion","files":["/protected"]}"#
+            ],
+        )
+        .unwrap();
+        let read = |db: &rusqlite::Connection| -> (String, String) {
+            (
+                db.query_row(&format!("SELECT {column} FROM {table}"), [], |r| r.get(0))
+                    .unwrap(),
+                db.query_row("SELECT deployments_json FROM bindings", [], |r| r.get(0))
+                    .unwrap(),
+            )
+        };
+        let before = read(&db);
+        drop(db);
+        assert!(
+            SqlitePolicyRepository::open(&path).is_err(),
+            "{table} legacy payload must not be silently accepted"
+        );
+        let db = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(read(&db), before);
+    }
+}

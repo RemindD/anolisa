@@ -16,9 +16,25 @@ def test_help_and_version_do_not_require_a_daemon(cli):
 
 
 def _write_template(tmp_path: Path, name: str, files: list[str]) -> str:
-    """Writes a prevent_file_deletion policy template and returns its path."""
+    """Writes a reusable file-deletion policy and returns its path."""
     path = tmp_path / name
-    path.write_text(json.dumps({"kind": "prevent_file_deletion", "files": files}))
+    path.write_text(
+        json.dumps(
+            {
+                "specVersion": "0.1",
+                "rules": [
+                    {
+                        "effect": "block",
+                        "category": "file",
+                        "action": "write",
+                        "target": {"type": "file", "path": path},
+                        "where": {"operation": {"eq": "delete"}},
+                    }
+                    for path in files
+                ],
+            }
+        )
+    )
     return str(path)
 
 

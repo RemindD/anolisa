@@ -1,3 +1,9 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -693,7 +699,7 @@ fn invalid_param_values(kind: ParamKind) -> Vec<(&'static str, Value, &'static s
         ParamKind::PolicyTemplate => vec![(
             "wrong type",
             Value::Null,
-            "invalid type: null, expected internally tagged enum PolicyTemplate",
+            "invalid type: null, expected struct PolicyTemplate",
         )],
         ParamKind::PolicyReferences => vec![
             (
@@ -872,7 +878,7 @@ async fn run_frozen_error_cases(path: &Path) -> Vec<String> {
             "method": "policy.templates.create",
             "params": {
                 "policyName": "existing-policy",
-                "template": {"kind": "prevent_file_deletion", "files": ["/existing"]}
+                "template": {"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/existing"}, "where": {"operation": {"eq": "delete"}}}]}
             }
         }),
     )
@@ -1104,10 +1110,7 @@ async fn real_uds_accepts_domain_and_pagination_boundary_values() {
             "method": "policy.templates.create",
             "params": {
                 "policyName": "n".repeat(256),
-                "template": {
-                    "kind": "prevent_file_deletion",
-                    "files": [maximum_path]
-                }
+                "template": file_policy(vec![maximum_path])
             }
         }),
     )] {
@@ -1146,7 +1149,7 @@ async fn real_uds_accepts_domain_and_pagination_boundary_values() {
         json!({"method": "policy.templates.update", "params": {
             "policyId": maximum_id,
             "policyName": "valid",
-            "template": {"kind": "prevent_file_deletion", "files": ["/"]}
+            "template": {"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/"}, "where": {"operation": {"eq": "delete"}}}]}
         }}),
         json!({"method": "policy.templates.get", "params": {
             "id": "a", "revision": u32::MAX
@@ -1176,12 +1179,7 @@ async fn real_uds_distinguishes_stale_references_and_closed_scope_admission() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
     let pap = PapService::new(repository.clone()).with_scope_discovery(Arc::new(Discovery));
     let original = pap
-        .create_policy(
-            "v1",
-            &PolicyTemplate::PreventFileDeletion {
-                files: vec!["/a".into()],
-            },
-        )
+        .create_policy("v1", &file_policy(vec!["/a".into()]))
         .unwrap();
     let scope = pap
         .create_scope_assignment(

@@ -52,7 +52,7 @@ fn equals_syntax_option_looking_values_and_awkward_paths_are_preserved() {
     let file = directory.0.join("policy=a b.json");
     std::fs::write(
         &file,
-        br#"{"kind":"prevent_file_deletion","files":["/work/a b"]}"#,
+        br#"{"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/work/a b"}, "where": {"operation": {"eq": "delete"}}}]}"#,
     )
     .unwrap();
     let args: Vec<OsString> = vec![
@@ -66,7 +66,10 @@ fn equals_syntax_option_looking_values_and_awkward_paths_are_preserved() {
     ];
     let request = Cli::parse_from(args).unwrap().request().unwrap();
     assert_eq!(request.params["policyName"], "--help");
-    assert_eq!(request.params["template"]["files"][0], "/work/a b");
+    assert_eq!(
+        request.params["template"]["rules"][0]["target"]["path"],
+        "/work/a b"
+    );
 }
 
 #[test]
@@ -239,10 +242,10 @@ fn file_errors_duplicate_keys_and_oversized_inputs_are_local_failures() {
     ));
     for bytes in [
         b"not-json".as_slice(),
-        br#"{"kind":"prevent_file_deletion","files":[],"files":["/etc"]}"#,
-        br#"{"kind":"prevent_file_deletion","kind":"high_sensitivity_read_deny","files":["/etc"]}"#,
-        br#"{"kind":"low_sensitivity_egress","files":["/etc"],"trustedDestinations":[{"type":"host","pattern":"one","pattern":"two","ports":[443]}]}"#,
-        br#"{"kind":"prevent_file_deletion","files":[],"extra":true}"#,
+        br#"{"specVersion":"0.1","rules":[],"rules":[]}"#,
+        br#"{"specVersion":"0.1","specVersion":"0.1","rules":[]}"#,
+        br#"{"specVersion":"0.1","rules":[{"effect":"block","category":"file","action":"write","target":{"type":"file","path":"/one","path":"/two"}}]}"#,
+        br#"{"specVersion":"0.1","rules":[],"extra":true}"#,
     ] {
         std::fs::write(&path, bytes).unwrap();
         assert!(matches!(

@@ -1,3 +1,9 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use asc_policy_types::Validate;
 use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
@@ -104,12 +110,10 @@ fn policy_round_trips_without_template_digest_and_rejects_the_removed_field() {
 #[test]
 fn binding_validation_rejects_invalid_embedded_template() {
     let mut binding = prepared_binding();
-    binding.policy.template = asc_policy_types::authoring::PolicyTemplate::PreventFileDeletion {
-        files: vec!["relative".into()],
-    };
+    binding.policy.template = file_policy(vec!["relative".into()]);
     assert_eq!(
         binding.validate().unwrap_err().path,
-        "policy.template.files[0]"
+        "policy.template.rules[0].target.path"
     );
 }
 

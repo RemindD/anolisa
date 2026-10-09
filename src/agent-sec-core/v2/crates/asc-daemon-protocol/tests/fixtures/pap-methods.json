@@ -4,18 +4,44 @@
     "params": {
       "policyName": "protect-important-files",
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/workspace/important"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/workspace/important"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },
     "canonicalParams": {
       "policyName": "protect-important-files",
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/workspace/important"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/workspace/important"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },
@@ -27,9 +53,22 @@
       "policyId": "policy-1",
       "policyName": "protect-important-files",
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/workspace/important"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/workspace/important"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },
@@ -37,9 +76,22 @@
       "policyId": "policy-1",
       "policyName": "protect-important-files",
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/workspace/important"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/workspace/important"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },

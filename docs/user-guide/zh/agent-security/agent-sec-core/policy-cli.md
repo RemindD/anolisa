@@ -6,7 +6,7 @@
 Scope 分配。Scope 保存所选 Policy revision 的完整内容；daemon 发现匹配的进程实例，
 自动创建 Binding 并协调下发。Binding 仅支持查询。
 
-这些命令由 V2 CLI 提供，已发布的 Python CLI 尚未包含。状态在 daemon 重启后丢失；
+这些命令由 V2 CLI 提供，已发布的 Python CLI 尚未包含。Policy、Scope 和 Binding 状态保存在 SQLite 中，daemon 重启后恢复；
 Scope 受理不代表保护已生效。CLI 和 daemon 需一起升级：Scope update、Scope revision
 参数和手动 Binding mutation 已移除。
 
@@ -44,11 +44,36 @@ CLI 要求支持 carrier 的新 daemon，应先升级 daemon。
 准备 JSON 模板文件，例如 `policy.json`：
 
 ```json
-{"kind":"prevent_file_deletion","files":["/workspace/important/**"]}
+{
+  "specVersion": "0.1",
+  "rules": [
+    {
+      "effect": "block",
+      "category": "file",
+      "action": "write",
+      "target": {"type": "file", "path": "/workspace/important/**"},
+      "where": {"operation": {"eq": "delete"}},
+      "because": "Protect important files from deletion"
+    }
+  ]
+}
 ```
 
-当前支持的模板保护文件或目录项免于删除（`unlink`/`rmdir`），不覆盖重命名、移动或
-文件内容修改。
+PolicyTemplate 是可被多个 Scope 按 ID/revision 选用的可复用策略。`rules` 表达动作、
+带类型的目标、决策、条件和可选理由。当前资源格式为 `{"type":"file","path":"..."}`，
+每条规则一个路径。合法的文件 read/write/exec 规则、逻辑条件、历史条件以及
+block/allow/require_confirmation 决策均可保存；Network 和 AgentHook 的目标格式尚未定义，
+目前不能保存。
+
+AgentSight Adapter 当前只执行不带历史条件的 block + file/write + operation=delete 规则。
+任意规则不支持，整个 Binding 失败，例如返回有界错误码 `RULE_1_UNSUPPORTED_EFFECT`，
+不发送受支持的规则子集。目标 DSL 不支持转义语法，because 包含引号、反斜杠或控制字符时
+转换失败，普通 Unicode 文本保持原样；省略理由时使用 Adapter 默认值。
+创建策略成功不代表执行后端支持这些规则。
+
+生成的 DSL 表达禁止删除；真实内核是否仅阻止删除仍需单独验证，当前 ActPlane 的
+unlink/write 共用底层操作映射。旧 kind JSON 和包含该格式的开发期数据库不提供迁移，
+也不自动重建；已有部署应先用兼容的旧二进制完成清理，再安排新库。
 
 ```bash
 agent-sec-cli --socket "$SOCKET" policy create --name "protect files" --file policy.json
@@ -94,7 +119,7 @@ Scope 1–32 个不同 Policy。
 `{"scopeId":"...","completed":false}`，完成后返回 `completed:true`。
 清理期间 Scope 保留 `DELETING` 状态，失败 Binding 仍可查询。重复 delete 不重置重试
 预算；排除故障后使用 `scope retry` 重试终态失败，不修改分配或重启正在运行的工作。
-同一 daemon 生命周期内，已完成的删除可重复成功，未知 ID 返回 `not_found`。
+已完成的删除及未知 Scope ID 的删除均返回 `completed:true`，daemon 重启后也可重复。
 其它 Scope 和来源 Policy 不受影响。
 
 ## 查询 Binding

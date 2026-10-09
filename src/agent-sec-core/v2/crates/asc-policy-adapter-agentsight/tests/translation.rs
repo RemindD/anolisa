@@ -1,10 +1,16 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use asc_policy_adapter_agentsight::{
     ACTPLANE_POLICY_MEDIA_TYPE, AGENTSIGHT_BINDING_PLAN_FORMAT,
     AGENTSIGHT_BINDING_PLAN_SCHEMA_VERSION, AgentSightAdapter, AgentSightBindingPlan,
     AgentSightScopePlan,
 };
 use asc_policy_types::Validate;
-use asc_policy_types::authoring::PolicyTemplate;
+use asc_policy_types::authoring::{Action, Effect, Resource};
 use asc_policy_types::binding::PreparedBinding;
 use asc_policy_types::scope::ScopeSelector;
 use asc_policy_types::target::TranslationOutcome;
@@ -21,7 +27,7 @@ fn complete_binding_fixture() -> PreparedBinding {
 
 fn binding_with_files(files: Vec<String>) -> PreparedBinding {
     let mut binding = complete_binding_fixture();
-    binding.policy.template = PolicyTemplate::PreventFileDeletion { files };
+    binding.policy.template = file_policy(files);
     binding
 }
 
@@ -108,31 +114,80 @@ fn unsupported_scope_is_rejected_without_a_target_plan() {
 }
 
 #[test]
-fn unsupported_templates_and_invalid_inputs_produce_no_plan() {
+fn invalid_rules_produce_no_plan() {
     for template in [
-        PolicyTemplate::HighSensitivityReadDeny {
-            files: vec!["/secret".into()],
-        },
-        PolicyTemplate::LowSensitivityEgress {
-            files: vec!["/secret".into()],
-            trusted_destinations: vec![],
-        },
-        PolicyTemplate::PreventFileDeletion { files: vec![] },
-        PolicyTemplate::PreventFileDeletion {
-            files: vec!["/same".into(), "/same".into()],
-        },
-        PolicyTemplate::PreventFileDeletion {
-            files: vec!["/invalid/../path".into()],
-        },
+        file_policy(vec![]),
+        file_policy(vec!["/invalid/../path".into()]),
     ] {
         let mut binding = complete_binding_fixture();
         binding.policy.template = template;
         let TranslationOutcome::Rejected(rejection) =
             AgentSightAdapter.translate(&binding).unwrap()
         else {
-            panic!("invalid template must not produce a target plan");
+            panic!("invalid template must not produce a plan");
         };
         assert_eq!(rejection.code, "INVALID_BINDING");
+    }
+}
+
+#[test]
+fn unsupported_rule_rejects_the_entire_policy_with_its_position() {
+    for (effect, action, code) in [
+        (Effect::Allow, Action::Write, "RULE_1_UNSUPPORTED_EFFECT"),
+        (
+            Effect::RequireConfirmation,
+            Action::Write,
+            "RULE_1_UNSUPPORTED_EFFECT",
+        ),
+        (Effect::Block, Action::Read, "RULE_1_UNSUPPORTED_ACTION"),
+    ] {
+        let mut binding = complete_binding_fixture();
+        let rule = &mut binding.policy.template.rules[1];
+        rule.effect = effect;
+        rule.action = action;
+        if action == Action::Read {
+            rule.condition = None;
+        }
+        binding.validate().unwrap();
+        let TranslationOutcome::Rejected(rejection) =
+            AgentSightAdapter.translate(&binding).unwrap()
+        else {
+            panic!("must not produce a partial plan");
+        };
+        assert_eq!(rejection.code, code);
+        assert_eq!(
+            asc_policy_types::target::Failure::new(
+                asc_policy_types::target::FailureKind::Rejected,
+                &rejection.code
+            )
+            .code,
+            code
+        );
+    }
+}
+
+#[test]
+fn explanations_are_preserved_and_cannot_inject_dsl() {
+    let mut binding = binding_with_files(vec!["/same".into(), "/same".into()]);
+    binding.policy.template.rules[0].because = Some("保护配置文件".into());
+    binding.policy.template.rules[1].because = Some("Independent reason".into());
+    let TranslationOutcome::Translated(plan) = AgentSightAdapter.translate(&binding).unwrap()
+    else {
+        panic!("expected a complete plan");
+    };
+    let plan: AgentSightBindingPlan = serde_json::from_slice(&plan.content).unwrap();
+    assert_eq!(plan.policy.content.matches("block unlink").count(), 2);
+    assert!(plan.policy.content.contains("保护配置文件"));
+    assert!(plan.policy.content.contains("Independent reason"));
+    for reason in ["bad\"reason", "bad\\reason", "bad\nreason"] {
+        binding.policy.template.rules[1].because = Some(reason.into());
+        binding.validate().unwrap();
+        assert_eq!(
+            AgentSightAdapter.translate(&binding).unwrap(),
+            TranslationOutcome::Rejected(asc_policy_types::target::TranslationRejection {
+                code: "RULE_1_UNSUPPORTED_ACTPLANE_REASON".into()
+            })
+        );
     }
 }
 
@@ -185,7 +240,14 @@ fn target_pattern_rejections_preserve_input_validation_and_dsl_limits() {
         else {
             panic!("unsupported pattern must not produce a target plan");
         };
-        assert_eq!(rejection.code, code);
+        assert_eq!(
+            rejection.code,
+            if code == "ACTPLANE_RULE_LIMIT_EXCEEDED" {
+                code.to_owned()
+            } else {
+                format!("RULE_0_{code}")
+            }
+        );
     }
 }
 
@@ -208,19 +270,58 @@ fn supported_patterns_at_the_actplane_limits_are_translated() {
 }
 
 #[test]
-fn template_order_does_not_change_dsl_and_changed_template_changes_the_plan() {
+fn rule_order_is_preserved_and_changed_rules_change_the_plan() {
     let original = complete_binding_fixture();
     let expected = AgentSightAdapter.translate(&original).unwrap();
     let mut reversed = original.clone();
-    let PolicyTemplate::PreventFileDeletion { files } = &mut reversed.policy.template else {
-        panic!("file deletion fixture");
+    reversed.policy.template.rules.reverse();
+    assert_ne!(AgentSightAdapter.translate(&reversed).unwrap(), expected);
+    let TranslationOutcome::Translated(plan) = AgentSightAdapter.translate(&reversed).unwrap()
+    else {
+        panic!("expected plan");
     };
-    files.reverse();
-    assert_eq!(AgentSightAdapter.translate(&reversed).unwrap(), expected);
+    let decoded: AgentSightBindingPlan = serde_json::from_slice(&plan.content).unwrap();
+    let Resource::File { path } = &reversed.policy.template.rules[0].target;
+    assert!(decoded.policy.content.starts_with(&format!(
+        "source AGENT = exec \"**\"\nrule agentseccore-unlink-0000:\n  block unlink file \"{path}\""
+    )));
     assert_ne!(
         AgentSightAdapter
             .translate(&binding_with_files(vec!["/new-policy".into()]))
             .unwrap(),
         expected
     );
+}
+
+#[test]
+fn broader_writes_logical_predicates_and_history_never_lower_to_unconditional_unlink() {
+    for (condition, history, code) in [
+        (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            "RULE_1_UNSUPPORTED_CONDITION",
+        ),
+        (
+            serde_json::json!({"or":[{"operation":{"eq":"delete"}}]}),
+            serde_json::Value::Null,
+            "RULE_1_UNSUPPORTED_CONDITION",
+        ),
+        (
+            serde_json::json!({"operation":{"eq":"delete"}}),
+            serde_json::json!({"category":"file","action":"read","target":{"type":"file","path":"/secret"}}),
+            "RULE_1_UNSUPPORTED_HISTORY",
+        ),
+    ] {
+        let mut wire = serde_json::to_value(complete_binding_fixture()).unwrap();
+        wire["policy"]["template"]["rules"][1]["where"] = condition;
+        wire["policy"]["template"]["rules"][1]["previous"] = history;
+        let binding: PreparedBinding = serde_json::from_value(wire).unwrap();
+        binding.validate().unwrap();
+        let TranslationOutcome::Rejected(rejection) =
+            AgentSightAdapter.translate(&binding).unwrap()
+        else {
+            panic!("unsupported predicate must not disappear during translation")
+        };
+        assert_eq!(rejection.code, code);
+    }
 }

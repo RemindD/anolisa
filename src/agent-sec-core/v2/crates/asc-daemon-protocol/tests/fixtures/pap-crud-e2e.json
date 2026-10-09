@@ -11,10 +11,36 @@
       "policyName": "protect-important-files-v1",
       "revision": 1,
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/workspace/important/**",
-          "/etc/agent/config.yaml"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/etc/agent/config.yaml"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          },
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/workspace/important/**"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },
@@ -23,9 +49,22 @@
       "policyName": "protect-important-files-v2",
       "revision": 2,
       "template": {
-        "kind": "prevent_file_deletion",
-        "files": [
-          "/srv/data"
+        "specVersion": "0.1",
+        "rules": [
+          {
+            "effect": "block",
+            "category": "file",
+            "action": "write",
+            "target": {
+              "type": "file",
+              "path": "/srv/data"
+            },
+            "where": {
+              "operation": {
+                "eq": "delete"
+              }
+            }
+          }
         ]
       }
     },
@@ -53,10 +92,36 @@
         "params": {
           "policyName": "protect-important-files-v1",
           "template": {
-            "kind": "prevent_file_deletion",
-            "files": [
-              "/workspace/important/**",
-              "/etc/agent/config.yaml"
+            "specVersion": "0.1",
+            "rules": [
+              {
+                "effect": "block",
+                "category": "file",
+                "action": "write",
+                "target": {
+                  "type": "file",
+                  "path": "/etc/agent/config.yaml"
+                },
+                "where": {
+                  "operation": {
+                    "eq": "delete"
+                  }
+                }
+              },
+              {
+                "effect": "block",
+                "category": "file",
+                "action": "write",
+                "target": {
+                  "type": "file",
+                  "path": "/workspace/important/**"
+                },
+                "where": {
+                  "operation": {
+                    "eq": "delete"
+                  }
+                }
+              }
             ]
           }
         }
@@ -116,9 +181,22 @@
           "policyId": "${policy_id}",
           "policyName": "protect-important-files-v2",
           "template": {
-            "kind": "prevent_file_deletion",
-            "files": [
-              "/srv/data"
+            "specVersion": "0.1",
+            "rules": [
+              {
+                "effect": "block",
+                "category": "file",
+                "action": "write",
+                "target": {
+                  "type": "file",
+                  "path": "/srv/data"
+                },
+                "where": {
+                  "operation": {
+                    "eq": "delete"
+                  }
+                }
+              }
             ]
           }
         }

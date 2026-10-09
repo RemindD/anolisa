@@ -8,7 +8,7 @@ complete content. The daemon discovers matching process instances, creates their
 Bindings, and reconciles deployment automatically. Binding commands are read-only.
 
 These commands are available in the V2 CLI; the released Python CLI does not yet
-include them. State is lost when the daemon restarts. Scope acceptance does not
+include them. Policy, Scope and Binding state persists in SQLite across daemon restarts. Scope acceptance does not
 mean protection has taken effect. Upgrade CLI and daemon together: Scope update,
 Scope revision arguments and manual Binding mutations have been removed.
 
@@ -51,11 +51,40 @@ The CLI requires the new daemon with carrier support; upgrade the daemon first.
 Create a JSON template file such as `policy.json`:
 
 ```json
-{"kind":"prevent_file_deletion","files":["/workspace/important/**"]}
+{
+  "specVersion": "0.1",
+  "rules": [
+    {
+      "effect": "block",
+      "category": "file",
+      "action": "write",
+      "target": {"type": "file", "path": "/workspace/important/**"},
+      "where": {"operation": {"eq": "delete"}},
+      "because": "Protect important files from deletion"
+    }
+  ]
+}
 ```
 
-The currently supported template protects against file/directory entry deletion
-(`unlink`/`rmdir`); it does not cover renaming, moving or modifying file contents.
+A PolicyTemplate is a reusable policy that multiple Scopes can select by ID/revision.
+Its `rules` describe actions, typed targets, decisions, conditions and optional reasons.
+The current resource format is `{"type":"file","path":"..."}`; use one rule per path.
+File read/write/exec rules, logical conditions, history predicates, and block/allow/
+require_confirmation decisions can be saved when valid. Network and AgentHook target
+formats are not yet defined and cannot be saved.
+
+The AgentSight Adapter currently executes only block + file/write + operation=delete
+rules without history. Unsupported rules fail the entire Binding with a bounded code
+such as `RULE_1_UNSUPPORTED_EFFECT`; no supported subset is sent. Quotes, backslashes
+and control characters in `because` are rejected during translation because the target
+DSL has no escape syntax; ordinary Unicode text is preserved. An omitted reason uses
+the Adapter's default. Template creation success does not prove backend support.
+
+The generated DSL expresses deletion prevention. Actual delete-only kernel behavior
+requires separate validation; the current ActPlane backend shares its unlink/write
+operation mapping. Old fixed-kind JSON and development databases containing it are
+not migrated or automatically rebuilt; clean up old deployments with the compatible
+binary before arranging a fresh database.
 
 ```bash
 agent-sec-cli --socket "$SOCKET" policy create --name "protect files" --file policy.json
@@ -109,9 +138,8 @@ owned deployments. The response is `{"scopeId":"...","completed":false}` while
 cleanup remains, or `completed:true` after removal. Until then the Scope remains
 `DELETING`, with failed Bindings visible. Repeating delete preserves retry budgets.
 Use `scope retry` to retry terminal failures after resolving their cause; it does not
-change the assignment or restart work that is already running. A completed deletion
-can be repeated successfully during the same daemon lifetime. Unknown IDs return
-`not_found`. Other Scopes and the source Policy are unaffected.
+change the assignment or restart work that is already running. Completed deletion and deletion of unknown Scope IDs both return `completed:true`,
+including after daemon restart. Other Scopes and the source Policy are unaffected.
 
 ## Inspect Bindings
 

@@ -62,9 +62,10 @@ The current crates are:
   `policyId`, `policyName`, `revision` and `template`.
 - `asc-policy-adapter-agentsight`: deterministic file-deletion and pinned-process
   translation directly from the Binding's template into an AgentSight/ActPlane
-  plan, with semantic and encoding checks. The implemented template covers
-  path-entry deletion only; rename, move and other namespace mutations are outside
-  its contract. Other template kinds remain explicitly unsupported.
+  plan, with semantic and encoding checks. Reusable policies contain general
+  rules; this Adapter supports only block + file/write + operation=delete without
+  history. Any unsupported rule rejects the complete Binding with its rule index.
+  Typed resources currently cover files; undefined resource formats are rejected.
   Compiler acceptance belongs to the deployed target, not an embedded compiler.
 - `asc-agentsight-client`: health-gated AgentSight apply/delete transport for
   one configured endpoint, with process identity resolution and complete HTTP
@@ -318,7 +319,9 @@ status versions, deployment responsibility, discovery pins and stop barriers. WA
 with synchronous FULL protects committed local state; remote operations still depend
 on the Client's idempotency and absence contract. Local SIGKILL tests use an external
 mock ledger; they do not establish physical power-loss or real PEP/kernel guarantees.
-The Adapter compiles the saved `prevent_file_deletion` template on every Apply attempt.
+The Adapter translates the saved general rules on every Apply attempt, preserving
+rule order and per-rule reasons. File-deletion rules lower to unlink DSL; real
+delete-only kernel behavior remains subject to the backend operation mapping.
 
 Dependency sources, TLS/unsafe boundaries and release audit requirements are
 recorded in [DEPENDENCIES.md](DEPENDENCIES.md).

@@ -1,9 +1,15 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::sync::Arc;
 
 use asc_pap::{PapError, PapRepository, PapService};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_policy_types::Validate;
-use asc_policy_types::authoring::PolicyTemplate;
+use asc_policy_types::authoring::{Category, Effect};
 use asc_policy_types::binding::PreparedBinding;
 use asc_policy_types::error::ValidationError;
 use asc_policy_types::scope::ScopeSelector;
@@ -89,29 +95,18 @@ fn invalid_template_rejects_create_and_update_without_writing() {
     let saved = pap
         .create_policy("policy", &binding().policy.template)
         .unwrap();
+    let mut bad_version = binding().policy.template;
+    bad_version.spec_version = "99".into();
+    let mut bad_category = binding().policy.template;
+    bad_category.rules[0].category = Category::Network;
     for (template, path) in [
+        (file_policy(vec![]), "template.rules"),
         (
-            PolicyTemplate::PreventFileDeletion { files: vec![] },
-            "template.files",
+            file_policy(vec!["relative".into()]),
+            "template.rules[0].target.path",
         ),
-        (
-            PolicyTemplate::PreventFileDeletion {
-                files: vec!["relative".into()],
-            },
-            "template.files[0]",
-        ),
-        (
-            PolicyTemplate::PreventFileDeletion {
-                files: vec!["/same".into(), "/same".into()],
-            },
-            "template.files[1]",
-        ),
-        (
-            PolicyTemplate::HighSensitivityReadDeny {
-                files: vec!["/secret".into()],
-            },
-            "template.kind",
-        ),
+        (bad_version, "template.specVersion"),
+        (bad_category, "template.rules[0].target"),
     ] {
         for result in [
             pap.create_policy("invalid", &template),
@@ -125,6 +120,24 @@ fn invalid_template_rejects_create_and_update_without_writing() {
         assert_eq!(
             repository.list_policies(100, 0).unwrap().items,
             vec![saved.clone()]
+        );
+    }
+}
+
+#[test]
+fn valid_backend_unsupported_decisions_are_saved_as_reusable_policies() {
+    let repository = Arc::new(ProcessLocalPapRepository::default());
+    let pap = PapService::new(repository.clone());
+    for effect in [Effect::Allow, Effect::RequireConfirmation] {
+        let mut template = binding().policy.template;
+        template.rules[0].effect = effect;
+        let saved = pap.create_policy("general policy", &template).unwrap();
+        assert_eq!(saved.template, template);
+        assert_eq!(
+            repository
+                .get_policy(&saved.policy_id, saved.revision)
+                .unwrap(),
+            saved
         );
     }
 }

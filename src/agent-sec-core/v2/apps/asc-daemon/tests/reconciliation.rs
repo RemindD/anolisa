@@ -1,5 +1,11 @@
 //! Composition slice: real PAP, runtime, core and Adapter with a scripted Client.
 //! Full CLI/daemon process E2E is intentionally a separate suite.
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use asc_daemon::start_policy_reconciliation_with_client;
 use asc_pap::{PapRepository, PapService};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
@@ -139,12 +145,7 @@ fn unavailable_reconciliation_rejects_new_assignments_but_keeps_policy_crud() {
         .with_reconcile_enqueuer(Arc::new(asc_daemon::UnavailableReconciliation))
         .with_scope_discovery(Arc::new(Discovery));
     let policy = pap
-        .create_policy(
-            "test",
-            &asc_policy_types::authoring::PolicyTemplate::PreventFileDeletion {
-                files: vec!["/a".into()],
-            },
-        )
+        .create_policy("test", &file_policy(vec!["/a".into()]))
         .unwrap();
     let refs = [asc_policy_types::scope::PolicyReference {
         policy_id: policy.policy_id.clone(),
@@ -231,12 +232,7 @@ where
     )));
     let pap = pap.with_scope_discovery(discovery.clone());
     let policy = pap
-        .create_policy(
-            "original",
-            &asc_policy_types::authoring::PolicyTemplate::PreventFileDeletion {
-                files: vec!["/protected".into()],
-            },
-        )
+        .create_policy("original", &file_policy(vec!["/protected".into()]))
         .unwrap();
     let scope = pap
         .create_scope_assignment(

@@ -1,4 +1,4 @@
-//! Version-one encodings and projection checks, shared by every SQL read path.
+//! Version-one generic policy snapshots and projection checks for every SQL read path.
 use crate::RepositoryError;
 use asc_foundation_types::{ResourceId, Revision};
 use asc_pap::{Page, PapError};

@@ -1,10 +1,11 @@
 //! Deterministic Policy template to `ActPlane` DSL translation.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use asc_policy_types::Validate;
-use asc_policy_types::authoring::PolicyTemplate;
+use asc_policy_types::authoring::{
+    Action, Category, Comparison, Condition, Effect, Resource, Scalar, Value,
+};
 use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::PreparedBinding;
 use asc_policy_types::scope::ScopeSelector;
@@ -85,26 +86,51 @@ fn translate_scope(scope: &BindingScope) -> Result<AgentSightScopePlan, Translat
 }
 
 fn compile_policy(binding: &PreparedBinding) -> Result<String, TranslationRejection> {
-    let PolicyTemplate::PreventFileDeletion { files } = &binding.policy.template else {
-        return Err(rejection("UNSUPPORTED_POLICY_TEMPLATE"));
-    };
-    let mut patterns = BTreeSet::new();
-    for pattern in files {
-        if !actplane_can_represent_glob(pattern) {
-            return Err(rejection("UNSUPPORTED_ACTPLANE_GLOB"));
-        }
-        if actplane_lowered_literal_len(pattern) > ACTPLANE_MAX_LOWERED_PATTERN_BYTES {
-            return Err(rejection("ACTPLANE_PATTERN_LIMIT_EXCEEDED"));
-        }
-        if !is_safe_dsl_pattern(pattern) {
-            return Err(rejection("UNSUPPORTED_ACTPLANE_PATTERN"));
-        }
-        patterns.insert(pattern.as_str());
-    }
-    if patterns.len() > ACTPLANE_MAX_RULES {
+    let rules = &binding.policy.template.rules;
+    if rules.len() > ACTPLANE_MAX_RULES {
         return Err(rejection("ACTPLANE_RULE_LIMIT_EXCEEDED"));
     }
-    Ok(render_dsl(&patterns))
+    // Validate the whole policy before returning a plan; never apply a subset.
+    for (index, rule) in rules.iter().enumerate() {
+        let reject = |code| rejection(&format!("RULE_{index}_{code}"));
+        if rule.effect != Effect::Block {
+            return Err(reject("UNSUPPORTED_EFFECT"));
+        }
+        if rule.category != Category::File || rule.action != Action::Write {
+            return Err(reject("UNSUPPORTED_ACTION"));
+        }
+        if rule.previous.is_some() {
+            return Err(reject("UNSUPPORTED_HISTORY"));
+        }
+        if !matches!(&rule.condition, Some(Condition::Operation(Comparison::Eq(Value::Scalar(Scalar::String(operation))))) if operation == "delete")
+        {
+            return Err(reject("UNSUPPORTED_CONDITION"));
+        }
+        let Resource::File { path: pattern } = &rule.target;
+        if !actplane_can_represent_glob(pattern) {
+            return Err(reject("UNSUPPORTED_ACTPLANE_GLOB"));
+        }
+        if actplane_lowered_literal_len(pattern) > ACTPLANE_MAX_LOWERED_PATTERN_BYTES {
+            return Err(reject("ACTPLANE_PATTERN_LIMIT_EXCEEDED"));
+        }
+        if !is_safe_dsl_pattern(pattern) {
+            return Err(reject("UNSUPPORTED_ACTPLANE_PATTERN"));
+        }
+        if !is_safe_dsl_pattern(rule.because.as_deref().unwrap_or(DSL_REASON)) {
+            // ActPlane's lexer has no quoted-string escape syntax.
+            return Err(reject("UNSUPPORTED_ACTPLANE_REASON"));
+        }
+    }
+    let mut dsl = String::from("source AGENT = exec \"**\"\n");
+    for (index, rule) in rules.iter().enumerate() {
+        let Resource::File { path: pattern } = &rule.target;
+        let reason = rule.because.as_deref().unwrap_or(DSL_REASON);
+        // ActPlane still maps unlink and write to OP_WRITE; translation alone
+        // does not establish delete-only kernel enforcement.
+        writeln!(dsl, "rule agentseccore-unlink-{index:04}:\n  block unlink file \"{pattern}\" if AGENT\n  because \"{reason}\"")
+            .unwrap_or_else(|_| unreachable!("writing formatted text into String cannot fail"));
+    }
+    Ok(dsl)
 }
 
 fn actplane_can_represent_glob(pattern: &str) -> bool {
@@ -134,22 +160,6 @@ fn is_safe_dsl_pattern(pattern: &str) -> bool {
     !pattern
         .chars()
         .any(|character| matches!(character, '"' | '\\') || character.is_control())
-}
-
-fn render_dsl(patterns: &BTreeSet<&str>) -> String {
-    // TODO: ActPlane currently lowers both `unlink` and `write` to OP_WRITE. Keep
-    // the explicit unlink DSL while landing the Adapter-to-Client path, then
-    // split the backend operation so delete-only enforcement does not also
-    // block content mutation or other namespace mutation.
-    let mut dsl = String::from("source AGENT = exec \"**\"\n");
-    for (index, pattern) in patterns.iter().enumerate() {
-        write!(
-            dsl,
-            "rule agentseccore-unlink-{index:04}:\n  block unlink file \"{pattern}\" if AGENT\n  because \"{DSL_REASON}\"\n"
-        )
-        .unwrap_or_else(|_| unreachable!("writing formatted text into String cannot fail"));
-    }
-    dsl
 }
 
 fn rejected(code: &str) -> TranslationOutcome {

@@ -1,3 +1,9 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::sync::Arc;
 
 use asc_daemon::ScopeDiscoveryRegistry;
@@ -6,7 +12,6 @@ use asc_daemon_handler::DaemonDispatcher;
 use asc_daemon_protocol::{DaemonRequest, RequestId};
 use asc_pap::PapService;
 use asc_pap_repository_memory::ProcessLocalPapRepository;
-use asc_policy_types::authoring::PolicyTemplate;
 use serde_json::{Value, json};
 
 struct Role(PrincipalRole);
@@ -23,12 +28,7 @@ fn scope_assignment_protocol_creates_reads_and_deletes_discovery_intent() {
     let registry = Arc::new(ScopeDiscoveryRegistry::new(Arc::new(pap.clone())));
     let pap = pap.with_scope_discovery(registry.clone());
     let policy = pap
-        .create_policy(
-            "scope-policy",
-            &PolicyTemplate::PreventFileDeletion {
-                files: vec!["/protected".to_owned()],
-            },
-        )
+        .create_policy("scope-policy", &file_policy(vec!["/protected".to_owned()]))
         .unwrap();
     let dispatcher = DaemonDispatcher::new(
         pap,

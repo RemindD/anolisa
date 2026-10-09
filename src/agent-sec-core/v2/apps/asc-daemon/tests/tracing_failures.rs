@@ -142,7 +142,7 @@ async fn uds_failures_preserve_business_and_context() {
             &path,
             json!({"method":"policy.templates.create", "params": {
                 "policyName": format!("policy-{index}"),
-                "template":{"kind":"prevent_file_deletion", "files":["/protected"]}
+                "template":{"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/protected"}, "where": {"operation": {"eq": "delete"}}}]}
             }}),
         )
         .await;
@@ -183,7 +183,7 @@ async fn exercise_failures(
             "invalid_request",
         ),
         (
-            json!({"method":"policy.templates.create", "params":{"policyName":"bad", "template":{"kind":"prevent_file_deletion", "files":[]}}}),
+            json!({"method":"policy.templates.create", "params":{"policyName":"bad", "template":{"specVersion": "0.1", "rules": []}}}),
             "invalid_argument",
         ),
     ] {

@@ -6,10 +6,36 @@
     "policyName": "prevent deletion",
     "revision": 1,
     "template": {
-      "kind": "prevent_file_deletion",
-      "files": [
-        "/workspace/important/**",
-        "/etc/agent/config.yaml"
+      "specVersion": "0.1",
+      "rules": [
+        {
+          "effect": "block",
+          "category": "file",
+          "action": "write",
+          "target": {
+            "type": "file",
+            "path": "/etc/agent/config.yaml"
+          },
+          "where": {
+            "operation": {
+              "eq": "delete"
+            }
+          }
+        },
+        {
+          "effect": "block",
+          "category": "file",
+          "action": "write",
+          "target": {
+            "type": "file",
+            "path": "/workspace/important/**"
+          },
+          "where": {
+            "operation": {
+              "eq": "delete"
+            }
+          }
+        }
       ]
     }
   },

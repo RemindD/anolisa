@@ -157,7 +157,20 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
 
     # Update before a process matches, so discovery must use the saved revision.
     template_file.write_text(
-        json.dumps({"kind": "prevent_file_deletion", "files": ["/new-policy"]})
+        json.dumps(
+            {
+                "specVersion": "0.1",
+                "rules": [
+                    {
+                        "effect": "block",
+                        "category": "file",
+                        "action": "write",
+                        "target": {"type": "file", "path": "/new-policy"},
+                        "where": {"operation": {"eq": "delete"}},
+                    }
+                ],
+            }
+        )
     )
     updated = daemon.request(
         "policy",
@@ -242,3 +255,51 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+
+def test_unsupported_rule_is_saved_but_prevents_partial_http_delivery(
+    tmp_path: Path, agentsight_mock: Queue, start_daemon: Callable, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(tmp_path / "policy-data"))
+    daemon: DaemonHandle = start_daemon()
+    template = _fixture(_V2 / "crates/asc-policy-types/tests/fixtures/prepared-binding.json")[
+        "policy"
+    ]["template"]
+    template["rules"][1]["effect"] = "require_confirmation"
+    template_file = tmp_path / "review-policy.json"
+    template_file.write_text(json.dumps(template))
+    policy = daemon.request(
+        "policy", "create", "--name", "review-required", "--file", str(template_file)
+    )
+    assert policy["template"] == template
+    process = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        scope = daemon.request(
+            "scope",
+            "create",
+            "--pid",
+            str(process.pid),
+            "--policy-id",
+            policy["policyId"],
+            "--policy-revision",
+            "1",
+        )
+        listing = _wait_for(
+            lambda: daemon.request("binding", "list", timeout=2),
+            lambda value: value["total"] == 1
+            and value["items"][0]["status"]["phase"] == "APPLY_FAILED",
+        )
+        assert listing["items"][0]["spec"]["policy"] == policy
+        assert listing["items"][0]["status"]["error"] == {
+            "kind": "REJECTED",
+            "code": "RULE_1_UNSUPPORTED_EFFECT",
+        }
+        assert agentsight_mock.empty(), "an unsupported rule must prevent all HTTP delivery"
+        daemon.request("scope", "delete", "--scope-id", scope["scopeId"])
+        _wait_for(lambda: daemon.request("binding", "list"), lambda value: value["total"] == 0)
+        assert (
+            agentsight_mock.empty()
+        ), "rejected translation must not create cleanup responsibility"
+    finally:
+        process.terminate()
+        process.wait(timeout=5)

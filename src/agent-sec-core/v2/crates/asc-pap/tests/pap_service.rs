@@ -1,3 +1,9 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::sync::{Arc, Mutex};
 
 use asc_foundation_types::{ResourceId, Revision};
@@ -194,9 +200,7 @@ fn service() -> (Service, Arc<FakeRepository>) {
 }
 
 fn policy_template(path: &str) -> PolicyTemplate {
-    PolicyTemplate::PreventFileDeletion {
-        files: vec![path.to_owned()],
-    }
+    file_policy(vec![path.to_owned()])
 }
 
 #[test]

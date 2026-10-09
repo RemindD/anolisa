@@ -30,11 +30,7 @@ class OtelEnvironment:
     def __init__(self, directory: Path, binaries: dict[str, str]):
         self.directory = directory
         self.binaries = binaries
-        self.env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("OTEL_")
-        }
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith("OTEL_")}
         self.env["RUST_LOG"] = "info"
         self.env["AGENT_SEC_DATA_DIR"] = str(directory / "data")
         self.daemon = None
@@ -190,11 +186,7 @@ def test_raw_uds_unsampled_concurrent_roots_and_carrier_isolation(otel):
     otel.start()
 
     def call(index):
-        context = (
-            {"version": 1, "baggage": f"agentsec.session.id=s{index}"}
-            if index % 2
-            else None
-        )
+        context = {"version": 1, "baggage": f"agentsec.session.id=s{index}"} if index % 2 else None
         return otel.call({"method": "policy.templates.list", "traceContext": context})
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -224,9 +216,7 @@ def test_schema_and_frame_budgets_are_independent(otel):
         {"version": 1, "uid": 0},
     ]:
         assert (
-            otel.call({"method": "policy.templates.list", "traceContext": carrier})[
-                "error"
-            ]["code"]
+            otel.call({"method": "policy.templates.list", "traceContext": carrier})["error"]["code"]
             == "invalid_request"
         )
     assert (
@@ -240,7 +230,18 @@ def test_schema_and_frame_budgets_are_independent(otel):
             "method": "policy.templates.create",
             "params": {
                 "policyName": "must-not-exist",
-                "template": {"kind": "prevent_file_deletion", "files": ["/example"]},
+                "template": {
+                    "specVersion": "0.1",
+                    "rules": [
+                        {
+                            "effect": "block",
+                            "category": "file",
+                            "action": "write",
+                            "target": {"type": "file", "path": "/example"},
+                            "where": {"operation": {"eq": "delete"}},
+                        }
+                    ],
+                },
             },
             "traceContext": {"version": 2},
         }
@@ -251,9 +252,7 @@ def test_schema_and_frame_budgets_are_independent(otel):
     suffix = b'"}}'
     base = prefix + b"x" * (4 * 1024 * 1024 - 1 - len(prefix) - len(suffix)) + suffix
     assert otel.call(base)["error"]["code"] == "unknown_method"
-    extended = (
-        base[:-1] + b',"traceContext":{"version":1,"baggage":"agentsec.session.id=s"}}'
-    )
+    extended = base[:-1] + b',"traceContext":{"version":1,"baggage":"agentsec.session.id=s"}}'
     assert otel.call(extended)["error"]["code"] == "unknown_method"
     assert otel.call(b" " + extended)["error"]["code"] == "invalid_request"
     assert "result" in otel.call(
@@ -288,9 +287,7 @@ with socket.socket(socket.AF_UNIX) as stream:
     print(data.decode())
 """,
                 str(unauthorized_daemon.socket_path),
-                json.dumps(
-                    {"method": "policy.templates.list", "traceContext": context}
-                ),
+                json.dumps({"method": "policy.templates.list", "traceContext": context}),
             ],
             user=unauthorized_daemon.caller_uid,
             group=unauthorized_daemon.caller_uid,
@@ -379,9 +376,7 @@ def test_maximum_unicode_baggage_with_full_business_frame(otel):
 @contextmanager
 def blocked_stderr():
     read_fd, write_fd = os.pipe()
-    with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(
-        write_fd, "wb", buffering=0
-    ) as stderr:
+    with os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0) as stderr:
         os.set_blocking(stderr.fileno(), False)
         try:
             while True:
@@ -407,10 +402,7 @@ def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filte
             OTEL_BSP_MAX_QUEUE_SIZE="invalid",
         )
         assert otel.call(b"")["error"]["code"] == "invalid_request"
-        assert (
-            otel.call(b" " * (4 * 1024 * 1024 + 32768))["error"]["code"]
-            == "resource_exhausted"
-        )
+        assert otel.call(b" " * (4 * 1024 * 1024 + 32768))["error"]["code"] == "resource_exhausted"
         # Saturate the diagnostic queue while checking each business response.
         for _ in range(40):
             assert "result" in otel.call({"method": "policy.templates.list"})
@@ -422,8 +414,7 @@ def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filte
                 "policy",
                 "list",
             ],
-            env=otel.env
-            | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
+            env=otel.env | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
             stdout=subprocess.PIPE,
             stderr=stderr,
             timeout=10,
@@ -457,8 +448,7 @@ def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filte
                 "skill-ledger",
                 "list-scanners",
             ],
-            env=otel.env
-            | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
+            env=otel.env | {"RUST_LOG": log_filter, "OTEL_BSP_MAX_QUEUE_SIZE": "invalid"},
             stdout=subprocess.PIPE,
             stderr=stderr,
             timeout=10,
@@ -487,9 +477,7 @@ def test_blocked_stderr_preserves_startup_responses_and_shutdown(otel, log_filte
 
 @pytest.mark.parametrize("log_filter", ["info", "off"])
 @pytest.mark.parametrize("fault", ["jsonl_write", "sqlite_write", "newer_schema"])
-def test_storage_fault_diagnostics_do_not_block_scan_or_shutdown(
-    otel, log_filter, fault
-):
+def test_storage_fault_diagnostics_do_not_block_scan_or_shutdown(otel, log_filter, fault):
     data = Path(otel.env["AGENT_SEC_DATA_DIR"])
     if fault == "newer_schema":
         data.mkdir(mode=0o700)
@@ -514,12 +502,7 @@ def test_storage_fault_diagnostics_do_not_block_scan_or_shutdown(
         # A diagnostic failure must not suppress the independent audit destination.
         if fault == "jsonl_write":
             with closing(sqlite3.connect(data / "security-events.db")) as connection:
-                assert (
-                    connection.execute(
-                        "SELECT count(*) FROM security_events"
-                    ).fetchone()[0]
-                    == 1
-                )
+                assert connection.execute("SELECT count(*) FROM security_events").fetchone()[0] == 1
         else:
             assert len(jsonl.read_text().splitlines()) == 1
         otel.stop()

@@ -104,7 +104,7 @@ fn method_results_reuse_complete_domain_contracts() {
 fn authored_params_reject_server_owned_or_legacy_fields() {
     let mut policy = json!({
         "policyName": "protect-important-files",
-        "template": {"kind": "prevent_file_deletion", "files": ["/important"]}
+        "template": {"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/important"}, "where": {"operation": {"eq": "delete"}}}]}
     });
     policy["revision"] = json!(1);
     assert!(serde_json::from_value::<CreatePolicyParams>(policy).is_err());
@@ -146,7 +146,7 @@ fn request_and_response_envelopes_are_strict_and_mutually_exclusive() {
     }
     for invalid in [
         r#"{"method":"policy.templates.list","params":{"limit":1,"limit":2}}"#,
-        r#"{"method":"policy.templates.create","params":{"policyName":"invalid","template":{"kind":"prevent_file_deletion","files":["/a"],"files":["/b"]}}}"#,
+        r#"{"method":"policy.templates.create","params":{"policyName":"invalid","template":{"specVersion":"0.1","rules":[],"rules":[]}}}"#,
     ] {
         assert!(serde_json::from_str::<DaemonRequest>(invalid).is_err());
     }

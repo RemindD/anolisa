@@ -513,10 +513,13 @@ reconcile Runtime。当前 Scope 自动管理 Binding，生产使用 SQLite，�
 deployments 与写回执不进入公共响应。历史内存组合测试不作为真实 PEP 或物理断电验收。
 
 Policy CREATE/UPDATE 在 PAP 内校验 `PolicyTemplate` 并保存完整模板。
-当前仅支持 `prevent_file_deletion`，覆盖对匹配目录项的删除操作；rename/move、link、
-truncate、内容修改和其它 namespace mutation 不在其保护范围内。其它 kind 返回
-`invalid_argument`。Binding Apply 时由 AgentSight Adapter 将快照中的 template 直接生成
-ActPlane DSL，固定输出见 `v2/fixtures/adapters/agentsight/prevent-file-deletion/`。
+PolicyTemplate 是可被多个 Scope 复用的策略；内容使用 `specVersion`、可选 description 和
+非空 rules，每条规则包含 effect/category/action/typed target 及可选 where/previous/because。
+当前定义文件目标和 read/write/exec 动作，合法但 AgentSight 不支持的规则可以保存。
+Adapter 只转换不带历史条件的 block + file/write + operation=delete 规则；任意一条不支持，
+整个 Binding 失败，错误码包含规则序号，不部分下发。旧 kind/files 格式拒绝。
+完整结构与校验边界见 [对象契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md#7-通用规则结构改造计划)；
+固定输出见 `v2/fixtures/adapters/agentsight/prevent-file-deletion/`。
 
 参数 object 拒绝未知字段。基线 ScopeSelector 支持正数 PID 或 cgroup ID；第 14 节
 SCOPE-CR-001 扩展 name/path process selector 与 policyTemplates assignment。PreparedScope

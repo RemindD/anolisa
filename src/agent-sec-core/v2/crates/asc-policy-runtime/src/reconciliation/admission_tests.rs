@@ -1,3 +1,9 @@
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use super::*;
 use asc_pap::{EnqueueError, PapError};
 use asc_policy_repository::{BindingStateWrite, ReconciliationPatch, WriteResult};
@@ -268,12 +274,7 @@ fn admission_create_reports_saved_identity_and_policy_scope_remain_available() {
     queue.enqueue(&id(2)).unwrap();
     let pap = pap_with(repo.clone(), queue);
     let policy = pap
-        .create_policy(
-            "test",
-            &asc_policy_types::authoring::PolicyTemplate::PreventFileDeletion {
-                files: vec!["/workspace/a".into()],
-            },
-        )
+        .create_policy("test", &file_policy(vec!["/workspace/a".into()]))
         .unwrap();
     let scope = pap
         .create_scope_assignment(

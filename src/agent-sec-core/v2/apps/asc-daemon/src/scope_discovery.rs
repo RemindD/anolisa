@@ -1,5 +1,11 @@
 //! Linux procfs adapter and Scope-owned discovery workers.
 
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -316,7 +322,6 @@ mod tests {
 
     use asc_pap::PapService;
     use asc_pap_repository_memory::ProcessLocalPapRepository;
-    use asc_policy_types::authoring::PolicyTemplate;
 
     use super::*;
     use asc_policy_types::policy::PreparedPolicy;
@@ -325,12 +330,7 @@ mod tests {
         let repository = Arc::new(ProcessLocalPapRepository::default());
         let pap = PapService::new(repository.clone());
         let policy = pap
-            .create_policy(
-                "test",
-                &PolicyTemplate::PreventFileDeletion {
-                    files: vec!["/protected".to_owned()],
-                },
-            )
+            .create_policy("test", &file_policy(vec!["/protected".to_owned()]))
             .unwrap();
         (repository, policy)
     }
@@ -374,12 +374,7 @@ mod tests {
         let registry = Arc::new(ScopeDiscoveryRegistry::new(Arc::new(pap.clone())));
         let pap = pap.with_scope_discovery(registry.clone());
         let second_policy = pap
-            .create_policy(
-                "second",
-                &PolicyTemplate::PreventFileDeletion {
-                    files: vec!["/other".to_owned()],
-                },
-            )
+            .create_policy("second", &file_policy(vec!["/other".to_owned()]))
             .unwrap();
         let refs = [policy.clone(), second_policy.clone()]
             .iter()

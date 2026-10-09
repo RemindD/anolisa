@@ -3,6 +3,12 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/policy.rs"
+));
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 
@@ -673,7 +679,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use asc_pap::PapService;
-    use asc_policy_types::authoring::PolicyTemplate;
     use asc_policy_types::binding::BindingStatus;
     use asc_policy_types::scope::ScopeSelector;
 
@@ -735,21 +740,21 @@ mod tests {
     fn oversized_policy_and_assignment_are_rejected_before_commit() {
         let repository = Arc::new(ProcessLocalPapRepository::default());
         let pap = PapService::new(repository.clone());
-        let huge = PolicyTemplate::PreventFileDeletion {
-            files: (0..400)
+        let huge = file_policy(
+            (0..400)
                 .map(|n| format!("/{n}{}", "x".repeat(3000)))
                 .collect(),
-        };
+        );
         assert!(matches!(
             pap.create_policy("large", &huge),
             Err(PapError::InvalidPolicy(_))
         ));
         assert_eq!(pap.list_policies(10, 0).unwrap().total, 0);
-        let medium = PolicyTemplate::PreventFileDeletion {
-            files: (0..200)
+        let medium = file_policy(
+            (0..200)
                 .map(|n| format!("/{n}{}", "x".repeat(3000)))
                 .collect(),
-        };
+        );
         let a = pap.create_policy("a", &medium).unwrap();
         let b = pap.create_policy("b", &medium).unwrap();
         let scope = PreparedScope {
@@ -772,9 +777,7 @@ mod tests {
         let policy = pap
             .create_policy(
                 "protect files",
-                &PolicyTemplate::PreventFileDeletion {
-                    files: vec!["/workspace/important".to_owned()],
-                },
+                &file_policy(vec!["/workspace/important".to_owned()]),
             )
             .unwrap();
         let scope = PreparedScope {

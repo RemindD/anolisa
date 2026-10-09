@@ -288,7 +288,7 @@ async fn dproc_scope_binary_starts_discovery_and_stops_it_on_sigterm() {
         return;
     }
     wait_for_socket(&mut running).await;
-    let policy = request(&running.socket_path, b"{\"method\":\"policy.templates.create\",\"params\":{\"policyName\":\"scope-policy\",\"template\":{\"kind\":\"prevent_file_deletion\",\"files\":[\"/protected\"]}}}\n").await;
+    let policy = request(&running.socket_path, b"{\"method\":\"policy.templates.create\",\"params\":{\"policyName\":\"scope-policy\",\"template\":{\"specVersion\":\"0.1\",\"rules\":[{\"effect\":\"block\",\"category\":\"file\",\"action\":\"write\",\"target\":{\"type\":\"file\",\"path\":\"/protected\"},\"where\":{\"operation\":{\"eq\":\"delete\"}}}]}}}\n").await;
     for _ in 0..2 {
         let mut payload = serde_json::to_vec(&serde_json::json!({"method":"policy.scopes.create","params":{
             "selector":{"kind":"process","match":{"executable":env!("CARGO_BIN_EXE_agent-sec-daemon")}},
@@ -450,7 +450,7 @@ async fn durable_policy_and_scope_survive_sigkill_and_database_lease_rejects_sec
         return;
     }
     wait_for_socket(&mut running).await;
-    let template = serde_json::json!({"kind":"prevent_file_deletion","files":["/protected"]});
+    let template = serde_json::json!({"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/protected"}, "where": {"operation": {"eq": "delete"}}}]});
     let policy = pap_request(
         &running.socket_path,
         "policy.templates.create",

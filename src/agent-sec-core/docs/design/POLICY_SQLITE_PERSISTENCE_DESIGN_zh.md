@@ -5,6 +5,10 @@
 本文承接 [Policy/Scope/Binding 契约](POLICY_SCOPE_BINDING_CONTRACT_zh.md) 与
 [Reconciler Runtime 设计](BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)，替代后者关于 SQLite
 crate 归属、deployment 分表建议及状态 CAS 的早期提案；其余生命周期语义继续适用。
+PolicyTemplate 表示可被多个 Scope 引用和复用的策略，其身份、revision 与规则内容独立于
+具体主体分配；“禁止删除文件”仅为当前执行后端支持的规则场景。
+第 3.4 节说明通用规则内容的首版持久格式。第 9 节保留既有验收记录，
+新规则内容的证据见第 3.4 节及对象契约第 7 节。
 
 ## 1. 交付目标与边界
 
@@ -145,6 +149,40 @@ Repository 只负责事务、错误分类与连接恢复，不在持锁期间循
 恢复和重试预算按第 7.4 节执行。CAS Conflict 属于并发结果，不等同于存储故障。
 SQLite 的部分错误可能终止语句或整个事务，处理须核对连接状态，见
 [SQLite transaction errors](https://sqlite.org/lang_transaction.html#response_to_errors_within_a_transaction)。
+
+### 3.4 通用规则改造的首版格式边界
+
+策略内容结构改造见 [生命周期契约第 7 节](POLICY_SCOPE_BINDING_CONTRACT_zh.md#7-通用规则结构改造计划)。
+此次已决定不兼容旧开发期 Policy 数据库，不实现旧模板 JSON 转换；这是本次变更的明确边界，
+不取消后续版本的迁移入口。
+
+按首版交付处理，保持 `PRAGMA user_version=1` 及既有三个业务表。
+物理表/列无需变化；首版 JSON 编码统一使用通用规则。全新空 version 0 数据库经既有
+初始化入口事务创建，后续真实版本升级继续使用第 3.3 节的有序事务迁移入口。
+本次不增加格式升级步骤，不导入旧开发期模板，不提供自动降级。
+已有同版本开发库若包含旧 kind/files 模板，在启动记录解码及领域验证阶段显式拒绝；
+该错误属于不兼容业务编码的严格打开失败，不能因物理 schema 相同就启动 worker。
+未来首版发布后如再次修改持久 JSON，应递增数据库版本并实现需要支持的数据迁移。
+
+受影响的 JSON 为 `policies.current_json`、`scopes.assignment_json` 中的 policySnapshots，
+以及 `bindings.spec_json` 中的单策略快照；三处统一使用通用规则格式。
+删除 Policy 后 current 为空，不代表 Scope/Binding 中没有旧模板；不能只检查 policies 表
+就允许旧库启动。Scope/Binding 身份、revision、status_version、deployments 及 cleanup 的
+职责不因模板格式改变而改变，不新增规则表、历史模板表或自动 schema converger。
+
+旧库拒绝启动时不删除、置空、重建或自动替换原 DB/WAL，不进行网络 Apply/Delete。
+使用新库不会接管旧库已部署的远端策略，也不代表旧部署已被清理。仍有旧部署时，
+先使用能读取旧库的旧二进制删除 Scope 并确认清理完成，再人工安排新库；不能以新库启动成功
+证明旧责任已经结束。不提供自动降级或运行中替换数据库。
+
+验收须覆盖新库初始化/重开、三处快照重启解码、旧库及未知新版本拒绝、初始化失败回滚，
+以及拒绝旧库后业务数据和部署责任仍保留。原有 crash 测试在通用规则库重新执行；
+旧开发格式的既有结果不能代替这些验收。新增用例位于
+[SQLite 契约测试](../../v2/crates/asc-policy-repository-sqlite/tests/contracts.rs)：
+`general_policy_rules_survive_reopen_in_current_scope_and_binding_snapshots` 验证同一通用策略被
+两个 Scope 复用、三处快照重开及来源 Policy 删除后的独立性；
+`legacy_policy_payloads_are_rejected_without_discarding_saved_responsibility` 分别向三处快照
+注入旧编码，验证启动拒绝且策略数据和 UNKNOWN 部署责任仍保留。
 
 ## 4. 存储模型
 

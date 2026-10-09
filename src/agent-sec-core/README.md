@@ -65,8 +65,9 @@ Cosh-NG reserves 10 seconds for SkillSec initialization and querying in one Hook
 
 The source-built Rust `agent-sec-cli` provides 12 Policy, Scope and Binding administration
 commands through `asc-daemon`. See the [command reference](../../docs/user-guide/en/agent-security/agent-sec-core/policy-cli.md)
-and [V2 workspace](v2/README.md). PAP state is currently process-local; Binding
-acceptance does not imply enforcement. Scopes save immutable Policy snapshots and
+and [V2 workspace](v2/README.md). PAP state persists in SQLite; Binding acceptance does not imply enforcement.
+PolicyTemplates are reusable policies with general rules; the AgentSight Adapter
+currently executes only file-deletion block rules. Scopes save immutable Policy snapshots and
 own automatic Binding creation, reconciliation and cleanup. To authorize non-root Policy CLI callers, configure
 the daemon with `--policy-admin-uid <UID>`; default authorization remains root-only.
 

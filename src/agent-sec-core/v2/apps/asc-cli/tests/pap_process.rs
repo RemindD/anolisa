@@ -109,7 +109,7 @@ async fn scope_cli_creates_discovery_jobs_and_rejects_nonadministrators() {
         let file = directory.0.join("template.json");
         std::fs::write(
             &file,
-            r#"{"kind":"prevent_file_deletion","files":["/protected"]}"#,
+            r#"{"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/protected"}, "where": {"operation": {"eq": "delete"}}}]}"#,
         )
         .unwrap();
         let (shutdown, task, requests) = start(&socket, role).await;
@@ -384,7 +384,7 @@ async fn domain_validation_and_pagination_are_owned_by_the_daemon() {
     let directory = common::Directory::new();
     let socket = directory.0.join("daemon.sock");
     let (shutdown, task, requests) = start(&socket, PrincipalRole::PolicyAdministrator).await;
-    let request = json!({"method":"policy.templates.create","params":{"policyName":"", "template":{"kind":"prevent_file_deletion","files":["/work"]}}});
+    let request = json!({"method":"policy.templates.create","params":{"policyName":"", "template":{"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/work"}, "where": {"operation": {"eq": "delete"}}}]}}});
     let args = common::args_for(&request, &directory.0, &socket);
     let output = tokio::task::spawn_blocking(move || common::run(&args))
         .await
@@ -395,7 +395,7 @@ async fn domain_validation_and_pagination_are_owned_by_the_daemon() {
         serde_json::from_slice::<Value>(&output.stderr).unwrap()["error"]["code"],
         "invalid_argument"
     );
-    let create_policy = json!({"method":"policy.templates.create","params":{"policyName":"test", "template":{"kind":"prevent_file_deletion","files":["/work"]}}});
+    let create_policy = json!({"method":"policy.templates.create","params":{"policyName":"test", "template":{"specVersion": "0.1", "rules": [{"effect": "block", "category": "file", "action": "write", "target": {"type": "file", "path": "/work"}, "where": {"operation": {"eq": "delete"}}}]}}});
     let args = common::args_for(&create_policy, &directory.0, &socket);
     let output = tokio::task::spawn_blocking(move || common::run(&args))
         .await
