@@ -49,6 +49,26 @@ pub const ACTION_PROMPT_SCAN_WARMUP: &str = "action.prompt_scan.warmup";
 /// Manage Skill scanning, integrity, history and activation.
 pub const ACTION_SKILL_SEC: &str = "action.skill_sec";
 
+/// Lists owner-qualified observability sessions.
+pub const OBS_SESSIONS_LIST: &str = "obs.sessions.list";
+/// Lists runs within one owner-qualified session.
+pub const OBS_RUNS_LIST: &str = "obs.runs.list";
+/// Lists observations and their same-owner security correlations.
+pub const OBS_TIMELINE_GET: &str = "obs.timeline.get";
+/// Read-only observability query inventory.
+pub const OBS_QUERY_METHODS: [&str; 3] = [OBS_SESSIONS_LIST, OBS_RUNS_LIST, OBS_TIMELINE_GET];
+
+/// Bounded read-only observability operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservabilityQueryMethod {
+    /// Owner-qualified session summaries.
+    Sessions,
+    /// Runs within a session.
+    Runs,
+    /// Observations and optional security correlations.
+    Timeline,
+}
+
 /// Complete PAP method inventory for this protocol version.
 pub const PAP_METHODS: [&str; 15] = [
     POLICY_TEMPLATES_CREATE,
@@ -151,6 +171,8 @@ pub enum ActionMethod {
 /// Closed daemon method identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodId {
+    /// Read-only owner-authorized observability query.
+    ObservabilityQuery(ObservabilityQueryMethod),
     /// PAP administration method.
     Pap(PapMethod),
     /// Action capability method.
@@ -187,7 +209,7 @@ impl MethodId {
             Self::Pap(_) => Metadata {
                 access: AccessPolicy::PolicyAdministrator,
             },
-            Self::Action(_) | Self::ObservabilityRecord => Metadata {
+            Self::Action(_) | Self::ObservabilityRecord | Self::ObservabilityQuery(_) => Metadata {
                 access: AccessPolicy::LocalUser,
             },
         }
@@ -212,6 +234,13 @@ pub fn resolve(method: &str) -> Option<MethodId> {
         POLICY_BINDINGS_GET => Some(MethodId::Pap(PapMethod::Binding(BindingMethod::Get))),
         POLICY_BINDINGS_LIST => Some(MethodId::Pap(PapMethod::Binding(BindingMethod::List))),
         POLICY_BINDINGS_DELETE => Some(MethodId::Pap(PapMethod::Binding(BindingMethod::Delete))),
+        OBS_SESSIONS_LIST => Some(MethodId::ObservabilityQuery(
+            ObservabilityQueryMethod::Sessions,
+        )),
+        OBS_RUNS_LIST => Some(MethodId::ObservabilityQuery(ObservabilityQueryMethod::Runs)),
+        OBS_TIMELINE_GET => Some(MethodId::ObservabilityQuery(
+            ObservabilityQueryMethod::Timeline,
+        )),
         OBS_RECORD => Some(MethodId::ObservabilityRecord),
         ACTION_CODE_SCAN => Some(MethodId::Action(ActionMethod::CodeScan)),
         ACTION_PII_SCAN => Some(MethodId::Action(ActionMethod::PiiScan)),

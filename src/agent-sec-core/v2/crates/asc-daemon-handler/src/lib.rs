@@ -19,3 +19,5 @@ mod skill_sec;
 
 pub use dispatcher::DaemonDispatcher;
 pub use rejection::JsonRejectionEncoder;
+
+mod observability_query;

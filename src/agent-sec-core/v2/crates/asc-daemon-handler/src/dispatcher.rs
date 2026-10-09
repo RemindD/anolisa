@@ -13,6 +13,8 @@ use crate::pap::PapHandler;
 use crate::pii::PiiScanHandler;
 use crate::prompt_scan::PromptScanHandler;
 
+const DEFAULT_DISPATCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Protocol router composed over daemon application use cases.
 pub struct DaemonDispatcher {
     pap: PapHandler,
@@ -21,6 +23,7 @@ pub struct DaemonDispatcher {
     skill_sec: crate::skill_sec::SkillSecHandler,
     prompt_scan: PromptScanHandler,
     principal_policy: Arc<dyn PrincipalPolicy>,
+    observability_queries: Option<asc_daemon_core::query::ObservabilityQueryService>,
     observability: Option<asc_daemon_core::ObservabilityService>,
 }
 
@@ -42,6 +45,7 @@ impl DaemonDispatcher {
             prompt_scan: PromptScanHandler::new(actions),
             principal_policy,
             observability: None,
+            observability_queries: None,
         }
     }
 
@@ -52,7 +56,18 @@ impl DaemonDispatcher {
         self
     }
 
-    /// Handles one decoded request using transport-authenticated peer identity.
+    /// Installs the owner-aware observability query application.
+    #[must_use]
+    pub fn with_observability_queries(
+        mut self,
+        service: asc_daemon_core::query::ObservabilityQueryService,
+    ) -> Self {
+        self.observability_queries = Some(service);
+        self
+    }
+
+    /// Handles an in-process request with a five-second convenience budget.
+    /// UDS dispatch uses its transport-owned control instead.
     pub fn handle(
         &self,
         request_id: RequestId,
@@ -62,7 +77,9 @@ impl DaemonDispatcher {
         self.handle_with_control(
             request_id,
             peer,
-            &asc_daemon_service::DispatchControl::new(std::time::Instant::now()),
+            &asc_daemon_service::DispatchControl::new(
+                std::time::Instant::now() + DEFAULT_DISPATCH_BUDGET,
+            ),
             request,
         )
     }
@@ -109,8 +126,17 @@ impl DaemonDispatcher {
             );
         }
         match method_id {
+            MethodId::ObservabilityQuery(method) => crate::observability_query::handle(
+                request_id,
+                peer,
+                control,
+                self.observability_queries.as_ref(),
+                method,
+                request.params,
+            ),
             MethodId::ObservabilityRecord => crate::observability::handle(
                 request_id,
+                peer,
                 control,
                 self.observability.as_ref(),
                 request.params,

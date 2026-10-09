@@ -111,7 +111,7 @@ async fn run(
             return (ExitCode::FAILURE, None);
         }
     };
-    let (finalizer, durable_sinks) = match event_finalizer(telemetry) {
+    let (finalizer, durable_sinks, query_service) = match event_finalizer(telemetry) {
         Ok(sinks) => sinks,
         Err(error) => {
             telemetry.report(&format!(
@@ -153,12 +153,15 @@ async fn run(
         cli.policy_admin_uids,
     ));
     let policy_for_handler: Arc<dyn PrincipalPolicy> = principal_policy.clone();
+    let mut dispatcher = DaemonDispatcher::new(pap, policy_for_handler, actions)
+        .with_observability(asc_daemon_core::ObservabilityService::new(Arc::new(
+            sinks::ObservabilitySinkAdapter(Arc::clone(&durable_sinks.observability)),
+        )));
+    if let Some(queries) = query_service {
+        dispatcher = dispatcher.with_observability_queries(queries);
+    }
     let dispatcher = Arc::new(asc_daemon::skillfs::SkillFsDispatcher::new(
-        DaemonDispatcher::new(pap, policy_for_handler, actions).with_observability(
-            asc_daemon_core::ObservabilityService::new(Arc::new(sinks::ObservabilitySinkAdapter(
-                Arc::clone(&durable_sinks.observability),
-            ))),
-        ),
+        dispatcher,
         skillfs.clone(),
     ));
     telemetry
@@ -274,14 +277,36 @@ async fn drain_runtimes(
 
 fn event_finalizer(
     telemetry: &asc_observability::TelemetryRuntime,
-) -> Result<(Finalizer, sinks::DurableSinks), asc_event_sink::SinkError> {
+) -> Result<
+    (
+        Finalizer,
+        sinks::DurableSinks,
+        Option<asc_daemon_core::query::ObservabilityQueryService>,
+    ),
+    asc_event_sink::SinkError,
+> {
     let (jsonl_path, sqlite_path) = daemon_security_event_paths()?;
+    let observability_path = sqlite_path.with_file_name("observability.db");
     let observability_sinks = Arc::new(asc_event_sink::ConfiguredObservabilitySinks::new(
         jsonl_path.with_file_name("observability.jsonl"),
-        sqlite_path.with_file_name("observability.db"),
+        observability_path.clone(),
     ));
+    let query_service = if observability_sinks.warm_owned().is_ok() {
+        Some(asc_daemon_core::query::ObservabilityQueryService::new(
+            asc_persistence_sqlite::query::SqliteObservabilityQueries::new(observability_path),
+            asc_persistence_sqlite::query::SqliteSecurityQueries::new(sqlite_path.clone()),
+        ))
+    } else {
+        telemetry.report("agent-sec-daemon: observability query storage unavailable; migration or initialization failed");
+        None
+    };
     let sinks = Arc::new(ConfiguredSecurityEventSinks::new(jsonl_path, sqlite_path));
     sinks.warm_sqlite()?;
+    if let Err(error) = sinks.prepare_query_indexes() {
+        telemetry.report(&format!(
+            "agent-sec-daemon: warning: security query indexes unavailable; queries may be slower: {error}"
+        ));
+    }
     if let Err(error) = sinks.warm_jsonl() {
         telemetry.report(&format!(
             "agent-sec-daemon: warning: JSONL security event log unavailable: {error}"
@@ -301,6 +326,7 @@ fn event_finalizer(
             security: sinks,
             observability: observability_sinks,
         },
+        query_service,
     ))
 }
 
