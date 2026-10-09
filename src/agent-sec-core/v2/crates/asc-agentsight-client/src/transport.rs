@@ -184,7 +184,7 @@ impl AgentSightTransport for UreqAgentSightTransport {
     }
 }
 
-fn normalize_base_url(base_url: &str) -> Result<String, AgentSightClientConfigError> {
+pub(crate) fn normalize_base_url(base_url: &str) -> Result<String, AgentSightClientConfigError> {
     if base_url.is_empty()
         || base_url.len() > MAX_BASE_URL_BYTES
         || base_url

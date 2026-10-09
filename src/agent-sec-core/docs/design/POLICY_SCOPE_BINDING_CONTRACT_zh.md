@@ -1,9 +1,12 @@
 # Policy Template、Scope 与 Binding 生命周期契约
 
-文档类型：`[TARGET V2][IMPLEMENTED, PROCESS-LOCAL]` 对象与生命周期契约。
+文档类型：`[TARGET V2][IMPLEMENTED]` 对象与生命周期契约。
 本契约与 [AgentSecCore 安全策略语言](https://alidocs.dingtalk.com/i/nodes/20eMKjyp810mMdK4HrdLaNnXJxAZB1Gv)
 采用同一模型。本文替代旧设计中 Scope 仅表示 PID/cgroup、Scope 自身增版、用户手动
 Binding CRUD 和 Scope 引用阻止 Policy 更新/删除的目标语义；不改写已有测试的历史结果。
+
+当前持久化实现见 [Policy SQLite 持久化与崩溃恢复设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)：
+包含数据库事务、内部 `status_version` CAS、Discovery 恢复及本地 crash 验收证据。
 
 ## 1. 对象与版本
 
@@ -79,7 +82,7 @@ namespace、PID、start time；发现、入队、重试和实际下发必须保�
 
 ### 3.1 Scope 删除与清理顺序
 
-以下流程已接入 process-local PAP、discovery 与既有 Reconciler。
+以下流程已接入 SQLite PAP、discovery 与 Reconciler。
 
 1. **接受删除意图**：原子保存 Scope 正在删除的状态并关闭新 Binding 准入，保留 Scope
    配置及策略快照。并发或延迟到达的发现结果不得在此之后创建子 Binding。删除意图不可撤销。
@@ -91,13 +94,14 @@ namespace、PID、start time；发现、入队、重试和实际下发必须保�
    不确定结果不能作为不存在的证明；按有界预算重试。失败保留可查询错误和全部未完成
    清理责任，不因回收缓存、线程或本地记录而报告成功。
 5. **完成回收**：确认所属目标全部不存在且没有未完成的本地目标调用后，条件移除已清理
-   的 Binding；确认没有遗漏子项或目标责任后最终移除 Scope 及其快照。删除不影响来源
-   Policy Template，也不影响其他 Scope 及其 Binding。
+   的 Binding。最后一条 Binding 删除成功时，同时移除已停止 discovery 的 Scope 及其快照；
+   若没有 Binding，则停止 discovery 后直接移除 Scope。删除不影响来源 Policy Template，
+   也不影响其他 Scope 及其 Binding。Active Scope 不因实例退出、Binding 暂时清空而删除。
 
 删除返回 `ScopeDeletion {scopeId, completed}`。`completed:false` 表示意图已受理但清理
 尚未完成，此时 Scope 为 `DELETING`，相关失败仍可查询；`completed:true` 表示已回收。
-重复删除合并到已有意图，不重复创建清理任务，不重置重试预算。完成后仅保留 Scope ID
-墓碑，允许同一 daemon 生命周期内重复删除成功，不保留完整策略快照；未知 ID 返回 not-found。
+重复删除合并到已有意图，不重复创建清理任务，不重置重试预算。完成后 get 返回 not_found，
+list 不再包含该 Scope。删除不存在的 Scope 返回 `completed:true`，重启后也可重复删除。
 
 有界自动重试继续适用，周期扫描不能重置终态失败预算。`policy.scopes.retry` / `scope retry`
 仅将所属 `APPLY_FAILED`/`DELETE_FAILED` 转回对应 pending，保留目标责任，不重启非终态工作。
@@ -128,18 +132,18 @@ Scope 替换采用不同 Scope/Binding 身份，不能伪装为修改旧 Scope �
 | 入口 | 当前实现 |
 |---|---|
 | Policy | 一个 current 完整记录，保留 revision 分配头；无历史库/引用计数 |
-| Scope | 无 revision，保存完整快照；存储锁内与 Policy mutation 原子校验 |
-| discovery | `start(scope)`，每 2 秒扫描；完整实例集合提交 PAP，缓存命中也重试失败的准入 |
+| Scope | 无 revision，保存完整快照；事务内与 Policy mutation 原子校验 |
+| discovery | `start(seed)`，恢复 Assignment、PID pin 和已知实例；每 2 秒扫描；缓存命中也重试失败准入 |
 | Binding | 系统去重创建，查询可见；单策略快照 + Scope ID/selector + 固定实例身份 |
 | 删除 | 关闭准入、join worker、复用 Reconciler 清理、失败可查、完成后回收 |
 | 协议 | 12 个 PAP 方法：Policy 5，Scope 5（含 retry），Binding 2（get/list） |
 | 大小 | 编码后 Policy/Scope 最多 1 MiB，列表条目预算 3 MiB；offset 按实际返回条数推进 |
 | AgentSight | plan/apply 格式升级到 v2，跨次尝试及下发前校验固定进程身份 |
-| 存储 | process-local；磁盘耐久性、关闭重开和重启恢复单独交付验收 |
+| 存储 | `policy-state.db`；WAL/FULL、三表事务、内部 status CAS 和写回执；启动恢复 discovery 与未完成 reconcile |
 
 Scope update、手动 Binding create/update/delete 返回 `unknown_method`；旧 Scope revision
-参数拒绝。CLI/daemon 必须成套升级；没有持久化旧 PAP 记录迁移。本变更没有新增依赖库，
-复用 workspace 内 serde/serde_json/uuid。discovery 容量仍为 32 个 Scope；未配置发现或
+参数拒绝。CLI/daemon 必须成套升级；不导入旧进程内 PAP 记录或 V1 数据。
+SQLite 后端复用 workspace 已有依赖。discovery 容量仍为 32 个 Active Scope；未配置发现或
 Reconciler 不可用时新 Scope 返回 unavailable。Policy 写入、查询及 Scope 删除仍可执行。
 
 discovery 启动失败时，PAP 尝试按顺序补偿删除，但始终返回原始启动错误。补偿失败日志
@@ -147,14 +151,12 @@ discovery 启动失败时，PAP 尝试按顺序补偿删除，但始终返回原
 删除时先记录 DELETING 再停止 worker，stop 失败不撤销删除意图；依赖恢复后重试推进。
 已 shutdown 的 registry 不会因重复请求自行恢复。
 
-`scope_ids` 墓碑随本进程历史创建总量增长；`stopped_scopes` 是未完成删除的清理屏障，
-finalize 后释放。未来 durable backend 必须定义墓碑保留期限/容量及回收后的幂等响应；
-不能无声增加 TTL 改变当前生命周期内重复删除成功的契约。当前去重采用线性扫描，
-32 个策略上限不限制进程或 Binding 总数；是否增加索引需根据规模和耗时确定。
+SQLite 使用实例/策略身份的唯一约束，准入事务在已保存集合中去重；32 个策略上限不限制
+进程或 Binding 总数。内存测试后端保留相同语义。
 
 源码入口：[Scope](../../v2/crates/asc-policy-types/src/scope.rs)、
 [PAP](../../v2/crates/asc-pap/src/service.rs)、
-[memory repository](../../v2/crates/asc-pap-repository-memory/src/lib.rs)、
+[SQLite repository](../../v2/crates/asc-policy-repository-sqlite/src/lib.rs)、
 [discovery](../../v2/crates/asc-daemon-core/src/scope_discovery.rs)、
 [Client](../../v2/crates/asc-agentsight-client/src/client/reconciliation.rs)。
 
@@ -165,7 +167,8 @@ finalize 后释放。未来 durable backend 必须定义墓碑保留期限/容�
 - discovery/Client：名称/path、改名/exec、局部扫描失败；PID reuse 不重定向已有 Binding，
   PID selector 不跟随新实例；固定 boot/namespace/start time 在 prepare 和请求前核对。
 - Runtime/PCP：保留串行、条件写、部分失败、UNKNOWN 目标和预算回归；Scope 删除在 Apply
-  期间受理，旧调用退出后完成所有目标清理，不丢失责任。
+  期间受理，旧调用退出后完成所有目标清理，不丢失责任；最后一条 Binding 删除时同时
+  移除已停止 discovery 的 Deleting Scope，Active Scope 变空仍保留。
 - 组合：`procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances` 使用真实
   procfs、PAP、runtime、Adapter 和 scripted Client，覆盖模板更新/删除后新增进程及最终回收。
 - 协议/CLI：完整 method/错误/scenario fixtures、UDS、bootstrap、CLI process 和 Python
@@ -175,10 +178,11 @@ finalize 后释放。未来 durable backend 必须定义墓碑保留期限/容�
 运行门禁：在 `v2/` 执行 `cargo fmt --all -- --check`、
 `cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、
 `cargo doc --workspace --no-deps`；Python E2E 使用本次构建的 CLI/daemon。
-这些本地检查不代表远端 CI、RPM/systemd 部署、durable recovery 或真实 kernel enforcement。
+持久化的 SIGKILL/故障注入证据见 SQLite 设计第 9 节；这些本地检查不代表远端 CI、
+RPM/systemd 部署、物理断电恢复或真实 kernel enforcement。
 旧验收记录保留其历史基线，不能把旧 PASS 改写为本次或持久化交付结果。
 
-本次本地验证：Rust workspace 共 802 项测试通过（0 failed/ignored），Python CLI/daemon
+先前 process-local 阶段的本地记录：Rust workspace 共 802 项测试通过（0 failed/ignored），Python CLI/daemon
 流程 2 项通过；fmt、Clippy（deny warnings）、rustdoc、Python 格式/lint、文档命名与链接
 检查通过。Python 使用 3.11.6 和本次本地构建的二进制，socket 测试在允许本地 UDS 的环境
 执行。未运行远端 CI 或真实 AgentSight/kernel 验收。

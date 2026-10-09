@@ -259,6 +259,7 @@ dependencies = [
  "asc-policy-adapter-agentsight",
  "asc-policy-engine",
  "asc-policy-repository",
+ "asc-policy-repository-sqlite",
  "asc-policy-runtime",
  "asc-policy-types",
  "asc-security-events",
@@ -520,7 +521,32 @@ dependencies = [
  "asc-foundation-types",
  "asc-policy-types",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "asc-policy-repository-sqlite"
+version = "0.13.2"
+dependencies = [
+ "asc-agentsight-client",
+ "asc-foundation-types",
+ "asc-pap",
+ "asc-pap-repository-memory",
+ "asc-pcp",
+ "asc-policy-engine",
+ "asc-policy-repository",
+ "asc-policy-types",
+ "asc-sqlite-kernel",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
  "uuid",
 ]
 

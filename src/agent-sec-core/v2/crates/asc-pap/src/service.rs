@@ -79,7 +79,11 @@ where
     fn check_ready(&self) -> Result<(), PapError> {
         self.enqueuer.as_ref().map_or(Ok(()), |e| e.check_ready())
     }
-    fn notify(&self, mut binding: BindingView) -> Result<BindingView, PapError> {
+    fn notify(
+        &self,
+        receipt: &asc_policy_repository::BindingIntentReceipt,
+    ) -> Result<BindingView, PapError> {
+        let mut binding = receipt.binding.clone();
         let Some(enqueuer) = &self.enqueuer else {
             return Ok(binding);
         };
@@ -93,7 +97,7 @@ where
         let Err(reason) = enqueuer.enqueue(&binding.spec.binding_id) else {
             return Ok(binding);
         };
-        match self.repository.fail_pending_binding(&binding, reason) {
+        match self.repository.fail_pending_binding(receipt, reason) {
             Ok(true) => {
                 // Return the snapshot confirmed by the conditional write, without
                 // a second read that could observe a newer request or fail.
@@ -281,8 +285,20 @@ where
             status: asc_policy_types::scope::ScopeStatus::Active,
         };
         candidate.validate().map_err(PapError::InvalidScope)?;
-        let scope = self.repository.put_scope(&candidate)?;
-        if let Err(error) = discovery.start(&scope) {
+        let scope = match self.repository.put_scope(&candidate) {
+            // A commit can succeed before its acknowledgement is lost. Only the
+            // exact server-generated assignment proves admission in that case.
+            Err(PapError::Persistence) => match self.repository.get_scope(&candidate.scope_id) {
+                Ok(saved) if saved == candidate => saved,
+                _ => return Err(PapError::Persistence),
+            },
+            result => result?,
+        };
+        let started = self
+            .repository
+            .scope_discovery_seed(&scope.scope_id)
+            .and_then(|seed| discovery.start(&seed));
+        if let Err(error) = started {
             let cleanup = self
                 .repository
                 .begin_scope_delete(&scope.scope_id)
@@ -375,10 +391,13 @@ where
         Ok(scope)
     }
 
-    fn notify_all(&self, bindings: Vec<BindingView>) -> Result<(), PapError> {
+    fn notify_all(
+        &self,
+        bindings: Vec<asc_policy_repository::BindingIntentReceipt>,
+    ) -> Result<(), PapError> {
         let mut failure = None;
         for binding in bindings {
-            if let Err(error) = self.notify(binding) {
+            if let Err(error) = self.notify(&binding) {
                 failure = Some(error);
             }
         }

@@ -26,7 +26,7 @@ mod service;
 
 pub use compiler::PolicyCompiler;
 pub use error::{EnqueueError, PapError};
-pub use model::{Page, PolicyRevisionState};
+pub use model::{Page, PolicyRevisionState, ScopeDiscoverySeed};
 pub use repository::PapRepository;
 pub use service::PapService;
 
@@ -49,7 +49,7 @@ pub trait ScopeDiscovery: Send + Sync {
     /// Starts one worker from the stored assignment. On error no worker may remain.
     /// # Errors
     /// Rejects unavailable discovery or exhausted job capacity.
-    fn start(&self, scope: &asc_policy_types::scope::PreparedScope) -> Result<(), PapError>;
+    fn start(&self, seed: &ScopeDiscoverySeed) -> Result<(), PapError>;
     /// Cancel and join only this Scope's worker and close its observation stream.
     /// # Errors
     /// Reports failure to stop the worker.

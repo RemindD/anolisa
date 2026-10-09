@@ -49,6 +49,7 @@ fn admission_full_failed_snapshot_stale_wakeup_and_explicit_retry() {
         };
         let returned = request().unwrap();
         let mut expected = initial.clone();
+        expected.status_version += 2;
         expected.binding.status.phase = if deleting {
             BindingStatus::DeleteFailed
         } else {
@@ -110,7 +111,7 @@ impl BindingReconcileEnqueuer for InterleavingEnqueuer {
     fn enqueue(&self, id: &ResourceId) -> Result<(), EnqueueError> {
         if self.claim {
             let current = self.repo.get_binding_state(id).unwrap().unwrap();
-            assert_eq!(
+            assert!(matches!(
                 self.repo
                     .compare_exchange_binding_state(
                         &current,
@@ -128,8 +129,8 @@ impl BindingReconcileEnqueuer for InterleavingEnqueuer {
                         })
                     )
                     .unwrap(),
-                WriteResult::Applied
-            );
+                WriteResult::Applied(_)
+            ));
         }
         Err(EnqueueError::Stopped)
     }
@@ -189,14 +190,26 @@ fn admission_pending_cas_preserves_state_and_fences_revision_and_status() {
     stale.spec.binding_revision = stale.spec.binding_revision.checked_next().unwrap();
     assert!(
         !repo
-            .fail_pending_binding(&stale, EnqueueError::Full)
+            .fail_pending_binding(
+                &asc_policy_repository::BindingIntentReceipt {
+                    binding: stale.clone(),
+                    status_version: initial.status_version
+                },
+                EnqueueError::Full
+            )
             .unwrap()
     );
     stale = initial.binding.clone();
     stale.status = BindingStatus::PendingDelete.into();
     assert!(
         !repo
-            .fail_pending_binding(&stale, EnqueueError::Full)
+            .fail_pending_binding(
+                &asc_policy_repository::BindingIntentReceipt {
+                    binding: stale.clone(),
+                    status_version: initial.status_version
+                },
+                EnqueueError::Full
+            )
             .unwrap()
     );
     assert_eq!(
@@ -204,10 +217,11 @@ fn admission_pending_cas_preserves_state_and_fences_revision_and_status() {
         Some(initial.clone())
     );
     assert!(
-        repo.fail_pending_binding(&initial.binding, EnqueueError::Full)
+        repo.fail_pending_binding(&(&initial).into(), EnqueueError::Full)
             .unwrap()
     );
     let mut expected = initial.clone();
+    expected.status_version += 1;
     expected.binding.status.phase = BindingStatus::ApplyFailed;
     expected.binding.status.error = Some(EnqueueError::Full.failure());
     assert_eq!(repo.get_binding_state(&id(1)).unwrap(), Some(expected));

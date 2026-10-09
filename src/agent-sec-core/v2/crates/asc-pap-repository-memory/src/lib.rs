@@ -31,27 +31,69 @@ pub struct ProcessLocalPapRepository {
     state: Mutex<State>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct State {
     policy_heads: BTreeMap<String, Revision>,
     policies: BTreeMap<String, PreparedPolicy>,
-    // Lifetime tombstones preserve deletion idempotency; grow with all created Scopes.
-    scope_ids: BTreeSet<String>,
     // Cleanup barriers are retained only until their Scope is finalized.
     stopped_scopes: BTreeSet<String>,
     scopes: BTreeMap<String, PreparedScope>,
+    pins: BTreeMap<String, ProcessIdentity>,
     bindings: BTreeMap<String, BindingView>,
     binding_states: BTreeMap<String, BindingStateData>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 struct BindingStateData {
+    status_version: i64,
     deployments: Vec<asc_policy_repository::Deployment>,
     // Latest atomic write receipt, independent of reconciliation decisions.
-    last_write: Option<asc_policy_repository::BindingStateWrite>,
+    last_write: Option<(uuid::Uuid, [u8; 32], asc_policy_repository::WriteReceipt)>,
+}
+
+impl Default for BindingStateData {
+    fn default() -> Self {
+        Self {
+            status_version: 1,
+            deployments: Vec::new(),
+            last_write: None,
+        }
+    }
+}
+
+fn intent(state: &State, binding: BindingView) -> asc_policy_repository::BindingIntentReceipt {
+    let status_version = state
+        .binding_states
+        .get(binding.spec.binding_id.as_str())
+        .map_or(1, |s| s.status_version);
+    asc_policy_repository::BindingIntentReceipt {
+        binding,
+        status_version,
+    }
+}
+
+fn bump_status(state: &mut State, id: &str) -> Result<(), PapError> {
+    let data = state.binding_states.entry(id.to_owned()).or_default();
+    data.status_version = data
+        .status_version
+        .checked_add(1)
+        .ok_or(PapError::Persistence)?;
+    Ok(())
 }
 
 impl ProcessLocalPapRepository {
+    fn mutate<T>(
+        &self,
+        operation: impl FnOnce(&mut State) -> Result<T, PapError>,
+    ) -> Result<T, PapError> {
+        let mut guard = self.lock()?;
+        // ponytail: clone for atomic rollback in the test backend; production uses SQL transactions.
+        let mut next = guard.clone();
+        let result = operation(&mut next)?;
+        *guard = next;
+        Ok(result)
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, State>, PapError> {
         self.state.lock().map_err(|_| PapError::Persistence)
     }
@@ -67,23 +109,24 @@ impl PapRepository for ProcessLocalPapRepository {
                 ),
             ));
         }
-        let mut state = self.lock()?;
-        let id = policy.policy_id.as_str().to_owned();
-        if let Some(existing) = state.policies.get(&id)
-            && existing.revision == policy.revision
-        {
-            return if existing == policy {
-                Ok(existing.clone())
-            } else {
-                Err(PapError::Conflict)
-            };
-        }
-        if !is_next_revision(state.policy_heads.get(&id).copied(), policy.revision) {
-            return Err(PapError::Conflict);
-        }
-        state.policies.insert(id.clone(), policy.clone());
-        state.policy_heads.insert(id, policy.revision);
-        Ok(policy.clone())
+        self.mutate(|state| {
+            let id = policy.policy_id.as_str().to_owned();
+            if let Some(existing) = state.policies.get(&id)
+                && existing.revision == policy.revision
+            {
+                return if existing == policy {
+                    Ok(existing.clone())
+                } else {
+                    Err(PapError::Conflict)
+                };
+            }
+            if !is_next_revision(state.policy_heads.get(&id).copied(), policy.revision) {
+                return Err(PapError::Conflict);
+            }
+            state.policies.insert(id.clone(), policy.clone());
+            state.policy_heads.insert(id, policy.revision);
+            Ok(policy.clone())
+        })
     }
 
     fn get_policy_revision_state(
@@ -120,18 +163,19 @@ impl PapRepository for ProcessLocalPapRepository {
         id: &ResourceId,
         revision: Revision,
     ) -> Result<PreparedPolicy, PapError> {
-        let mut state = self.lock()?;
-        if state
-            .policies
-            .get(id.as_str())
-            .is_none_or(|policy| policy.revision != revision)
-        {
-            return Err(PapError::NotFound);
-        }
-        state
-            .policies
-            .remove(id.as_str())
-            .ok_or(PapError::Persistence)
+        self.mutate(|state| {
+            if state
+                .policies
+                .get(id.as_str())
+                .is_none_or(|policy| policy.revision != revision)
+            {
+                return Err(PapError::NotFound);
+            }
+            state
+                .policies
+                .remove(id.as_str())
+                .ok_or(PapError::Persistence)
+        })
     }
 
     fn put_scope(&self, scope: &PreparedScope) -> Result<PreparedScope, PapError> {
@@ -147,20 +191,29 @@ impl PapRepository for ProcessLocalPapRepository {
         if scope.status != ScopeStatus::Active {
             return Err(PapError::Conflict);
         }
-        let mut state = self.lock()?;
-        let id = scope.scope_id.to_string();
-        if state.scope_ids.contains(&id) {
-            return Err(PapError::Conflict);
-        }
-        // Snapshot verification and insertion share the policy mutation lock.
-        for policy in &scope.policy_snapshots {
-            if state.policies.get(policy.policy_id.as_str()) != Some(policy) {
-                return Err(PapError::ReferencedPolicyRevisionNotFound);
+        self.mutate(|state| {
+            let id = scope.scope_id.to_string();
+            if state.scopes.contains_key(&id) {
+                return Err(PapError::Conflict);
             }
-        }
-        state.scope_ids.insert(id.clone());
-        state.scopes.insert(id, scope.clone());
-        Ok(scope.clone())
+            // Snapshot verification and insertion share the policy mutation lock.
+            for policy in &scope.policy_snapshots {
+                if state.policies.get(policy.policy_id.as_str()) != Some(policy) {
+                    return Err(PapError::ReferencedPolicyRevisionNotFound);
+                }
+            }
+            if state
+                .scopes
+                .values()
+                .filter(|s| s.status == ScopeStatus::Active)
+                .count()
+                >= 32
+            {
+                return Err(PapError::Unavailable);
+            }
+            state.scopes.insert(id, scope.clone());
+            Ok(scope.clone())
+        })
     }
 
     fn get_scope(&self, id: &ResourceId) -> Result<PreparedScope, PapError> {
@@ -175,152 +228,228 @@ impl PapRepository for ProcessLocalPapRepository {
         bounded_page(self.lock()?.scopes.values(), limit, offset)
     }
 
-    fn begin_scope_delete(&self, id: &ResourceId) -> Result<Option<PreparedScope>, PapError> {
-        let mut state = self.lock()?;
-        if let Some(scope) = state.scopes.get_mut(id.as_str()) {
-            scope.status = ScopeStatus::Deleting;
-            return Ok(Some(scope.clone()));
-        }
-        if state.scope_ids.contains(id.as_str()) {
-            Ok(None)
-        } else {
-            Err(PapError::NotFound)
-        }
+    fn scope_discovery_seed(
+        &self,
+        id: &ResourceId,
+    ) -> Result<asc_pap::ScopeDiscoverySeed, PapError> {
+        let state = self.lock()?;
+        let scope = state
+            .scopes
+            .get(id.as_str())
+            .ok_or(PapError::NotFound)?
+            .clone();
+        let instances: BTreeSet<_> = state
+            .bindings
+            .values()
+            .filter(|b| {
+                b.spec.scope.scope_id == *id
+                    && matches!(
+                        b.status.phase,
+                        BindingStatus::PendingApply
+                            | BindingStatus::Applying
+                            | BindingStatus::Ready
+                            | BindingStatus::ApplyFailed
+                    )
+            })
+            .map(|b| b.spec.scope.process.clone())
+            .collect();
+        Ok(asc_pap::ScopeDiscoverySeed {
+            scope,
+            pinned_process: state.pins.get(id.as_str()).cloned(),
+            instances: instances.into_iter().collect(),
+        })
     }
 
-    fn finish_scope_discovery(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
-        let mut state = self.lock()?;
-        let Some(scope) = state.scopes.get(id.as_str()) else {
-            return Ok(Vec::new());
-        };
-        if scope.status != ScopeStatus::Deleting {
-            return Err(PapError::Conflict);
+    fn scan_scopes(
+        &self,
+        after: Option<&ResourceId>,
+        limit: usize,
+    ) -> Result<Vec<PreparedScope>, PapError> {
+        if limit == 0 || limit > 1000 {
+            return Err(PapError::Persistence);
         }
-        state.stopped_scopes.insert(id.to_string());
-        let mut changed = Vec::new();
-        for binding in state
-            .bindings
-            .values_mut()
-            .filter(|b| b.spec.scope.scope_id == *id)
-        {
-            if request_retirement(binding) {
-                changed.push(binding.clone());
+        Ok(self
+            .lock()?
+            .scopes
+            .range((
+                after.map_or(std::ops::Bound::Unbounded, |id| {
+                    std::ops::Bound::Excluded(id.to_string())
+                }),
+                std::ops::Bound::Unbounded,
+            ))
+            .take(limit)
+            .map(|(_, scope)| scope.clone())
+            .collect())
+    }
+
+    fn begin_scope_delete(&self, id: &ResourceId) -> Result<Option<PreparedScope>, PapError> {
+        self.mutate(|state| {
+            if let Some(scope) = state.scopes.get_mut(id.as_str()) {
+                scope.status = ScopeStatus::Deleting;
+                return Ok(Some(scope.clone()));
             }
-        }
-        for binding in &changed {
-            state
-                .binding_states
-                .entry(binding.spec.binding_id.to_string())
-                .or_default()
-                .last_write = None;
-        }
-        finalize_scope(&mut state, id.as_str());
-        Ok(changed)
+            Ok(None)
+        })
+    }
+
+    fn finish_scope_discovery(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
+        self.mutate(|state| {
+            let Some(scope) = state.scopes.get(id.as_str()) else {
+                return Ok(Vec::new());
+            };
+            if scope.status != ScopeStatus::Deleting {
+                return Err(PapError::Conflict);
+            }
+            state.stopped_scopes.insert(id.to_string());
+            let mut changed = Vec::new();
+            for binding in state
+                .bindings
+                .values_mut()
+                .filter(|b| b.spec.scope.scope_id == *id)
+            {
+                if request_retirement(binding) {
+                    changed.push(binding.clone());
+                }
+            }
+            for binding in &changed {
+                bump_status(state, binding.spec.binding_id.as_str())?;
+            }
+            finalize_scope(state, id.as_str());
+            Ok(changed
+                .into_iter()
+                .map(|binding| intent(state, binding))
+                .collect())
+        })
     }
 
     fn sync_scope_instances(
         &self,
         id: &ResourceId,
         instances: &[ProcessIdentity],
-    ) -> Result<Vec<BindingView>, PapError> {
-        let mut state = self.lock()?;
-        let scope = state
-            .scopes
-            .get(id.as_str())
-            .ok_or(PapError::NotFound)?
-            .clone();
-        if scope.status != ScopeStatus::Active {
-            return Err(PapError::OperationInProgress);
-        }
-        let mut changed = Vec::new();
-        // Validate the complete batch before modifying any existing intent.
-        let mut candidates = Vec::new();
-        for instance in instances {
-            for policy in &scope.policy_snapshots {
-                if state.bindings.values().any(|b| {
-                    b.spec.scope.scope_id == *id
-                        && b.spec.scope.process == *instance
-                        && b.spec.policy.policy_id == policy.policy_id
-                }) || candidates.iter().any(|b: &BindingView| {
-                    b.spec.scope.process == *instance && b.spec.policy.policy_id == policy.policy_id
-                }) {
-                    continue;
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
+        self.mutate(|state| {
+            let scope = state
+                .scopes
+                .get(id.as_str())
+                .ok_or(PapError::NotFound)?
+                .clone();
+            if scope.status != ScopeStatus::Active {
+                return Err(PapError::OperationInProgress);
+            }
+            if let asc_policy_types::scope::ScopeSelector::Pid { pid } = scope.selector {
+                if instances.len() > 1 || instances.first().is_some_and(|p| p.pid != pid) {
+                    return Err(PapError::Conflict);
                 }
-                let binding = BindingView {
-                    spec: PreparedBinding {
-                        binding_id: ResourceId::new(uuid::Uuid::new_v4().to_string())
-                            .map_err(|_| PapError::Persistence)?,
-                        binding_revision: Revision::new(1).map_err(|_| PapError::Persistence)?,
-                        policy: policy.clone(),
-                        scope: BindingScope {
-                            scope_id: id.clone(),
-                            selector: scope.selector.clone(),
-                            process: instance.clone(),
+                if let Some(instance) = instances.first() {
+                    if state.pins.get(id.as_str()).is_some_and(|p| p != instance) {
+                        return Err(PapError::Conflict);
+                    }
+                    state.pins.insert(id.to_string(), instance.clone());
+                }
+            }
+            let mut changed = Vec::new();
+            // Validate the complete batch before modifying any existing intent.
+            let mut candidates = Vec::new();
+            for instance in instances {
+                for policy in &scope.policy_snapshots {
+                    if state.bindings.values().any(|b| {
+                        b.spec.scope.scope_id == *id
+                            && b.spec.scope.process == *instance
+                            && b.spec.policy.policy_id == policy.policy_id
+                    }) || candidates.iter().any(|b: &BindingView| {
+                        b.spec.scope.process == *instance
+                            && b.spec.policy.policy_id == policy.policy_id
+                    }) {
+                        continue;
+                    }
+                    let binding = BindingView {
+                        spec: PreparedBinding {
+                            binding_id: ResourceId::new(uuid::Uuid::new_v4().to_string())
+                                .map_err(|_| PapError::Persistence)?,
+                            binding_revision: Revision::new(1)
+                                .map_err(|_| PapError::Persistence)?,
+                            policy: policy.clone(),
+                            scope: BindingScope {
+                                scope_id: id.clone(),
+                                selector: scope.selector.clone(),
+                                process: instance.clone(),
+                            },
                         },
-                    },
-                    status: BindingStatus::PendingApply.into(),
-                };
-                binding.validate().map_err(PapError::InvalidBinding)?;
-                candidates.push(binding);
+                        status: BindingStatus::PendingApply.into(),
+                    };
+                    binding.validate().map_err(PapError::InvalidBinding)?;
+                    candidates.push(binding);
+                }
             }
-        }
-        for binding in state
-            .bindings
-            .values_mut()
-            .filter(|b| b.spec.scope.scope_id == *id)
-        {
-            if !instances.contains(&binding.spec.scope.process) && request_retirement(binding) {
-                changed.push(binding.clone());
-            }
-        }
-        for binding in candidates {
-            state
+            for binding in state
                 .bindings
-                .insert(binding.spec.binding_id.to_string(), binding.clone());
-            changed.push(binding);
-        }
-        for binding in &changed {
-            state
-                .binding_states
-                .entry(binding.spec.binding_id.to_string())
-                .or_default()
-                .last_write = None;
-        }
-        Ok(changed)
+                .values_mut()
+                .filter(|b| b.spec.scope.scope_id == *id)
+            {
+                if !instances.contains(&binding.spec.scope.process) && request_retirement(binding) {
+                    changed.push(binding.clone());
+                }
+            }
+            let new_ids: BTreeSet<_> = candidates
+                .iter()
+                .map(|b| b.spec.binding_id.to_string())
+                .collect();
+            for binding in candidates {
+                state
+                    .bindings
+                    .insert(binding.spec.binding_id.to_string(), binding.clone());
+                changed.push(binding);
+            }
+            for binding in &changed {
+                if !new_ids.contains(binding.spec.binding_id.as_str()) {
+                    bump_status(state, binding.spec.binding_id.as_str())?;
+                }
+            }
+            Ok(changed
+                .into_iter()
+                .map(|binding| intent(state, binding))
+                .collect())
+        })
     }
 
-    fn retry_scope(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
-        let mut state = self.lock()?;
-        if !state.scopes.contains_key(id.as_str()) {
-            return Err(PapError::NotFound);
-        }
-        let mut changed = Vec::new();
-        for binding in state
-            .bindings
-            .values_mut()
-            .filter(|b| b.spec.scope.scope_id == *id)
-        {
-            let phase = match binding.status.phase {
-                BindingStatus::ApplyFailed => BindingStatus::PendingApply,
-                BindingStatus::DeleteFailed => BindingStatus::PendingDelete,
-                _ => continue,
-            };
-            binding.status = phase.into();
-            changed.push(binding.clone());
-        }
-        for binding in &changed {
-            state
-                .binding_states
-                .entry(binding.spec.binding_id.to_string())
-                .or_default()
-                .last_write = None;
-        }
-        Ok(changed)
+    fn retry_scope(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
+        self.mutate(|state| {
+            if !state.scopes.contains_key(id.as_str()) {
+                return Err(PapError::NotFound);
+            }
+            let mut changed = Vec::new();
+            for binding in state
+                .bindings
+                .values_mut()
+                .filter(|b| b.spec.scope.scope_id == *id)
+            {
+                let phase = match binding.status.phase {
+                    BindingStatus::ApplyFailed => BindingStatus::PendingApply,
+                    BindingStatus::DeleteFailed => BindingStatus::PendingDelete,
+                    _ => continue,
+                };
+                binding.status = phase.into();
+                changed.push(binding.clone());
+            }
+            for binding in &changed {
+                bump_status(state, binding.spec.binding_id.as_str())?;
+            }
+            Ok(changed
+                .into_iter()
+                .map(|binding| intent(state, binding))
+                .collect())
+        })
     }
 
     fn update_binding(
         &self,
-        expected: Option<&BindingView>,
+        expected: Option<&asc_policy_repository::BindingIntentReceipt>,
         binding: &BindingView,
     ) -> Result<BindingView, PapError> {
         if !matches!(
@@ -329,76 +458,90 @@ impl PapRepository for ProcessLocalPapRepository {
         ) {
             return Err(PapError::Conflict);
         }
-        let mut state = self.lock()?;
-        let id = binding.spec.binding_id.as_str().to_owned();
-        let current = state.bindings.get(&id);
-        if expected.is_some() && current.is_none() {
-            return Err(PapError::NotFound);
-        }
-        if current.map(|b| (&b.spec, &b.status)) != expected.map(|b| (&b.spec, &b.status)) {
-            return Err(PapError::Conflict);
-        }
-        if binding.status == BindingStatus::PendingApply {
-            let owner = state
-                .scopes
-                .get(binding.spec.scope.scope_id.as_str())
-                .ok_or(PapError::NotFound)?;
-            if owner.status != ScopeStatus::Active
-                || current.is_some_and(|b| {
-                    state
-                        .scopes
-                        .get(b.spec.scope.scope_id.as_str())
-                        .is_none_or(|s| s.status != ScopeStatus::Active)
-                })
-            {
-                return Err(PapError::OperationInProgress);
+        self.mutate(|state| {
+            let id = binding.spec.binding_id.as_str().to_owned();
+            if expected.is_some_and(|expected| {
+                state
+                    .binding_states
+                    .get(&id)
+                    .map_or(1, |s| s.status_version)
+                    != expected.status_version
+            }) {
+                return Err(PapError::Conflict);
             }
-            if current.is_none()
-                && (owner.selector != binding.spec.scope.selector
-                    || !owner.policy_snapshots.contains(&binding.spec.policy))
+            let current = state.bindings.get(&id);
+            if expected.is_some() && current.is_none() {
+                return Err(PapError::NotFound);
+            }
+            if current.map(|b| (&b.spec, &b.status)) != expected.map(|b| (&b.spec, &b.status)) {
+                return Err(PapError::Conflict);
+            }
+            if binding.status == BindingStatus::PendingApply {
+                let owner = state
+                    .scopes
+                    .get(binding.spec.scope.scope_id.as_str())
+                    .ok_or(PapError::NotFound)?;
+                if owner.status != ScopeStatus::Active
+                    || current.is_some_and(|b| {
+                        state
+                            .scopes
+                            .get(b.spec.scope.scope_id.as_str())
+                            .is_none_or(|s| s.status != ScopeStatus::Active)
+                    })
+                {
+                    return Err(PapError::OperationInProgress);
+                }
+                if current.is_none()
+                    && (owner.selector != binding.spec.scope.selector
+                        || !owner.policy_snapshots.contains(&binding.spec.policy))
+                {
+                    return Err(PapError::Conflict);
+                }
+            }
+            if let Some(current) = current {
+                if current.spec == binding.spec && current.status == binding.status {
+                    return Ok(current.clone());
+                }
+                let same_spec = current.spec.policy == binding.spec.policy
+                    && current.spec.scope == binding.spec.scope;
+                let permitted = if binding.status == BindingStatus::PendingDelete {
+                    same_spec && current.status.request_delete() == binding.status
+                } else if same_spec {
+                    current.status.request_apply().ok() == Some(binding.status.phase)
+                } else {
+                    current.status.request_apply().is_ok()
+                        && current.status != BindingStatus::Applying
+                };
+                if !permitted {
+                    return Err(PapError::OperationInProgress);
+                }
+                let valid_revision = if same_spec {
+                    current.spec.binding_revision == binding.spec.binding_revision
+                } else {
+                    is_next_revision(
+                        Some(current.spec.binding_revision),
+                        binding.spec.binding_revision,
+                    )
+                };
+                if !valid_revision {
+                    return Err(PapError::Conflict);
+                }
+            } else if binding.spec.binding_revision.get() != 1
+                || binding.status != BindingStatus::PendingApply
             {
                 return Err(PapError::Conflict);
             }
-        }
-        if let Some(current) = current {
-            if current.spec == binding.spec && current.status == binding.status {
-                return Ok(current.clone());
+            if current.is_some_and(|b| b.status != binding.status) {
+                bump_status(state, &id)?;
             }
-            let same_spec = current.spec.policy == binding.spec.policy
-                && current.spec.scope == binding.spec.scope;
-            let permitted = if binding.status == BindingStatus::PendingDelete {
-                same_spec && current.status.request_delete() == binding.status
-            } else if same_spec {
-                current.status.request_apply().ok() == Some(binding.status.phase)
-            } else {
-                current.status.request_apply().is_ok() && current.status != BindingStatus::Applying
-            };
-            if !permitted {
-                return Err(PapError::OperationInProgress);
-            }
-            let valid_revision = if same_spec {
-                current.spec.binding_revision == binding.spec.binding_revision
-            } else {
-                is_next_revision(
-                    Some(current.spec.binding_revision),
-                    binding.spec.binding_revision,
-                )
-            };
-            if !valid_revision {
-                return Err(PapError::Conflict);
-            }
-        } else if binding.spec.binding_revision.get() != 1
-            || binding.status != BindingStatus::PendingApply
-        {
-            return Err(PapError::Conflict);
-        }
-        state.bindings.insert(id, binding.clone());
-        Ok(binding.clone())
+            state.bindings.insert(id, binding.clone());
+            Ok(binding.clone())
+        })
     }
 
     fn fail_pending_binding(
         &self,
-        expected: &BindingView,
+        expected: &asc_policy_repository::BindingIntentReceipt,
         reason: asc_pap::EnqueueError,
     ) -> Result<bool, PapError> {
         let failed = match expected.status.phase {
@@ -406,23 +549,26 @@ impl PapRepository for ProcessLocalPapRepository {
             BindingStatus::PendingDelete => BindingStatus::DeleteFailed,
             _ => return Err(PapError::Conflict),
         };
-        let mut state = self.lock()?;
-        let id = expected.spec.binding_id.as_str();
-        let Some(current) = state.bindings.get_mut(id) else {
-            return Ok(false);
-        };
-        if current.spec.binding_revision != expected.spec.binding_revision
-            || current.status != expected.status
-        {
-            return Ok(false);
-        }
-        current.status = failed.into();
-        current.status.error = Some(reason.failure());
-        let data = state.binding_states.entry(id.to_owned()).or_default();
-
-        // Invalidate an earlier worker write replay after this lifecycle change.
-        data.last_write = None;
-        Ok(true)
+        self.mutate(|state| {
+            let id = expected.spec.binding_id.as_str();
+            if state.binding_states.get(id).map_or(1, |s| s.status_version)
+                != expected.status_version
+            {
+                return Ok(false);
+            }
+            let Some(current) = state.bindings.get_mut(id) else {
+                return Ok(false);
+            };
+            if current.spec.binding_revision != expected.spec.binding_revision
+                || current.status != expected.status
+            {
+                return Ok(false);
+            }
+            current.status = failed.into();
+            current.status.error = Some(reason.failure());
+            bump_status(state, id)?;
+            Ok(true)
+        })
     }
 
     fn get_binding(&self, id: &ResourceId) -> Result<BindingView, PapError> {
@@ -470,6 +616,7 @@ fn finalize_scope(state: &mut State, id: &str) {
     {
         state.scopes.remove(id);
         state.stopped_scopes.remove(id);
+        state.pins.remove(id);
     }
 }
 
@@ -657,7 +804,7 @@ mod tests {
         assert_eq!(binding.status, BindingStatus::PendingApply);
         assert_eq!(pap.list_policies(10, 0).unwrap().total, 1);
         assert_eq!(pap.list_scopes(10, 0).unwrap().total, 1);
-        assert_eq!(pap.list_bindings(10, 0).unwrap().items, [binding]);
+        assert_eq!(pap.list_bindings(10, 0).unwrap().items, [binding.binding]);
         assert_eq!(
             ProcessLocalPapRepository::default()
                 .list_policies(10, 0)

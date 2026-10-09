@@ -29,6 +29,7 @@ fn record(n: u32) -> BindingStateSnapshot {
     spec.binding_id = id(n);
     spec.scope.scope_id = ResourceId::new(format!("scope-{n}")).unwrap();
     BindingStateSnapshot {
+        status_version: 1,
         binding: BindingView {
             spec,
             status: (BindingStatus::PendingApply).into(),
@@ -736,7 +737,6 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
         // Even a deadline that passed during bookkeeping must yield to a timer.
         Ok(Disposition::RetryAt { at: 0 }),
         Err(StoreError::Contended),
-        Err(StoreError::Unavailable),
         Err(StoreError::Invalid),
     ] {
         let delay = if matches!(result, Ok(Disposition::RetryAt { .. })) {
@@ -800,6 +800,7 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
             vec![id(1), id(2), id(1), id(1)]
         );
         let mut expected = record(1);
+        expected.status_version += 1;
         expected.binding.status.phase = BindingStatus::ApplyFailed;
         expected.binding.status.error = Some(Failure::new(
             FailureKind::Rejected,
@@ -951,7 +952,7 @@ fn binding_errors_retry_without_blocking_other_bindings_or_pap_writes() {
             q.state.lock().unwrap().entries.get(&id(1))
                 == Some(&Entry::WaitingRetry {
                     retry_at: 1000,
-                    retries: 1,
+                    retries: u32::from(error != StoreError::Unavailable),
                 })
                 && status(&repo, 2) == Some(BindingStatus::Ready)
         });
@@ -967,7 +968,7 @@ fn binding_errors_retry_without_blocking_other_bindings_or_pap_writes() {
             q.state.lock().unwrap().entries[&id(1)],
             Entry::WaitingRetry {
                 retry_at: 1000,
-                retries: 1
+                retries: u32::from(error != StoreError::Unavailable)
             }
         );
         clock.0.store(1000, Ordering::SeqCst);
@@ -1047,10 +1048,158 @@ fn retry_failed_binding(repo: &Arc<ProcessLocalPapRepository>, queue: &Arc<WorkQ
 
 struct Discovery;
 impl asc_pap::ScopeDiscovery for Discovery {
-    fn start(&self, _: &asc_policy_types::scope::PreparedScope) -> Result<(), asc_pap::PapError> {
+    fn start(&self, _: &asc_pap::ScopeDiscoverySeed) -> Result<(), asc_pap::PapError> {
         Ok(())
     }
     fn stop(&self, _: &asc_foundation_types::ResourceId) -> Result<(), asc_pap::PapError> {
         Ok(())
+    }
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fault matrix compares ownership, versions, budgets and remote effects across the same recovery sequence"
+)]
+fn storage_backoff_retains_original_write_and_does_not_spend_retry_budget() {
+    struct Fault {
+        inner: Arc<ProcessLocalPapRepository>,
+        error: StoreError,
+        finish: bool,
+        repaired: AtomicBool,
+        writes: Mutex<Vec<String>>,
+    }
+    impl BindingStateRepository for Fault {
+        fn get_binding_state(
+            &self,
+            id: &ResourceId,
+        ) -> Result<Option<BindingStateSnapshot>, StoreError> {
+            self.inner.get_binding_state(id)
+        }
+        fn compare_exchange_binding_state(
+            &self,
+            expected: &BindingStateSnapshot,
+            write: &BindingStateWrite,
+        ) -> Result<WriteResult, StoreError> {
+            let selected = expected.binding.spec.binding_id == id(1)
+                && write.next.as_ref().is_some_and(|p| {
+                    p.status.as_ref().is_some_and(|s| {
+                        s.phase
+                            == if self.finish {
+                                BindingStatus::Ready
+                            } else {
+                                BindingStatus::Applying
+                            }
+                    })
+                });
+            if selected {
+                self.writes.lock().unwrap().push(write.write_id.to_string());
+                if !self.repaired.load(Ordering::SeqCst) {
+                    if self.error == StoreError::OutcomeUnknown {
+                        self.inner.compare_exchange_binding_state(expected, write)?;
+                    }
+                    return Err(self.error);
+                }
+            }
+            self.inner.compare_exchange_binding_state(expected, write)
+        }
+    }
+    for error in [
+        StoreError::Busy,
+        StoreError::Full,
+        StoreError::ReadOnly,
+        StoreError::Io,
+        StoreError::OutcomeUnknown,
+    ] {
+        for finish in [false, true] {
+            let inner = Arc::new(
+                ProcessLocalPapRepository::with_binding_states(vec![record(1), record(2)]).unwrap(),
+            );
+            let repo = Arc::new(Fault {
+                inner: inner.clone(),
+                error,
+                finish,
+                repaired: AtomicBool::new(false),
+                writes: Mutex::new(Vec::new()),
+            });
+            let clock = Arc::new(TestClock::default());
+            let client = Arc::new(Client::default());
+            let core = core(repo.clone(), client.clone(), clock.clone());
+            let queue = WorkQueue::new(2, 0);
+            queue.enqueue(&id(1)).unwrap();
+            queue.enqueue(&id(2)).unwrap();
+            for expected in [id(1), id(2)] {
+                assert_eq!(queue.take(), Some(expected.clone()));
+                run_attempt(
+                    repo.as_ref(),
+                    core.as_ref(),
+                    clock.as_ref(),
+                    &queue,
+                    expected,
+                    Duration::from_millis(1000),
+                );
+            }
+            assert_eq!(status(&inner, 2), Some(BindingStatus::Ready));
+            for tick in 1..=8 {
+                let now = tick * 1000;
+                clock.0.store(now, Ordering::SeqCst);
+                queue.tick(now);
+                assert_eq!(queue.take(), Some(id(1)));
+                run_attempt(
+                    repo.as_ref(),
+                    core.as_ref(),
+                    clock.as_ref(),
+                    &queue,
+                    id(1),
+                    Duration::from_millis(1000),
+                );
+                let state = queue.state.lock().unwrap();
+                assert_eq!(
+                    state.entries.get(&id(1)),
+                    Some(&Entry::WaitingRetry {
+                        retry_at: now + 1000,
+                        retries: 0
+                    })
+                );
+                let schedule = &state.schedules[&id(1)];
+                assert!(schedule.has_pending_storage());
+                assert_eq!(schedule.attempts_started, u32::from(finish));
+            }
+            let writes = repo.writes.lock().unwrap().clone();
+            assert!(writes.iter().all(|id| *id == writes[0]));
+            repo.repaired.store(true, Ordering::SeqCst);
+            for _ in 0..3 {
+                let deadline = {
+                    let state = queue.state.lock().unwrap();
+                    match state.entries.get(&id(1)) {
+                        Some(Entry::WaitingRetry { retry_at, .. }) => *retry_at,
+                        None => break,
+                        other => panic!("unexpected queue state {other:?}"),
+                    }
+                };
+                clock.0.store(deadline, Ordering::SeqCst);
+                queue.tick(deadline);
+                assert_eq!(queue.take(), Some(id(1)));
+                run_attempt(
+                    repo.as_ref(),
+                    core.as_ref(),
+                    clock.as_ref(),
+                    &queue,
+                    id(1),
+                    Duration::from_millis(1000),
+                );
+            }
+            assert_eq!(status(&inner, 1), Some(BindingStatus::Ready));
+            assert_eq!(
+                client
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| **s == format!("apply:{}", id(1)))
+                    .count(),
+                1
+            );
+        }
     }
 }

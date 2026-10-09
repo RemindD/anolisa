@@ -63,15 +63,50 @@ impl ScopeDiscoveryState {
     /// # Errors
     /// Rejects invalid selectors or snapshots inconsistent with the references.
     pub fn for_scope(scope: PreparedScope) -> Result<Self, &'static str> {
+        Self::from_seed(asc_pap::ScopeDiscoverySeed {
+            scope,
+            pinned_process: None,
+            instances: Vec::new(),
+        })
+    }
+
+    /// Restores known instances before scanning, including those unreadable on the first scan.
+    /// # Errors
+    /// Rejects invalid assignments and unsupported selectors.
+    pub fn from_seed(seed: asc_pap::ScopeDiscoverySeed) -> Result<Self, &'static str> {
+        let asc_pap::ScopeDiscoverySeed {
+            scope,
+            pinned_process,
+            instances,
+        } = seed;
         scope.validate().map_err(|_| "invalid scope assignment")?;
         if matches!(scope.selector, ScopeSelector::CgroupId { .. }) {
             return Err("cgroup discovery is unsupported");
         }
+        let bindings = instances
+            .into_iter()
+            .map(|identity| {
+                let bindings = scope
+                    .policy_snapshots
+                    .iter()
+                    .map(|policy| DiscoveredBinding {
+                        scope: asc_policy_types::binding::BindingScope {
+                            scope_id: scope.scope_id.clone(),
+                            selector: scope.selector.clone(),
+                            process: identity.clone(),
+                        },
+                        policy: policy.clone(),
+                        process: identity.clone(),
+                    })
+                    .collect();
+                (identity.pid, bindings)
+            })
+            .collect();
         Ok(Self {
             scope,
-            pinned_pid: None,
+            pinned_pid: pinned_process,
             checked: BTreeMap::new(),
-            bindings: BTreeMap::new(),
+            bindings,
         })
     }
 
@@ -217,6 +252,31 @@ mod tests {
                 inode: 2,
             },
         }
+    }
+
+    #[test]
+    fn restart_seed_preserves_unreadable_instance_and_pid_pin() {
+        let mut scope = state().scope;
+        scope.selector = ScopeSelector::Pid { pid: 10 };
+        let identity = process(10, 1, "/bin/agent").identity;
+        let mut recovered = ScopeDiscoveryState::from_seed(asc_pap::ScopeDiscoverySeed {
+            scope,
+            pinned_process: Some(identity.clone()),
+            instances: vec![identity],
+        })
+        .unwrap();
+        recovered.reconcile(Vec::new(), &BTreeSet::new(), false);
+        assert_eq!(recovered.bindings().count(), 1);
+        recovered.reconcile(Vec::new(), &BTreeSet::from([10]), true);
+        assert_eq!(recovered.bindings().count(), 1);
+        recovered.reconcile(Vec::new(), &BTreeSet::new(), true);
+        assert_eq!(recovered.bindings().count(), 0);
+        recovered.reconcile(
+            vec![process(10, 2, "/bin/agent")],
+            &BTreeSet::from([10]),
+            true,
+        );
+        assert_eq!(recovered.bindings().count(), 0);
     }
 
     #[test]

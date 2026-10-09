@@ -12,11 +12,13 @@ foreground process bootstrap, together with the first AgentSight file-deletion
 target Adapter, and its independent deployment Client used by later AgentSecCore
 V2 work packages. `asc-pcp` provides synchronous attempts and
 `asc-policy-runtime/src/reconciliation/` provides the bounded Binding queue,
-workers, retry timers and compensation scanning. Storage remains process-local.
+workers, retry timers and compensation scanning. The daemon stores Policy, Scope
+and Binding state in SQLite, including deployment cleanup responsibility.
 
 Each attempt re-reads current state and prepares afresh. Reconciliation writes
-update specific fields without carrying spec; no plan, prepared request or pending
-outcome is stored across calls. See the [runtime design (Chinese)](../docs/design/BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)
+update specific fields without carrying spec. Plans and prepared requests are
+call-local; a storage failure retains the original write receipt and remote outcome
+until its commit is confirmed. See the [runtime design (Chinese)](../docs/design/BINDING_RECONCILER_RUNTIME_DESIGN_zh.md)
 for retry, ownership and staged acceptance.
 
 Start the daemon with background Binding delivery:
@@ -36,14 +38,16 @@ invalid credentials are retryable Binding failures; each retry reads the token
 file again. Network failures also follow the Binding retry contract.
 Individual reconcile panics are caught per attempt; core bookkeeping preserves
 completed results and cleanup responsibility, and the worker continues other Bindings.
-Unconfirmed outcomes stop that ID's automatic execution until a new notification.
-Reconciliation startup, timer or worker scheduling failure leaves the daemon serving queries and
+Storage failures pause target I/O and retry the retained write without consuming the
+remote retry budget. Reconciliation startup failure aborts daemon startup. A later
+timer or worker scheduling failure leaves the daemon serving queries and
 other services, while new Scope assignments are rejected using the unavailable admission error.
 Policy writes, queries and Scope deletion remain available.
 Individual Binding errors are rescheduled without closing PAP admission; exhausted
 CAS contention is distinct from storage unavailability. There is no automatic restart of a failed reconciliation runtime.
 Scope responses confirm intent admission, and GET/LIST expose subsequent completion.
-No process restart recovery is available with memory storage.
+Startup restores discovery and pending or interrupted reconciliation from SQLite.
+Ready Bindings and terminal failures are not automatically reapplied.
 
 The Rust `agent-sec-cli` exposes 12 Policy, Scope and Binding administration commands through
 an explicit daemon socket. Its Cargo package and source directory remain `asc-cli`;
@@ -76,9 +80,10 @@ The current crates are:
   scans and owned shutdown; the daemon supplies target-specific composition.
 - `asc-pap`: transport-independent revisioned Policies, immutable Scope assignments and
   system-owned Binding admission over compiler and repository ports.
-- `asc-pap-repository-memory`: explicitly temporary process-local Repository
-  adapter used only to keep daemon/PAP integration runnable before durable
-  persistence lands; also implements consistent reads and reconciliation patches over PAP's Binding map.
+- `asc-policy-repository-sqlite`: authoritative Policy, Scope and Binding storage,
+  atomic lifecycle writes, status CAS, durable write receipts and recovery scans.
+- `asc-pap-repository-memory`: process-local test backend implementing the same
+  PAP and reconciliation contracts.
 - `asc-daemon-protocol`: strict request/response contracts and an explicit
   allowlist for 12 Policy, Scope, and Binding administration methods.
 - `asc-daemon-handler`: inbound protocol adapter that decodes daemon requests,
@@ -188,12 +193,14 @@ locks; that remains a required direct-consumer concurrency test at integration.
 
 The current `asc-daemon` executable composes and registers the PAP dispatcher and
 protocol rejection encoder from `asc-daemon-handler`. It composes `PapService`
-with `PolicyTemplateCompiler`, a
-root-managed Principal policy, and an explicitly transitional process-local
-Repository. Policy CRUD therefore works during one daemon lifetime, but all
-state disappears on restart; this is integration evidence, not durable
-persistence or distribution readiness. The process prints that limitation at
-startup. The daemon and CLI default socket is `/run/agent-sec-core/daemon.sock`;
+with `PolicyTemplateCompiler`, a root-managed Principal policy, and the SQLite
+Repository. Policy state lives in `policy-state.db` under `AGENT_SEC_DATA_DIR`
+(default `/var/log/agent-sec`). The data directory must be private (0700), with
+database and lock files restricted to 0600. Unsafe existing permissions, incompatible
+schema and corruption fail startup; the daemon never deletes or rebuilds this state.
+An independent database lease prevents two socket namespaces from sharing it.
+See [persistence, upgrade and recovery](../docs/design/POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md).
+The daemon and CLI default socket is `/run/agent-sec-core/daemon.sock`;
 a nonempty `AGENT_SEC_DAEMON_SOCKET` overrides it, and explicit `--socket` takes
 precedence over both. Both entrypoints require absolute paths. HOME and
 XDG_RUNTIME_DIR do not select a daemon namespace. The V2 RPM stages a system
@@ -255,13 +262,13 @@ validation but fail daemon admission.
 ## Policy revisions and immutable Scope assignments
 
 The [lifecycle contract](../docs/design/POLICY_SCOPE_BINDING_CONTRACT_zh.md) is implemented
-with process-local storage. Policies retain a stable ID and only their current
+with SQLite storage. Policies retain a stable ID and only their current
 complete record. Changed content advances a never-reused revision; identical content
 is idempotent. Deletion retains the allocation head. Old revisions are not queryable.
 
 Scope creation receives `policyTemplates: [{policyId,policyRevision}]` and stores
 full server-resolved `policySnapshots`. The repository verifies all snapshots under
-the same lock as Policy mutation. Concurrent update/deletion either follows successful
+the same transaction as Policy mutation. Concurrent update/deletion either follows successful
 admission or causes it to fail; it never substitutes a newer revision. Existing
 Scopes and future matching instances keep their saved snapshots after Policy changes.
 A Scope has no revision, and its selector/policies cannot be updated.
@@ -280,13 +287,15 @@ Deleting a Scope atomically marks it `DELETING` and closes child admission, then
 cancels/joins discovery and requests deletion of every owned Binding. Existing
 Reconciler workers serialize target calls, preserve observations from an in-flight
 Apply, and clean all known or uncertain deployments. An old Apply cannot restore
-`READY` over deletion intent. The Scope and snapshots remain until all owned
-Bindings are removed after confirmed cleanup.
+`READY` over deletion intent. Once discovery has stopped, removing the last owned
+Binding after confirmed cleanup also removes the Scope and its snapshots. A deleting
+Scope with no Bindings is removed when discovery stops. Active Scopes remain when
+process exit leaves them without Bindings.
 
 `scope delete` returns `completed:false` while cleanup remains; `completed:true`
-means the Scope was removed. Repeating it does not reset retry budgets. An ID-only
-tombstone makes completed deletion idempotent during this daemon lifetime. Other
-Scopes and the source Policy are unaffected. `scope retry` resets only failed
+means the Scope was removed. Repeating it does not reset retry budgets. Completed
+deletion succeeds even after restart; deleting an absent Scope also reports completion. Other Scopes
+and the source Policy are unaffected. `scope retry` resets only failed
 owned Bindings (`APPLY_FAILED`/`DELETE_FAILED`) to pending, preserving deployment
 responsibility. Queries remain successful even when status reports failure.
 
@@ -296,9 +305,12 @@ Permanent or exhausted failures remain queryable. Reconciler CAS, serial executi
 retry budgets and lower-level changed-spec revision regression coverage are retained;
 there is no public changed-spec Binding mutation. Queue notifications carry only IDs.
 
-The repository and retry timers are process-local. Durable storage, restart recovery
-and outbox guarantees remain separate work. The compiler currently supports the
-`prevent_file_deletion` lowering described above.
+Retry counts and timers remain process-local and reset on restart. SQLite preserves
+status versions, deployment responsibility, discovery pins and stop barriers. WAL
+with synchronous FULL protects committed local state; remote operations still depend
+on the Client's idempotency and absence contract. Local SIGKILL tests use an external
+mock ledger; they do not establish physical power-loss or real PEP/kernel guarantees.
+The compiler currently supports the `prevent_file_deletion` lowering described above.
 
 Dependency sources, TLS/unsafe boundaries and release audit requirements are
 recorded in [DEPENDENCIES.md](DEPENDENCIES.md).

@@ -173,7 +173,7 @@ fn unavailable_reconciliation_rejects_new_assignments_but_keeps_policy_crud() {
 
 struct Discovery;
 impl asc_pap::ScopeDiscovery for Discovery {
-    fn start(&self, _: &asc_policy_types::scope::PreparedScope) -> Result<(), asc_pap::PapError> {
+    fn start(&self, _: &asc_pap::ScopeDiscoverySeed) -> Result<(), asc_pap::PapError> {
         Ok(())
     }
     fn stop(&self, _: &asc_foundation_types::ResourceId) -> Result<(), asc_pap::PapError> {
@@ -191,6 +191,30 @@ impl Drop for Child {
 
 #[test]
 fn procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances() {
+    procfs_assignment_lifecycle(Arc::new(ProcessLocalPapRepository::default()));
+}
+
+#[test]
+fn sqlite_procfs_discovery_cleans_exited_instances_and_scope() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let repository = asc_policy_repository_sqlite::SqlitePolicyRepository::open(
+        &data.path().join("policy-state.db"),
+    )
+    .unwrap();
+    procfs_assignment_lifecycle(Arc::new(repository));
+}
+
+fn procfs_assignment_lifecycle<R>(repository: Arc<R>)
+where
+    R: asc_pap::PapRepository
+        + asc_policy_repository::BindingStateRepository
+        + asc_policy_repository::BindingReconcileCatalog
+        + 'static,
+{
     use asc_policy_types::scope::{PolicyReference, ProcessMatcher, ScopeSelector};
     let directory = tempfile::tempdir().unwrap();
     let executable = directory.path().join("assignment-test");
@@ -204,12 +228,11 @@ fn procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances() {
         )
     };
     let first = spawn();
-    let repository = Arc::new(ProcessLocalPapRepository::default());
     let client = Arc::new(Client::default());
     let runtime =
         start_policy_reconciliation_with_client(repository.clone(), client.clone()).unwrap();
     let pap = PapService::new(
-        repository.clone(),
+        repository,
         Arc::new(asc_policy_engine::PolicyTemplateCompiler),
     )
     .with_reconcile_enqueuer(runtime.enqueuer());
@@ -265,6 +288,11 @@ fn procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances() {
         bindings[0].spec.scope.process,
         bindings[1].spec.scope.process
     );
+    drop(first);
+    wait(|| ready(1));
+    assert_eq!(pap.get_scope(&scope.scope_id).unwrap(), scope);
+    let _third = spawn();
+    wait(|| ready(2));
     pap.delete_scope(&scope.scope_id).unwrap();
     wait(|| pap.get_scope(&scope.scope_id) == Err(asc_pap::PapError::NotFound));
     assert_eq!(pap.list_bindings(10, 0).unwrap().total, 0);
@@ -273,6 +301,6 @@ fn procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances() {
     runtime.shutdown().unwrap();
     assert_eq!(
         *client.operations.lock().unwrap(),
-        vec!["create", "create", "delete", "delete"]
+        vec!["create", "create", "delete", "create", "delete", "delete"]
     );
 }

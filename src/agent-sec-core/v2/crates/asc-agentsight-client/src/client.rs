@@ -63,6 +63,7 @@ pub struct AgentSightClient<T, R> {
     transport: T,
     process_identity: R,
     reconcile_route: Option<String>,
+    endpoint: Option<String>,
 }
 
 impl<T, R> AgentSightClient<T, R> {
@@ -72,6 +73,7 @@ impl<T, R> AgentSightClient<T, R> {
             transport,
             process_identity,
             reconcile_route: None,
+            endpoint: None,
         }
     }
 }
@@ -94,10 +96,9 @@ impl AgentSightClient<UreqAgentSightTransport, ProcProcessIdentityResolver> {
         token_file: impl AsRef<Path>,
     ) -> Result<Self, AgentSightClientConfigError> {
         let transport = UreqAgentSightTransport::from_token_file(base_url, token_file)?;
-        Ok(Self::with_dependencies(
-            transport,
-            ProcProcessIdentityResolver,
-        ))
+        let mut client = Self::with_dependencies(transport, ProcProcessIdentityResolver);
+        client.endpoint = Some(crate::transport::normalize_base_url(base_url)?);
+        Ok(client)
     }
 }
 

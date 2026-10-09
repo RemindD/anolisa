@@ -1269,6 +1269,7 @@ async fn real_uds_scheduling_rejection_and_get_list_match_frozen_wire() {
         let repo = Arc::new(
             ProcessLocalPapRepository::with_binding_states(vec![
                 asc_policy_repository::BindingStateSnapshot {
+                    status_version: 1,
                     binding,
                     deployments: vec![],
                 },
@@ -1346,7 +1347,7 @@ async fn unavailable_preflight_returns_wire_error_without_creating_binding() {
 
 struct Discovery;
 impl asc_pap::ScopeDiscovery for Discovery {
-    fn start(&self, _: &asc_policy_types::scope::PreparedScope) -> Result<(), asc_pap::PapError> {
+    fn start(&self, _: &asc_pap::ScopeDiscoverySeed) -> Result<(), asc_pap::PapError> {
         Ok(())
     }
     fn stop(&self, _: &asc_foundation_types::ResourceId) -> Result<(), asc_pap::PapError> {

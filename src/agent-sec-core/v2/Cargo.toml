@@ -36,6 +36,7 @@ members = [
     "crates/asc-policy-target-contracts",
     "crates/asc-policy-types",
     "crates/asc-policy-repository",
+    "crates/asc-policy-repository-sqlite",
 ]
 
 [workspace.package]
@@ -47,6 +48,7 @@ repository = "https://github.com/alibaba/anolisa"
 publish = false
 
 [workspace.dependencies]
+asc-policy-repository-sqlite = { path = "crates/asc-policy-repository-sqlite" }
 asc-policy-runtime = { path = "crates/asc-policy-runtime" }
 asc-action-runtime = { path = "crates/asc-action-runtime" }
 asc-action-types = { path = "crates/asc-action-types" }

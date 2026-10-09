@@ -81,6 +81,7 @@ const MAX_PREPARED_BYTES: usize = 8 * MAX_REQUEST_BYTES + 4096;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Cleanup {
     schema_version: u16,
+    endpoint: String,
     binding_id: ResourceId,
     binding_revision: Revision,
 }
@@ -131,8 +132,16 @@ impl<T, R> AgentSightClient<T, R> {
         let cleanup: Cleanup = serde_json::from_slice(&target.cleanup)
             .map_err(|_| rejected("AGENTSIGHT_INVALID_TARGET_REFERENCE"))?;
         let id = target_binding_id(&cleanup.binding_id, cleanup.binding_revision);
-        if cleanup.schema_version != 1 || target.id != id.to_string() {
+        if cleanup.schema_version != 2 || target.id != id.to_string() {
             return Err(rejected("AGENTSIGHT_INVALID_TARGET_REFERENCE"));
+        }
+        if cleanup.endpoint
+            != self
+                .endpoint
+                .as_deref()
+                .unwrap_or(crate::DEFAULT_AGENTSIGHT_BASE_URL)
+        {
+            return Err(rejected("AGENTSIGHT_ENDPOINT_MISMATCH"));
         }
         Ok(id)
     }
@@ -225,7 +234,12 @@ impl<T: AgentSightTransport, R: ProcessIdentityResolver> AgentSightClient<T, R> 
             request,
         };
         let cleanup = Cleanup {
-            schema_version: 1,
+            schema_version: 2,
+            endpoint: self
+                .endpoint
+                .as_deref()
+                .unwrap_or(crate::DEFAULT_AGENTSIGHT_BASE_URL)
+                .to_owned(),
             binding_id: plan.binding_id,
             binding_revision: plan.binding_revision,
         };

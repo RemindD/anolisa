@@ -507,9 +507,10 @@ Delete 和 DeleteFailed 重试均保留 revision。Delete 保留完整 spec 与�
 撤销删除。全部目标确认 Absent 后，Reconciler 原子移除 Binding 及运行记录；此后
 GET/UPDATE/DELETE 返回 not_found，LIST 不包含该 ID。重新部署须 CREATE 新 ID、revision 1。
 `Deleted` 只作内部完成标记，不作为持久化 current record。现有 daemon 已接入后台
-reconcile Runtime；硬删除的历史证据来自 PAP + Reconciler 内存组合测试，daemon 接线
-范围见 [进程部署契约](DAEMON_PROCESS_DEPLOYMENT_CONTRACT_zh.md)。这不表示新的 Scope
-自动 Binding 已接线，也不表示具备磁盘耐久性或真实 PEP 验收。
+reconcile Runtime。当前 Scope 自动管理 Binding，生产使用 SQLite，最后一条 Binding 与
+已停止 discovery 的 Deleting Scope 同事务删除；恢复证据见
+[Policy SQLite 持久化设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)。内部 status_version、
+deployments 与写回执不进入公共响应。历史内存组合测试不作为真实 PEP 或物理断电验收。
 
 Policy CREATE/UPDATE 在 PAP 内同步调用 `PolicyCompiler::lower(TemplateEnvelope) ->
 PolicyEnvelope`。当前产品 compiler 只实现 `prevent_file_deletion`，其输入与完整 Canonical
@@ -994,7 +995,8 @@ PID selector 固定首次观察到的实例；当前拒绝 cgroup assignment。�
 
 Scope get/delete/retry 参数均为 `{"id":"scope-id"}`。删除关闭准入、停止发现并清理所属
 Binding，返回 `{"scopeId":"scope-id","completed":false}`，完成时 completed 为 true。
-未完成 Scope 为 `DELETING`；重复 delete 不重置预算，完成后可按 ID 墓碑幂等删除。
+未完成 Scope 为 `DELETING`；重复 delete 不重置预算。全部 Binding 删除成功后，已停止
+discovery 的 Scope 及其快照随之删除；无 Binding 时停止 discovery 后直接删除 Scope。
 `scope retry` 返回 Scope 快照，仅重试所属终态失败 Binding。Binding 查询包含单策略快照、
 Scope 来源和固定进程身份，不包含完整 Scope 或 scopeRevision。
 

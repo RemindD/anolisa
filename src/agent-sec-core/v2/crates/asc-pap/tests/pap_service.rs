@@ -22,6 +22,7 @@ struct FakeRepository {
     failure_write_mode: std::sync::atomic::AtomicUsize,
     policy_read_override: Mutex<Option<PolicyRevisionState>>,
     scope_cleanup_failure: std::sync::atomic::AtomicUsize,
+    scope_commit_failure: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeRepository {
@@ -40,11 +41,11 @@ impl FakeRepository {
             .unwrap();
         let mut next = current.clone();
         next.binding.status.phase = status;
-        assert_eq!(
+        assert!(matches!(
             self.inner
                 .compare_exchange_binding_state(&current, &BindingStateWrite::new(next)),
-            Ok(WriteResult::Applied)
-        );
+            Ok(WriteResult::Applied(_))
+        ));
     }
 }
 
@@ -80,7 +81,17 @@ impl PapRepository for FakeRepository {
     }
 
     fn put_scope(&self, scope: &PreparedScope) -> Result<PreparedScope, PapError> {
-        self.inner.put_scope(scope)
+        let mode = self
+            .scope_commit_failure
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if mode == 1 {
+            return Err(PapError::Persistence);
+        }
+        let saved = self.inner.put_scope(scope)?;
+        if mode == 2 {
+            return Err(PapError::Persistence);
+        }
+        Ok(saved)
     }
 
     fn get_scope(&self, id: &ResourceId) -> Result<PreparedScope, PapError> {
@@ -91,6 +102,19 @@ impl PapRepository for FakeRepository {
         self.inner.list_scopes(limit, offset)
     }
 
+    fn scope_discovery_seed(
+        &self,
+        id: &ResourceId,
+    ) -> Result<asc_pap::ScopeDiscoverySeed, PapError> {
+        self.inner.scope_discovery_seed(id)
+    }
+    fn scan_scopes(
+        &self,
+        after: Option<&ResourceId>,
+        limit: usize,
+    ) -> Result<Vec<PreparedScope>, PapError> {
+        self.inner.scan_scopes(after, limit)
+    }
     fn begin_scope_delete(&self, id: &ResourceId) -> Result<Option<PreparedScope>, PapError> {
         if self
             .scope_cleanup_failure
@@ -101,7 +125,10 @@ impl PapRepository for FakeRepository {
         }
         self.inner.begin_scope_delete(id)
     }
-    fn finish_scope_discovery(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
+    fn finish_scope_discovery(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
         if self
             .scope_cleanup_failure
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -115,15 +142,18 @@ impl PapRepository for FakeRepository {
         &self,
         id: &ResourceId,
         instances: &[asc_policy_types::process_discovery::ProcessIdentity],
-    ) -> Result<Vec<BindingView>, PapError> {
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
         self.inner.sync_scope_instances(id, instances)
     }
-    fn retry_scope(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError> {
+    fn retry_scope(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
         self.inner.retry_scope(id)
     }
     fn update_binding(
         &self,
-        expected: Option<&BindingView>,
+        expected: Option<&asc_policy_repository::BindingIntentReceipt>,
         binding: &BindingView,
     ) -> Result<BindingView, PapError> {
         self.inner.update_binding(expected, binding)
@@ -131,7 +161,7 @@ impl PapRepository for FakeRepository {
 
     fn fail_pending_binding(
         &self,
-        expected: &BindingView,
+        expected: &asc_policy_repository::BindingIntentReceipt,
         reason: asc_pap::EnqueueError,
     ) -> Result<bool, PapError> {
         match self
@@ -371,7 +401,7 @@ fn scheduling_failure_write_error_does_not_claim_terminal_state() {
 
 struct Discovery;
 impl asc_pap::ScopeDiscovery for Discovery {
-    fn start(&self, _: &PreparedScope) -> Result<(), PapError> {
+    fn start(&self, _: &asc_pap::ScopeDiscoverySeed) -> Result<(), PapError> {
         Ok(())
     }
     fn stop(&self, _: &ResourceId) -> Result<(), PapError> {
@@ -431,6 +461,46 @@ fn assignment_snapshots_survive_policy_update_delete_and_later_discovery() {
     assert!(wire.get("policyTemplates").is_none());
     assert_eq!(wire["policySnapshots"], serde_json::json!([original]));
     assert_eq!(repo.list_policies(10, 0).unwrap().total, 0);
+}
+
+#[test]
+fn uncertain_scope_commit_requires_exact_saved_assignment_before_discovery() {
+    #[derive(Default)]
+    struct RecordingDiscovery(Mutex<Vec<PreparedScope>>);
+    impl asc_pap::ScopeDiscovery for RecordingDiscovery {
+        fn start(&self, seed: &asc_pap::ScopeDiscoverySeed) -> Result<(), PapError> {
+            self.0.lock().unwrap().push(seed.scope.clone());
+            Ok(())
+        }
+        fn stop(&self, _: &ResourceId) -> Result<(), PapError> {
+            Ok(())
+        }
+    }
+    for mode in [1, 2] {
+        let (pap, repo) = service();
+        let discovery = Arc::new(RecordingDiscovery::default());
+        let pap = pap.with_scope_discovery(discovery.clone());
+        let policy = pap.create_policy("policy", &policy_template("/a")).unwrap();
+        repo.scope_commit_failure
+            .store(mode, std::sync::atomic::Ordering::SeqCst);
+        let result = pap.create_scope_assignment(
+            &ScopeSelector::Pid { pid: 4242 },
+            &[asc_policy_types::scope::PolicyReference {
+                policy_id: policy.policy_id.clone(),
+                policy_revision: policy.revision,
+            }],
+        );
+        if mode == 1 {
+            assert_eq!(result, Err(PapError::Persistence));
+            assert!(discovery.0.lock().unwrap().is_empty());
+            assert_eq!(repo.list_scopes(10, 0).unwrap().total, 0);
+        } else {
+            let saved = result.unwrap();
+            assert_eq!(*discovery.0.lock().unwrap(), vec![saved.clone()]);
+            assert_eq!(repo.get_scope(&saved.scope_id).unwrap(), saved);
+            assert_eq!(repo.list_scopes(10, 0).unwrap().total, 1);
+        }
+    }
 }
 
 #[test]
@@ -536,7 +606,19 @@ fn instance_reuse_retires_old_binding_and_creates_distinct_identity() {
     let (pap, _) = service();
     let pap = pap.with_scope_discovery(Arc::new(Discovery));
     let policy = pap.create_policy("policy", &policy_template("/a")).unwrap();
-    let scope = assignment(&pap, &policy);
+    let scope = pap
+        .create_scope_assignment(
+            &ScopeSelector::Process {
+                matcher: asc_policy_types::scope::ProcessMatcher::Name {
+                    process_name: "agent".into(),
+                },
+            },
+            &[asc_policy_types::scope::PolicyReference {
+                policy_id: policy.policy_id.clone(),
+                policy_revision: policy.revision,
+            }],
+        )
+        .unwrap();
     let mut instance = serde_json::from_str::<PreparedBinding>(COMPLETE_BINDING)
         .unwrap()
         .scope
@@ -566,7 +648,7 @@ fn instance_reuse_retires_old_binding_and_creates_distinct_identity() {
 fn discovery_start_error_survives_compensation_failures() {
     struct UnavailableDiscovery;
     impl asc_pap::ScopeDiscovery for UnavailableDiscovery {
-        fn start(&self, _: &PreparedScope) -> Result<(), PapError> {
+        fn start(&self, _: &asc_pap::ScopeDiscoverySeed) -> Result<(), PapError> {
             Err(PapError::Unavailable)
         }
         fn stop(&self, _: &ResourceId) -> Result<(), PapError> {

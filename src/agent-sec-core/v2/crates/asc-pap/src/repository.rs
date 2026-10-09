@@ -80,6 +80,20 @@ pub trait PapRepository: Send + Sync {
     /// Returns storage failures.
     fn list_scopes(&self, limit: u32, offset: u32) -> Result<Page<PreparedScope>, PapError>;
 
+    /// Reads immutable assignment, PID pin and nonretiring instances atomically.
+    /// # Errors
+    /// Returns not-found or storage failures.
+    fn scope_discovery_seed(&self, id: &ResourceId) -> Result<crate::ScopeDiscoverySeed, PapError>;
+
+    /// Stable-ID pagination for recovery that may remove earlier Scope rows.
+    /// # Errors
+    /// Returns invalid page bounds or storage failures.
+    fn scan_scopes(
+        &self,
+        after: Option<&ResourceId>,
+        limit: usize,
+    ) -> Result<Vec<PreparedScope>, PapError>;
+
     /// Closes child admission before the discovery worker is joined.
     /// Returns `None` for a previously completed deletion; unknown IDs are errors.
     /// # Errors
@@ -90,7 +104,10 @@ pub trait PapRepository: Send + Sync {
     /// Removes an empty Scope only after its worker has stopped.
     /// # Errors
     /// Returns storage failures or conflict if deletion was not admitted.
-    fn finish_scope_discovery(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError>;
+    fn finish_scope_discovery(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError>;
 
     /// Admits missing instances and retires absent ones atomically with Scope lifecycle.
     /// Returns only changed Binding intents; terminal failures are not implicitly retried.
@@ -100,12 +117,15 @@ pub trait PapRepository: Send + Sync {
         &self,
         id: &ResourceId,
         instances: &[asc_policy_types::process_discovery::ProcessIdentity],
-    ) -> Result<Vec<BindingView>, PapError>;
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError>;
 
     /// Explicitly retries failed owned Bindings, preserving nonterminal retry budgets.
     /// # Errors
     /// Returns not-found or storage failures.
-    fn retry_scope(&self, id: &ResourceId) -> Result<Vec<BindingView>, PapError>;
+    fn retry_scope(
+        &self,
+        id: &ResourceId,
+    ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError>;
 
     /// Retained repository contract for lower-level revision/CAS compatibility tests.
     /// Production admission uses `sync_scope_instances`; reconciliation uses
@@ -127,7 +147,7 @@ pub trait PapRepository: Send + Sync {
     /// Returns not-found, operation-in-progress, conflict or persistence failures.
     fn update_binding(
         &self,
-        expected: Option<&BindingView>,
+        expected: Option<&asc_policy_repository::BindingIntentReceipt>,
         binding: &BindingView,
     ) -> Result<BindingView, PapError>;
 
@@ -139,7 +159,7 @@ pub trait PapRepository: Send + Sync {
     /// Returns persistence failures; a non-pending expectation is a conflict.
     fn fail_pending_binding(
         &self,
-        expected: &BindingView,
+        expected: &asc_policy_repository::BindingIntentReceipt,
         reason: crate::EnqueueError,
     ) -> Result<bool, PapError>;
 

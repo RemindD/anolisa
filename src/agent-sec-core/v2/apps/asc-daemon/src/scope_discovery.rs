@@ -16,6 +16,7 @@ use asc_daemon_core::scope_discovery::{
 use asc_pap::PapError;
 use asc_policy_types::identifiers::ResourceId;
 use asc_policy_types::process_discovery::{DiscoveredBinding, ProcessIdentity};
+#[cfg(test)]
 use asc_policy_types::scope::PreparedScope;
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
@@ -58,7 +59,7 @@ impl ScopeDiscoveryRegistry {
 }
 
 impl asc_pap::ScopeDiscovery for ScopeDiscoveryRegistry {
-    fn start(&self, scope: &PreparedScope) -> Result<(), PapError> {
+    fn start(&self, scope: &asc_pap::ScopeDiscoverySeed) -> Result<(), PapError> {
         let mut guard = self.jobs.lock().map_err(|_| PapError::Unavailable)?;
         let jobs = guard.as_mut().ok_or(PapError::Unavailable)?;
         if jobs.len() >= MAX_DISCOVERY_JOBS {
@@ -68,7 +69,7 @@ impl asc_pap::ScopeDiscovery for ScopeDiscoveryRegistry {
             return Err(PapError::Conflict);
         }
         let state =
-            ScopeDiscoveryState::for_scope(scope.clone()).map_err(|_| PapError::Conflict)?;
+            ScopeDiscoveryState::from_seed(scope.clone()).map_err(|_| PapError::Conflict)?;
         let job = ScopeDiscoveryJob::spawn(
             scope.scope_id.clone(),
             state,
