@@ -629,6 +629,9 @@ Client 组合验证自动 Binding 和清理；bootstrap SIGTERM 验证任务停�
 CLI/TUI 不直读数据库；普通用户按 UDS peer UID 过滤，root 可查询全部；非 root 的
 PolicyAdministrator 不获得跨 UID 查询权限。可观测数据已在单次 INSERT 中持久化 peer owner，历史无主记录
 仅 root 可见且标记为未知，不自动归 UID 0。
+启动时由 writer 将已配置的 revision 1 obs 数据库原子升级至 revision 2：补上 nullable `uid`
+及归属索引，保留历史 NULL 和已有 UID；失败回滚，obs 查询不可用且采集显式报错。
+此步骤不发现或导入 V1 per-user 数据，也不提供自动 schema 降级。
 数据迁移、失败/回滚边界和真实跨 UID 安装态验收见
 [V2 安全事件与 Observability 查询设计](V2_SECURITY_OBSERVABILITY_QUERY_zh.md)。
 三个 obs 查询和 CLI report/review 已接线。DPROC-QRY-001 安装态跨 UID 验收仍待执行，
