@@ -134,6 +134,12 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
         "policy", "create", "--name", "delivery-v1", "--file", str(template_file)
     )
     policy_id = original["policyId"]
+    assert original == {
+        "policyId": policy_id,
+        "policyName": "delivery-v1",
+        "revision": 1,
+        "template": template,
+    }
     executable = tmp_path / "policy-target"
     shutil.copy2("/bin/sleep", executable)
     scope = daemon.request(

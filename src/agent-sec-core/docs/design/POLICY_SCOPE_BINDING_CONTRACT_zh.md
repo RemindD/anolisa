@@ -29,7 +29,7 @@ Scope 创建后不可修改。更换 selector、策略集合或任何所选 Poli
 ## 2. 精确引用与完整快照
 
 创建输入按 Policy ID/revision 选择模板；服务端读取并验证精确 current 版本，再把完整
-内容保存在 Scope 中。输入引用和保存的快照是不同层次，不接受调用方伪造的编译结果。
+内容保存在 Scope 中。输入引用和保存的快照是不同层次；PAP 负责模板校验，Adapter 负责目标编译。
 
 ```text
 ScopeCreate
@@ -42,8 +42,13 @@ StoredScope
   policySnapshots[]: complete PreparedPolicy
 ```
 
-以上字段与当前 wire 一致；创建输入用 `policyTemplates`，保存结果用 `policySnapshots`。`PreparedPolicy` 已包含来源 ID/revision、
-authored template 和 canonical IR；复用这个完整单元，不重复维护一份可漂移的引用列表。
+以上字段与当前 wire 一致；创建输入用 `policyTemplates`，保存结果用 `policySnapshots`。
+`PreparedPolicy` 只包含 `policyId`、`policyName`、`revision` 和 `template`，Scope 和 Binding
+保存同一个完整模板快照。
+每次 Apply 按 `Binding.policy.template → AgentSight Adapter → ActPlane DSL → Client`
+执行。Adapter 只读取 Binding 快照。
+模板的绝对路径、glob、重复项和支持 kind 校验在 `PolicyTemplate::validate()`；
+AgentSight 的 glob 子集、DSL 字面量、规则数和长度限制由 Adapter 拒绝检查。
 Scope 没有 `revision`，消费它的请求/响应和 Binding 来源信息也不携带 `scopeRevision`。
 内部模型见 [PreparedPolicy](../../v2/crates/asc-policy-types/src/policy.rs)。
 

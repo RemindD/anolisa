@@ -1,7 +1,7 @@
 //! Transport-independent Policy Administration Point use cases.
 //!
 //! PAP owns revisioned Policy records, immutable Scope assignments and system Bindings.
-//! Policy authoring is lowered synchronously through [`PolicyCompiler`].
+//! Authored templates are validated before storage and compiled by target Adapters.
 //! A Binding revision is a complete immutable snapshot, while only the current
 //! revision and its lifecycle status are retained by the Repository.
 //! Target-specific translation, Adapter dispatch, and retries are intentionally
@@ -18,13 +18,11 @@
 
 #![forbid(unsafe_code)]
 
-mod compiler;
 mod error;
 mod model;
 mod repository;
 mod service;
 
-pub use compiler::PolicyCompiler;
 pub use error::{EnqueueError, PapError};
 pub use model::{Page, PolicyRevisionState, ScopeDiscoverySeed};
 pub use repository::PapRepository;

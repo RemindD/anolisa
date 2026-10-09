@@ -584,12 +584,16 @@ trace-ID 或第二套审计输出。worker 意外退出时关闭队列准入，`
   start 失败保证没有遗留 worker，再补偿 Scope 删除；返回原始启动错误，补偿失败记录
   Scope ID 和两种错误供排查及显式删除，不构成跨进程事务保证。
 - shutdown 关闭准入、unpark 并 join，纳入 daemon drain。扫描降级/恢复记录日志；每轮有
-  `scope_discovery.scan` span。`process discovery selected new policy instances` 只描述选择，
+  `scope_discovery.scan` span。`process discovery selected new instances` 只描述进程选择，
   实际下发状态以 PAP Binding 查询为准。
 
-`DiscoveredBinding` 是匹配缓存，PAP `BindingView` 是可查询/可下发/可清理的存储对象。
+Discovery 按 PID 缓存选中的完整 `ProcessIdentity`，保留 selector、PID pin 和匹配输入缓存。
+每轮向 PAP 提交全部选中实例，Repository 按持久化 Scope 中的 Policy 快照展开 Binding。
+日志中的 `instances_selected` 统计新增进程实例，与该 Scope 的 Policy 数量无关。
+PAP `BindingView` 是可查询/可下发/可清理的存储对象。
 Reconciler 继续拥有调度、CAS、串行目标调用、UNKNOWN 记账及有界重试，不新增另一套执行
-状态机。Scope、Binding 和重试预算均 process-local；重启恢复仍待 durable Repository。
+状态机。Scope、Binding、PID pin 和恢复实例由 SQLite 保存；匹配缓存和重试预算留在内存。
+恢复流程见 [Policy SQLite 持久化设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)。
 
 验收包括 name/path/exec/PID reuse/局部读失败单元测试、registry 容量/停止测试，以及
 `procfs_discovery_uses_saved_policy_and_scope_delete_cleans_all_instances` 的真实 procfs、

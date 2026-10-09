@@ -1,18 +1,12 @@
-//! Deterministic Canonical IR to `ActPlane` DSL translation.
+//! Deterministic Policy template to `ActPlane` DSL translation.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use asc_policy_types::Validate;
+use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::PreparedBinding;
-use asc_policy_types::ir::{
-    ActivationRequirement, DecisionTiming, EvidenceRequirement, Expression, Obligation,
-    ResourceOperation, ResourceTarget, RestrictiveDecision, RuleIr, RuntimeFailurePolicy,
-    SemanticAtom, SubjectRemediation, UpdateFailurePolicy,
-};
-use asc_policy_types::policy::PolicyEnvelope;
-use asc_policy_types::resource::{FileResolution, PathMatcher, ResourceSelector};
 use asc_policy_types::scope::ScopeSelector;
 use asc_policy_types::target::{
     AdapterFault, TargetBindingPlan, TranslationOutcome, TranslationRejection,
@@ -91,112 +85,26 @@ fn translate_scope(scope: &BindingScope) -> Result<AgentSightScopePlan, Translat
 }
 
 fn compile_policy(binding: &PreparedBinding) -> Result<String, TranslationRejection> {
-    let policy = &binding.policy.canonical_policy;
-    if !guarantees_supported(&policy.payload) {
-        return Err(rejection("UNSUPPORTED_GUARANTEE"));
-    }
-    let mut rules: Vec<_> = policy.payload.rules.iter().collect();
-    rules.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-
+    let PolicyTemplate::PreventFileDeletion { files } = &binding.policy.template else {
+        return Err(rejection("UNSUPPORTED_POLICY_TEMPLATE"));
+    };
     let mut patterns = BTreeSet::new();
-    for rule in rules {
-        let translated_patterns = translate_rule(policy, rule)?;
-        patterns.extend(translated_patterns);
+    for pattern in files {
+        if !actplane_can_represent_glob(pattern) {
+            return Err(rejection("UNSUPPORTED_ACTPLANE_GLOB"));
+        }
+        if actplane_lowered_literal_len(pattern) > ACTPLANE_MAX_LOWERED_PATTERN_BYTES {
+            return Err(rejection("ACTPLANE_PATTERN_LIMIT_EXCEEDED"));
+        }
+        if !is_safe_dsl_pattern(pattern) {
+            return Err(rejection("UNSUPPORTED_ACTPLANE_PATTERN"));
+        }
+        patterns.insert(pattern.as_str());
     }
-
     if patterns.len() > ACTPLANE_MAX_RULES {
         return Err(rejection("ACTPLANE_RULE_LIMIT_EXCEEDED"));
     }
-
     Ok(render_dsl(&patterns))
-}
-
-fn translate_rule(
-    policy: &PolicyEnvelope,
-    rule: &RuleIr,
-) -> Result<BTreeSet<String>, TranslationRejection> {
-    let Expression::Atom {
-        atom:
-            SemanticAtom::ResourceOperation {
-                operation: ResourceOperation::Delete,
-                target: ResourceTarget::In { resource_set },
-            },
-    } = &rule.when
-    else {
-        return Err(rejection("UNSUPPORTED_CANONICAL_RULE"));
-    };
-
-    let Some(resource) = policy
-        .payload
-        .resources
-        .iter()
-        .find(|resource| &resource.id == resource_set)
-    else {
-        return Err(rejection("MISSING_RESOURCE_SET"));
-    };
-    let ResourceSelector::File { matchers } = &resource.selector else {
-        return Err(rejection("UNSUPPORTED_RESOURCE_KIND"));
-    };
-
-    let mut patterns = BTreeSet::new();
-    for matcher in matchers {
-        if matcher.resolution != FileResolution::PathEntry {
-            return Err(rejection("UNSUPPORTED_FILE_RESOLUTION"));
-        }
-        for pattern in target_patterns(&matcher.path)? {
-            if !is_safe_dsl_pattern(&pattern) {
-                return Err(rejection("UNSUPPORTED_ACTPLANE_PATTERN"));
-            }
-            patterns.insert(pattern);
-        }
-    }
-
-    Ok(patterns)
-}
-
-fn guarantees_supported(policy: &asc_policy_types::ir::CanonicalPolicyIr) -> bool {
-    policy.activation == ActivationRequirement::PostAttachAllowed
-        && policy.failure_policy.runtime == RuntimeFailurePolicy::FailClosed
-        && policy.failure_policy.update == UpdateFailurePolicy::KeepLastKnownGood
-        && policy.rules.iter().all(|rule| {
-            rule.outcome.decision == RestrictiveDecision::Deny
-                && same_set(
-                    &rule.outcome.obligations,
-                    &[Obligation::Audit, Obligation::EmitReceipt],
-                )
-                && rule.outcome.remediation == SubjectRemediation::None
-                && rule.enforcement.decision_timing == DecisionTiming::PreEffect
-                && same_set(
-                    &rule.enforcement.required_evidence,
-                    &[
-                        EvidenceRequirement::BindingReady,
-                        EvidenceRequirement::OperationDenied,
-                    ],
-                )
-        })
-}
-
-fn same_set<T: PartialEq>(actual: &[T], expected: &[T]) -> bool {
-    actual.len() == expected.len() && expected.iter().all(|value| actual.contains(value))
-}
-
-fn target_patterns(path: &PathMatcher) -> Result<Vec<String>, TranslationRejection> {
-    let patterns = match path {
-        PathMatcher::Exact { path } => vec![path.clone()],
-        PathMatcher::Glob { pattern } if actplane_can_represent_glob(pattern) => {
-            vec![pattern.clone()]
-        }
-        PathMatcher::Glob { .. } => return Err(rejection("UNSUPPORTED_ACTPLANE_GLOB")),
-        PathMatcher::Prefix { path } if path == "/" => vec!["/**".to_owned()],
-        PathMatcher::Prefix { path } => vec![path.clone(), format!("{path}/**")],
-    };
-    if patterns
-        .iter()
-        .any(|pattern| actplane_lowered_literal_len(pattern) > ACTPLANE_MAX_LOWERED_PATTERN_BYTES)
-    {
-        return Err(rejection("ACTPLANE_PATTERN_LIMIT_EXCEEDED"));
-    }
-    Ok(patterns)
 }
 
 fn actplane_can_represent_glob(pattern: &str) -> bool {
@@ -213,8 +121,7 @@ fn actplane_can_represent_glob(pattern: &str) -> bool {
         .is_some_and(|prefix| !prefix.contains('*'))
 }
 
-// Only literal paths and trailing /** reach this helper: Binding validation
-// excludes wildcards from Exact/Prefix and target_patterns restricts Glob.
+// Only literal paths and trailing /** reach this helper after the glob check.
 fn actplane_lowered_literal_len(pattern: &str) -> usize {
     if let Some(prefix) = pattern.strip_suffix("/**") {
         return prefix.len() + 1;
@@ -229,7 +136,7 @@ fn is_safe_dsl_pattern(pattern: &str) -> bool {
         .any(|character| matches!(character, '"' | '\\') || character.is_control())
 }
 
-fn render_dsl(patterns: &BTreeSet<String>) -> String {
+fn render_dsl(patterns: &BTreeSet<&str>) -> String {
     // TODO: ActPlane currently lowers both `unlink` and `write` to OP_WRITE. Keep
     // the explicit unlink DSL while landing the Adapter-to-Client path, then
     // split the backend operation so delete-only enforcement does not also

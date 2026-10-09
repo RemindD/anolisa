@@ -4,9 +4,8 @@ use asc_policy_adapter_agentsight::{
     AgentSightScopePlan,
 };
 use asc_policy_types::Validate;
+use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::PreparedBinding;
-use asc_policy_types::ir::SubjectRemediation;
-use asc_policy_types::resource::{FileResolution, PathMatcher, ResourceSelector};
 use asc_policy_types::scope::ScopeSelector;
 use asc_policy_types::target::TranslationOutcome;
 
@@ -20,14 +19,9 @@ fn complete_binding_fixture() -> PreparedBinding {
     serde_json::from_str(COMPLETE_BINDING_FIXTURE).unwrap()
 }
 
-fn binding_with_first_path(path: PathMatcher) -> PreparedBinding {
+fn binding_with_files(files: Vec<String>) -> PreparedBinding {
     let mut binding = complete_binding_fixture();
-    let ResourceSelector::File { matchers } =
-        &mut binding.policy.canonical_policy.payload.resources[0].selector
-    else {
-        panic!("expected file resource set");
-    };
-    matchers[0].path = path;
+    binding.policy.template = PolicyTemplate::PreventFileDeletion { files };
     binding
 }
 
@@ -114,122 +108,119 @@ fn unsupported_scope_is_rejected_without_a_target_plan() {
 }
 
 #[test]
-fn final_object_resolution_is_not_silently_lowered_to_unlink() {
-    let mut binding = complete_binding_fixture();
-    let ResourceSelector::File { matchers } =
-        &mut binding.policy.canonical_policy.payload.resources[0].selector
-    else {
-        panic!("expected file resource set");
-    };
-    matchers[0].resolution = FileResolution::FinalObject {
-        follow_final_symlink: true,
-        match_hardlink_identity: true,
-    };
-
-    let outcome = AgentSightAdapter.translate(&binding).unwrap();
-    let TranslationOutcome::Rejected(rejection) = outcome else {
-        panic!("FinalObject semantics must not produce an unlink plan");
-    };
-    assert_eq!(rejection.code, "UNSUPPORTED_FILE_RESOLUTION");
-}
-
-#[test]
-fn unsupported_policy_guarantees_are_rejected() {
-    let mut binding = complete_binding_fixture();
-    binding.policy.canonical_policy.payload.rules[0]
-        .outcome
-        .remediation = SubjectRemediation::Freeze;
-
-    let outcome = AgentSightAdapter.translate(&binding).unwrap();
-    let TranslationOutcome::Rejected(rejection) = outcome else {
-        panic!("unsupported guarantees must not produce a target plan");
-    };
-    assert_eq!(rejection.code, "UNSUPPORTED_GUARANTEE");
-}
-
-#[test]
-fn target_unsafe_literals_are_rejected() {
-    for path in ["/workspace/bad\"name", "/workspace/bad\\name"] {
-        let binding = binding_with_first_path(PathMatcher::Exact {
-            path: path.to_owned(),
-        });
-        binding.validate().unwrap();
-        let outcome = AgentSightAdapter.translate(&binding).unwrap();
-        let TranslationOutcome::Rejected(rejection) = outcome else {
-            panic!("unsafe DSL literal must not produce a target plan");
-        };
-        assert_eq!(rejection.code, "UNSUPPORTED_ACTPLANE_PATTERN");
-    }
-}
-
-#[test]
-fn valid_globs_without_equivalent_actplane_lowering_are_rejected() {
-    for pattern in [
-        "/workspace/file?.txt",
-        "/a/*/b",
-        "/workspace/*",
-        "/workspace/prefix*",
-    ] {
-        let binding = binding_with_first_path(PathMatcher::Glob {
-            pattern: pattern.to_owned(),
-        });
-        binding.validate().unwrap();
-
-        let outcome = AgentSightAdapter.translate(&binding).unwrap();
-        let TranslationOutcome::Rejected(rejection) = outcome else {
-            panic!("glob without equivalent ActPlane lowering must not produce a target plan");
-        };
-        assert_eq!(rejection.code, "UNSUPPORTED_ACTPLANE_GLOB");
-    }
-}
-
-#[test]
-fn lowered_patterns_at_the_actplane_63_byte_limit_are_translated() {
-    for path in [
-        PathMatcher::Exact {
-            path: format!("/{}", "e".repeat(62)),
+fn unsupported_templates_and_invalid_inputs_produce_no_plan() {
+    for template in [
+        PolicyTemplate::HighSensitivityReadDeny {
+            files: vec!["/secret".into()],
         },
-        PathMatcher::Exact {
-            path: format!("/{}aa", "界".repeat(20)),
+        PolicyTemplate::LowSensitivityEgress {
+            files: vec!["/secret".into()],
+            trusted_destinations: vec![],
         },
-        PathMatcher::Prefix {
-            path: format!("/{}", "p".repeat(61)),
+        PolicyTemplate::PreventFileDeletion { files: vec![] },
+        PolicyTemplate::PreventFileDeletion {
+            files: vec!["/same".into(), "/same".into()],
         },
-        PathMatcher::Glob {
-            pattern: format!("/{}/**", "g".repeat(61)),
+        PolicyTemplate::PreventFileDeletion {
+            files: vec!["/invalid/../path".into()],
         },
     ] {
-        let binding = binding_with_first_path(path);
-        binding.validate().unwrap();
-
-        let outcome = AgentSightAdapter.translate(&binding).unwrap();
-        assert!(matches!(outcome, TranslationOutcome::Translated(_)));
+        let mut binding = complete_binding_fixture();
+        binding.policy.template = template;
+        let TranslationOutcome::Rejected(rejection) =
+            AgentSightAdapter.translate(&binding).unwrap()
+        else {
+            panic!("invalid template must not produce a target plan");
+        };
+        assert_eq!(rejection.code, "INVALID_BINDING");
     }
 }
 
 #[test]
-fn lowered_patterns_over_the_actplane_63_byte_limit_are_rejected() {
-    for path in [
-        PathMatcher::Exact {
-            path: format!("/{}", "e".repeat(63)),
-        },
-        PathMatcher::Exact {
-            path: format!("/{}aaa", "界".repeat(20)),
-        },
-        PathMatcher::Prefix {
-            path: format!("/{}", "p".repeat(62)),
-        },
-        PathMatcher::Glob {
-            pattern: format!("/{}/**", "g".repeat(62)),
-        },
+fn target_pattern_rejections_preserve_input_validation_and_dsl_limits() {
+    for (paths, code) in [
+        (
+            vec!["/workspace/bad\"name".into()],
+            "UNSUPPORTED_ACTPLANE_PATTERN",
+        ),
+        (
+            vec!["/workspace/bad\\name".into()],
+            "UNSUPPORTED_ACTPLANE_PATTERN",
+        ),
+        (
+            vec!["/workspace/bad\nrule".into()],
+            "UNSUPPORTED_ACTPLANE_PATTERN",
+        ),
+        (
+            vec!["/workspace/file?.txt".into()],
+            "UNSUPPORTED_ACTPLANE_GLOB",
+        ),
+        (vec!["/a/*/b".into()], "UNSUPPORTED_ACTPLANE_GLOB"),
+        (vec!["/workspace/*".into()], "UNSUPPORTED_ACTPLANE_GLOB"),
+        (
+            vec!["/workspace/prefix*".into()],
+            "UNSUPPORTED_ACTPLANE_GLOB",
+        ),
+        (
+            vec![format!("/{}", "e".repeat(63))],
+            "ACTPLANE_PATTERN_LIMIT_EXCEEDED",
+        ),
+        (
+            vec![format!("/{}aaa", "界".repeat(20))],
+            "ACTPLANE_PATTERN_LIMIT_EXCEEDED",
+        ),
+        (
+            vec![format!("/{}/**", "g".repeat(62))],
+            "ACTPLANE_PATTERN_LIMIT_EXCEEDED",
+        ),
+        (
+            (0..129).map(|n| format!("/file-{n}")).collect(),
+            "ACTPLANE_RULE_LIMIT_EXCEEDED",
+        ),
     ] {
-        let binding = binding_with_first_path(path);
+        let binding = binding_with_files(paths);
         binding.validate().unwrap();
-
-        let outcome = AgentSightAdapter.translate(&binding).unwrap();
-        let TranslationOutcome::Rejected(rejection) = outcome else {
-            panic!("pattern exceeding the ActPlane ABI must not produce a target plan");
+        let TranslationOutcome::Rejected(rejection) =
+            AgentSightAdapter.translate(&binding).unwrap()
+        else {
+            panic!("unsupported pattern must not produce a target plan");
         };
-        assert_eq!(rejection.code, "ACTPLANE_PATTERN_LIMIT_EXCEEDED");
+        assert_eq!(rejection.code, code);
     }
+}
+
+#[test]
+fn supported_patterns_at_the_actplane_limits_are_translated() {
+    for paths in [
+        vec!["/".into(), "/**".into()],
+        vec![format!("/{}", "e".repeat(62))],
+        vec![format!("/{}aa", "界".repeat(20))],
+        vec![format!("/{}/**", "g".repeat(61))],
+        (0..128).map(|n| format!("/file-{n}")).collect(),
+    ] {
+        let binding = binding_with_files(paths);
+        binding.validate().unwrap();
+        assert!(matches!(
+            AgentSightAdapter.translate(&binding).unwrap(),
+            TranslationOutcome::Translated(_)
+        ));
+    }
+}
+
+#[test]
+fn template_order_does_not_change_dsl_and_changed_template_changes_the_plan() {
+    let original = complete_binding_fixture();
+    let expected = AgentSightAdapter.translate(&original).unwrap();
+    let mut reversed = original.clone();
+    let PolicyTemplate::PreventFileDeletion { files } = &mut reversed.policy.template else {
+        panic!("file deletion fixture");
+    };
+    files.reverse();
+    assert_eq!(AgentSightAdapter.translate(&reversed).unwrap(), expected);
+    assert_ne!(
+        AgentSightAdapter
+            .translate(&binding_with_files(vec!["/new-policy".into()]))
+            .unwrap(),
+        expected
+    );
 }

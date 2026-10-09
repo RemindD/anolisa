@@ -300,7 +300,7 @@ async fn dproc_scope_binary_starts_discovery_and_stops_it_on_sigterm() {
     }
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if read_stderr(&running.directory).contains("selected new policy instances") {
+            if read_stderr(&running.directory).contains("selected new instances") {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

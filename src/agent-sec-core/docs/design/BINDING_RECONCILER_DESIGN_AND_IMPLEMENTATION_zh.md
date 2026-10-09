@@ -223,7 +223,7 @@ Delete 接受成功不表示目标已删除；删除完成后旧 ID 返回 NotFo
 
 例：`policy.bindings.delete` 作用于 revision 2 的 READY Binding 时，目标响应中的
 `result.spec` 与删除前完全相同，`result.status` 为 `{"phase":"PENDING_DELETE"}`。完整 CRUD fixture
-保留原 Policy/Scope、IR、digest，仅调整 status；`bindingPendingDelete` 固定同版响应。
+保留原 Policy/Scope 快照，仅调整 status；`bindingPendingDelete` 固定同版响应。
 
 认证继续由 kernel peer credentials 构造 Principal，经 daemon-core 准入；handler
 只解码、调用、投影，不自行修改 revision，也不等待 Client。duplicate-key/unknown-param
@@ -329,31 +329,19 @@ UNKNOWN 并保留 last_confirmed；确认 Absent 后移除部署记录。route �
 
 ### 6.2 请求准入事务
 
-现有 PAP 基础写接口显式区分创建与条件更新：
+当前生产准入以 Scope 生命周期为边界：
 
-```rust
-update_binding(expected: Option<&BindingView>, next: &BindingView)
-    -> Result<BindingView, PapError>
-```
+- `sync_scope_instances` 在事务中检查 Scope 仍为 Active，以完整进程身份去重，并从
+  Scope 的 Policy 快照创建缺失 Binding；消失实例的 Binding 转为 PendingDelete。
+- `begin_scope_delete` 关闭新 Binding 准入；Discovery 停止后，`finish_scope_discovery`
+  原子登记停止屏障并请求子 Binding 清理。
+- `retry_scope` 只重试该 Scope 下的失败 Binding，保留 spec 和 deployment 责任。
+- 提交后以 `BindingIntentReceipt` 通知队列；入队失败仅对对应 status version 的 Pending
+  记录写入失败，不能覆盖 worker 已认领或已完成的状态。
 
-`None` 为 insert-if-absent；`Some` 比较完整 Binding 后更新，记录缺失返回 NotFound，
-绝不退化为插入。CREATE 的 ID 由服务端生成，外部 UPDATE 不能指定一个已删除 ID 复活。
-
-PAP 负责选定内容和候选 revision；repository 在事务内读取 current 并验证：
-
-1. expected 与当前值一致；不一致返回 Conflict，由 PAP 重读、重新判断，沿用有界尝试。
-2. 请求符合第 3 节；Delete 直接保留库内 spec；同一部署的相同内容重试保持 revision，
-   changed spec 要求 next revision；删除侧禁止 Apply，CREATE 要求新 ID 不存在且 revision 1。
-3. no-op 返回库内当前值，不重写 retry control；新意图按表更新 spec/status、重置当前
-   操作的 retry control 和 error，保留所有部署记录。
-4. status 与 next_attempt_at 同时提交，成为 durable reconcile intent。采用 current 行
-   即可表达待执行意图，本提案不另建通用 outbox 或历史操作队列。
-5. 提交成功后才通知 worker。通知失败不回滚已提交意图，也不让请求重复创建资源；
-   由持久化补扫恢复，基础通知处理见第 8 节。
-
-幂等 no-op 返回本次一致读取的已有值，不修改运行字段；实际变更必须通过
-完整 expected Binding 的条件更新，以关闭 service 预读与 worker 变更之间的竞争。更新只触及明确拥有的字段，不能用旧 BindingView 全行覆盖
-worker 刚写入的目标记录、错误或重试次数。
+具体事务与恢复契约见 [Policy SQLite 持久化设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)。
+旧 revision/CAS fixtures 使用 memory 后端的 `update_binding` 辅助方法构造状态；
+该方法不属于 `PapRepository`，SQLite 不提供直接创建或替换 Binding spec 的入口。
 
 ### 6.3 Worker 内部操作与数据库接口
 
@@ -492,7 +480,7 @@ delete(targets) -> DeploymentReport
   下一次调用重新解析当前进程身份，不保留跨次比对依据，也不保证跨次仍为同一进程。
 - `previous_targets` 含实际部署记录，必须按 target 身份去重并排除本次新目标身份。
   即使新目标已以 UNKNOWN 登记，也不能把它放入“先删除的旧目标”集合。
-- 旧 revision 记录只需可定位/可清理输入，不要求重新运行旧 Adapter 或保存旧完整 IR。
+- 旧 revision 记录只需可定位/可清理输入，不要求重新运行旧 Adapter。
   Delete 不调用 Adapter，不需要当前 PID 仍存活，也不从当前 revision 猜目标列表。
 
 调用及保存顺序为：
@@ -747,7 +735,7 @@ repository，无需等待 W5，但不能声明 W5 的耐久性已验收。W7 不
 每个 fixture 必须含：完整初始 BindingView、部署/重试记录、本次请求数据、完整输入请求
 或触发序列、可控时钟、按顺序注入的 Adapter/Client/Repository 结果、完整最终记录、
 完整外部响应或安全错误，以及严格有序 interaction trace。禁止只断言 READY 或只列
-Markdown ID；允许符号 UUID 引用，但不得删掉 spec、IR、digest 或关键请求字段。
+Markdown ID；允许符号 UUID 引用，但不得删掉 spec 或关键请求字段。
 
 trace 至少区分 read、claim commit、prepare、identity commit、Client request/response、
 observation commit、status CAS 成功/冲突、retry schedule、notification/recovery。

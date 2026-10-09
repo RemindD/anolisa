@@ -29,6 +29,9 @@ Policy、Scope、Binding 意图，以及仍需确认或清理的远端目标；�
 | 存储故障 | Repository 分类并核实提交，Runtime 暂停/恢复调度；存储重试不消耗远端重试预算 |
 | route | 保留单个 `agentsight` route；cleanup 保存非敏感 endpoint，调用前与当前配置校验 |
 
+Policy、Scope 和 Binding 中的完整 Policy 快照仅保存 ID、名称、revision 和 authored template。
+恢复后的 Apply 由 Adapter 将 Binding 中的模板直接编译成目标 DSL。
+
 本阶段不解决：PEP 重启后对所有 Ready Binding 重新审计、跨 daemon 的远端 fencing、
 远端请求在 daemon 退出后延迟执行的排序，以及硬件不兑现同步写承诺时的数据可靠性。
 客户端仍须满足同身份幂等操作和可靠 absence 分类；仅靠 SQLite 无法提供远端 exactly-once。
@@ -41,13 +44,14 @@ PCP reconcile 和 Runtime 扫描，不应叫 PAP 专属后端。
 
 | crate | 职责与此次变化 |
 |---|---|
-| `asc-policy-types` | Policy、Scope、Binding 业务模型及公共 wire；不加入数据库连接或队列状态 |
+| `asc-policy-types` | Policy、Scope、Binding 业务模型、模板校验及公共 wire；不加入数据库连接或队列状态 |
 | `asc-pap` | 管理操作、Scope 准入/删除/重试、`PapRepository`；内部通知携带提交版本回执 |
 | `asc-policy-repository` | `BindingStateSnapshot`、Deployment、CAS/写回执与扫描端口；保持 backend-neutral |
 | `asc-policy-repository-sqlite` | 实现上述端口，负责 schema、事务、编码、约束、严格打开与存储错误分类 |
 | `asc-pap-repository-memory` | 保留测试后端，与 SQLite 执行同一套契约；本次不顺带改名 |
 | `asc-pcp` | 状态转换、认领、UNKNOWN 登记、观察合并、中断恢复；不写 SQL |
 | `asc-policy-runtime` | 单 Binding 执行所有权、队列补扫、重试和异常收尾；不决定存储布局 |
+| `asc-policy-adapter-agentsight` | 从 Binding 的模板快照直接编译 AgentSight DSL；不读取模板库或数据库 |
 | `asc-agentsight-client` | 在版本化 cleanup 中保存 endpoint，远端调用前校验配置一致；每次执行重新读取凭据 |
 | `asc-daemon` | 连接、数据目录租约、启动恢复与 shutdown 装配；生产使用 SQLite |
 
@@ -210,8 +214,9 @@ PRAGMA user_version = 1;
 Policy 删除只置空 current_json，不删除 revision 分配头；current 的 revision 必须等于 head。
 Scope/Binding 不对 current Policy 加外键，模板更新/删除不能阻断旧快照继续工作。
 生产路径中同 Scope 内 Policy ID 唯一且 revision 固定，因此去重键不必再加 Policy revision。
-保留的内部 `update_binding` 契约仍验证 spec revision，更新所有相关投影并遵循现有准入规则；
-不能因为生产暂不调用它就让 SQLite 后端接受不一致记录。
+Binding 创建由 `sync_scope_instances` 按 Scope 快照和进程身份展开；删除、重试与
+reconciliation CAS 使用各自的原子写入口。`update_binding` 仅为 memory 测试后端的
+revision/CAS 构造辅助方法，不属于生产 Repository 契约或 SQLite 实现。
 
 系统继续生成新的 UUID，不复用已删除 Scope/Binding ID，不提供客户端指定旧 ID 的入口。
 Policy revision 分配头不能按 TTL 回收，否则同 ID 重建可能复用 revision；历史 ID 很多时的
@@ -390,7 +395,7 @@ PAP 的 Scope create 使用服务端先分配的 ID 核实不确定提交；无�
 
 ### 6.1 Policy 与 Scope 创建竞争
 
-PAP 可以在事务外解析和编译模板，但 `put_scope` 必须在事务内校验所有精确 current
+PAP 在事务外解析和校验模板，但 `put_scope` 必须在事务内校验所有精确 current
 revision 和快照内容。与并发更新/删除有明确先后：
 
 - Scope 提交先发生：保存完整旧版本，随后模板更新不影响它。

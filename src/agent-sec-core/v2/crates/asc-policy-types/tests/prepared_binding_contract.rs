@@ -1,8 +1,7 @@
 use asc_policy_types::Validate;
 use asc_policy_types::binding::BindingScope;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
-use asc_policy_types::identifiers::Revision;
-use asc_policy_types::policy::{PolicyEnvelope, PreparedPolicy};
+use asc_policy_types::policy::PreparedPolicy;
 
 const COMPLETE_BINDING: &str = include_str!("fixtures/prepared-binding.json");
 
@@ -87,7 +86,7 @@ fn policy_round_trips_without_template_digest_and_rejects_the_removed_field() {
     let encoded = serde_json::to_value(policy).unwrap();
     assert_eq!(encoded, complete["policy"]);
     assert!(encoded.get("templateDigest").is_none());
-    assert_eq!(encoded.as_object().unwrap().len(), 5);
+    assert_eq!(encoded.as_object().unwrap().len(), 4);
 
     for digest in [
         serde_json::json!(
@@ -103,12 +102,15 @@ fn policy_round_trips_without_template_digest_and_rejects_the_removed_field() {
 }
 
 #[test]
-fn binding_validation_rejects_inconsistent_embedded_policy_identity() {
+fn binding_validation_rejects_invalid_embedded_template() {
     let mut binding = prepared_binding();
-    binding.policy.canonical_policy.revision = Revision::new(2).unwrap();
-
-    let error = binding.validate().unwrap_err();
-    assert_eq!(error.path, "policy.canonicalPolicy.revision");
+    binding.policy.template = asc_policy_types::authoring::PolicyTemplate::PreventFileDeletion {
+        files: vec!["relative".into()],
+    };
+    assert_eq!(
+        binding.validate().unwrap_err().path,
+        "policy.template.files[0]"
+    );
 }
 
 #[test]
@@ -245,33 +247,17 @@ fn removed_legacy_fields_and_unknown_fields_are_rejected() {
 }
 
 #[test]
-fn canonical_policy_rejects_removed_payload_digest_at_every_embedding_boundary() {
+fn snapshots_reject_unknown_fields_at_every_embedding_boundary() {
     let complete: serde_json::Value = serde_json::from_str(COMPLETE_BINDING).unwrap();
-    let envelope: PolicyEnvelope =
-        serde_json::from_value(complete["policy"]["canonicalPolicy"].clone()).unwrap();
-    envelope.validate().unwrap();
-    assert_eq!(
-        serde_json::to_value(envelope).unwrap(),
-        complete["policy"]["canonicalPolicy"]
-    );
-    assert!(
-        complete["policy"]["canonicalPolicy"]
-            .get("payloadDigest")
-            .is_none()
-    );
-    for digest in [
-        serde_json::json!(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        ),
-        serde_json::Value::Null,
-    ] {
+    for unknown in [serde_json::json!({"extra": 1}), serde_json::Value::Null] {
         let mut legacy = complete.clone();
-        legacy["policy"]["canonicalPolicy"]["payloadDigest"] = digest;
-        assert!(
-            serde_json::from_value::<PolicyEnvelope>(legacy["policy"]["canonicalPolicy"].clone())
-                .is_err()
-        );
+        legacy["policy"]["unknownField"] = unknown;
         assert!(serde_json::from_value::<PreparedPolicy>(legacy["policy"].clone()).is_err());
+        let scope = serde_json::json!({
+            "scopeId": "assignment", "selector": complete["scope"]["selector"],
+            "status": "ACTIVE", "policySnapshots": [legacy["policy"].clone()]
+        });
+        assert!(serde_json::from_value::<asc_policy_types::scope::PreparedScope>(scope).is_err());
         assert!(serde_json::from_value::<PreparedBinding>(legacy).is_err());
     }
 }

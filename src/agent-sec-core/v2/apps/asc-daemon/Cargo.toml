@@ -41,7 +41,6 @@ asc-model-client.workspace = true
 asc-foundation-types.workspace = true
 asc-pap.workspace = true
 asc-policy-repository-sqlite.workspace = true
-asc-policy-engine.workspace = true
 asc-security-events.workspace = true
 thiserror.workspace = true
 rustix.workspace = true

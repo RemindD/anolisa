@@ -56,12 +56,12 @@
     {
       "name": "create unsupported high-sensitivity policy",
       "request": {"method": "policy.templates.create", "params": {"policyName": "unsupported", "template": {"kind": "high_sensitivity_read_deny", "files": ["/valid"]}}},
-      "expectedError": {"code": "invalid_argument", "message": "invalid policy: template.kind: the current compiler supports only prevent_file_deletion"}
+      "expectedError": {"code": "invalid_argument", "message": "invalid policy: template.kind: only prevent_file_deletion is currently supported"}
     },
     {
       "name": "update to an unsupported low-sensitivity policy",
       "request": {"method": "policy.templates.update", "params": {"policyId": "${existing_policy_id}", "policyName": "unsupported", "template": {"kind": "low_sensitivity_egress", "files": ["/valid"], "trustedDestinations": [{"type": "host", "pattern": "example.com", "ports": [443]}]}}},
-      "expectedError": {"code": "invalid_argument", "message": "invalid policy: template.kind: the current compiler supports only prevent_file_deletion"}
+      "expectedError": {"code": "invalid_argument", "message": "invalid policy: template.kind: only prevent_file_deletion is currently supported"}
     },
     {
       "name": "create low-sensitivity policy without trusted destinations",

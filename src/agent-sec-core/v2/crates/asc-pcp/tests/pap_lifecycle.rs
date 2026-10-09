@@ -3,21 +3,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use asc_foundation_types::Revision;
-use asc_pap::{PapError, PapRepository, PapService, PolicyCompiler};
+use asc_pap::{PapError, PapRepository, PapService};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_pcp::*;
-use asc_policy_types::authoring::TemplateEnvelope;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
-use asc_policy_types::error::ValidationError;
-use asc_policy_types::policy::PolicyEnvelope;
 use asc_policy_types::target::{AdapterFault, TargetBindingPlan, TranslationOutcome};
-
-struct UnusedCompiler;
-impl PolicyCompiler for UnusedCompiler {
-    fn lower(&self, _: &TemplateEnvelope) -> Result<PolicyEnvelope, ValidationError> {
-        panic!("Binding operations must use the stored Policy snapshot")
-    }
-}
 
 #[derive(Default)]
 struct Script {
@@ -98,7 +88,7 @@ impl TargetDeploymentClient for Client {
 }
 struct Rig {
     repo: Arc<ProcessLocalPapRepository>,
-    pap: PapService<ProcessLocalPapRepository, UnusedCompiler>,
+    pap: PapService<ProcessLocalPapRepository>,
     client: Arc<Client>,
     core: BindingReconciler,
     binding: BindingView,
@@ -126,8 +116,7 @@ impl Rig {
             .unwrap(),
         );
         repo.put_policy(&spec.policy).unwrap();
-        let pap = PapService::new(repo.clone(), Arc::new(UnusedCompiler))
-            .with_scope_discovery(Arc::new(Discovery));
+        let pap = PapService::new(repo.clone()).with_scope_discovery(Arc::new(Discovery));
         let client = Arc::new(Client::default());
         let adapter = |binding: &PreparedBinding| -> Result<TranslationOutcome, AdapterFault> {
             Ok(TranslationOutcome::Translated(TargetBindingPlan {

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use asc_policy_types::Validate;
 #[cfg(test)]
 use asc_policy_types::policy::PreparedPolicy;
-use asc_policy_types::process_discovery::{DiscoveredBinding, ProcessIdentity};
+use asc_policy_types::process_discovery::ProcessIdentity;
 use asc_policy_types::scope::{PreparedScope, ProcessMatcher, ScopeSelector};
 
 /// Matching inputs; executable inode changes also invalidate a cached result.
@@ -46,16 +46,16 @@ pub struct ScanResult {
     pub matched_checks: usize,
     /// Already-checked observations with unchanged inputs.
     pub cached: usize,
-    /// New policy-instance selections cached this round.
-    pub bindings_created: usize,
+    /// New process instances selected this round.
+    pub instances_selected: usize,
 }
 
 /// One job's state. The owning daemon worker serializes all access.
 pub struct ScopeDiscoveryState {
-    scope: PreparedScope,
+    selector: ScopeSelector,
     pinned_pid: Option<ProcessIdentity>,
     checked: BTreeMap<u32, CheckedProcess>,
-    bindings: BTreeMap<u32, Vec<DiscoveredBinding>>,
+    instances: BTreeMap<u32, ProcessIdentity>,
 }
 
 impl ScopeDiscoveryState {
@@ -83,36 +83,20 @@ impl ScopeDiscoveryState {
         if matches!(scope.selector, ScopeSelector::CgroupId { .. }) {
             return Err("cgroup discovery is unsupported");
         }
-        let bindings = instances
-            .into_iter()
-            .map(|identity| {
-                let bindings = scope
-                    .policy_snapshots
-                    .iter()
-                    .map(|policy| DiscoveredBinding {
-                        scope: asc_policy_types::binding::BindingScope {
-                            scope_id: scope.scope_id.clone(),
-                            selector: scope.selector.clone(),
-                            process: identity.clone(),
-                        },
-                        policy: policy.clone(),
-                        process: identity.clone(),
-                    })
-                    .collect();
-                (identity.pid, bindings)
-            })
-            .collect();
         Ok(Self {
-            scope,
+            selector: scope.selector,
             pinned_pid: pinned_process,
             checked: BTreeMap::new(),
-            bindings,
+            instances: instances
+                .into_iter()
+                .map(|identity| (identity.pid, identity))
+                .collect(),
         })
     }
 
     /// Applies a scan. `present` includes PIDs whose metadata could not be read.
     /// Only a complete enumeration may remove absent processes. A failed read
-    /// never erases a successful binding or its deduplication key.
+    /// never erases a selected instance or its deduplication key.
     pub fn reconcile(
         &mut self,
         observations: Vec<ProcessObservation>,
@@ -127,11 +111,11 @@ impl ScopeDiscoveryState {
             } = observation;
             // A successfully observed replacement proves the previous instance exited.
             if self
-                .bindings
+                .instances
                 .get(&identity.pid)
-                .is_some_and(|bindings| bindings[0].process != identity)
+                .is_some_and(|previous| previous != &identity)
             {
-                self.bindings.remove(&identity.pid);
+                self.instances.remove(&identity.pid);
             }
             let matches = if let Some(previous) =
                 self.checked.get(&identity.pid).filter(|previous| {
@@ -141,7 +125,7 @@ impl ScopeDiscoveryState {
                 previous.matches
             } else {
                 result.matched_checks += 1;
-                let matches = match &self.scope.selector {
+                let matches = match &self.selector {
                     ScopeSelector::Process {
                         matcher: ProcessMatcher::Name { process_name },
                     } => &fingerprint.process_name == process_name,
@@ -169,40 +153,25 @@ impl ScopeDiscoveryState {
                 matches
             };
             if !matches {
-                self.bindings.remove(&identity.pid);
+                self.instances.remove(&identity.pid);
             }
-            if matches && !self.bindings.contains_key(&identity.pid) {
+            if matches && !self.instances.contains_key(&identity.pid) {
                 // The worker submits the full selection every scan, so a failed PAP
                 // admission is retried even when this match is cached.
-                self.bindings.insert(
-                    identity.pid,
-                    self.scope
-                        .policy_snapshots
-                        .iter()
-                        .map(|policy| DiscoveredBinding {
-                            scope: asc_policy_types::binding::BindingScope {
-                                scope_id: self.scope.scope_id.clone(),
-                                selector: self.scope.selector.clone(),
-                                process: identity.clone(),
-                            },
-                            policy: policy.clone(),
-                            process: identity.clone(),
-                        })
-                        .collect(),
-                );
-                result.bindings_created += self.scope.policy_snapshots.len();
+                self.instances.insert(identity.pid, identity);
+                result.instances_selected += 1;
             }
         }
         if complete {
             self.checked.retain(|pid, _| present.contains(pid));
-            self.bindings.retain(|pid, _| present.contains(pid));
+            self.instances.retain(|pid, _| present.contains(pid));
         }
         result
     }
 
-    /// Cached policy-instance selections; PAP owns admitted Binding status.
-    pub fn bindings(&self) -> impl Iterator<Item = &DiscoveredBinding> {
-        self.bindings.values().flatten()
+    /// Selected process instances; PAP admits their Bindings from the saved Scope.
+    pub fn instances(&self) -> impl Iterator<Item = &ProcessIdentity> {
+        self.instances.values()
     }
 }
 
@@ -219,22 +188,21 @@ mod tests {
     }
 
     fn state() -> ScopeDiscoveryState {
-        state_with("scope-one", policy())
+        ScopeDiscoveryState::for_scope(scope()).unwrap()
     }
 
-    fn state_with(id: &str, policy: PreparedPolicy) -> ScopeDiscoveryState {
+    fn scope() -> PreparedScope {
         use asc_policy_types::identifiers::ResourceId;
-        ScopeDiscoveryState::for_scope(PreparedScope {
-            scope_id: ResourceId::new(id).unwrap(),
+        PreparedScope {
+            scope_id: ResourceId::new("scope-one").unwrap(),
             status: asc_policy_types::scope::ScopeStatus::Active,
             selector: ScopeSelector::Process {
                 matcher: ProcessMatcher::Executable {
                     executable: "/bin/agent".to_owned(),
                 },
             },
-            policy_snapshots: vec![policy],
-        })
-        .unwrap()
+            policy_snapshots: vec![policy()],
+        }
     }
 
     fn process(pid: u32, start_time: u64, executable: &str) -> ProcessObservation {
@@ -256,7 +224,7 @@ mod tests {
 
     #[test]
     fn restart_seed_preserves_unreadable_instance_and_pid_pin() {
-        let mut scope = state().scope;
+        let mut scope = scope();
         scope.selector = ScopeSelector::Pid { pid: 10 };
         let identity = process(10, 1, "/bin/agent").identity;
         let mut recovered = ScopeDiscoveryState::from_seed(asc_pap::ScopeDiscoverySeed {
@@ -266,31 +234,31 @@ mod tests {
         })
         .unwrap();
         recovered.reconcile(Vec::new(), &BTreeSet::new(), false);
-        assert_eq!(recovered.bindings().count(), 1);
+        assert_eq!(recovered.instances().count(), 1);
         recovered.reconcile(Vec::new(), &BTreeSet::from([10]), true);
-        assert_eq!(recovered.bindings().count(), 1);
+        assert_eq!(recovered.instances().count(), 1);
         recovered.reconcile(Vec::new(), &BTreeSet::new(), true);
-        assert_eq!(recovered.bindings().count(), 0);
+        assert_eq!(recovered.instances().count(), 0);
         recovered.reconcile(
             vec![process(10, 2, "/bin/agent")],
             &BTreeSet::from([10]),
             true,
         );
-        assert_eq!(recovered.bindings().count(), 0);
+        assert_eq!(recovered.instances().count(), 0);
     }
 
     #[test]
     fn pid_selector_pins_first_instance_and_does_not_follow_reuse() {
-        let mut scope = state().scope;
+        let mut scope = scope();
         scope.selector = ScopeSelector::Pid { pid: 10 };
         let mut state = ScopeDiscoveryState::for_scope(scope).unwrap();
         let present = BTreeSet::from([10]);
         state.reconcile(vec![process(10, 1, "/bin/agent")], &present, true);
-        assert_eq!(state.bindings().count(), 1);
+        assert_eq!(state.instances().count(), 1);
         state.reconcile(Vec::new(), &BTreeSet::new(), true);
-        assert_eq!(state.bindings().count(), 0);
+        assert_eq!(state.instances().count(), 0);
         state.reconcile(vec![process(10, 2, "/bin/agent")], &present, true);
-        assert_eq!(state.bindings().count(), 0);
+        assert_eq!(state.instances().count(), 0);
     }
 
     #[test]
@@ -311,7 +279,7 @@ mod tests {
         assert_eq!(
             state
                 .reconcile(vec![process(10, 1, "/bin/node")], &present, true)
-                .bindings_created,
+                .instances_selected,
             1
         );
         assert_eq!(
@@ -328,14 +296,14 @@ mod tests {
                 .matched_checks,
             1
         );
-        assert_eq!(state.bindings().count(), 0);
+        assert_eq!(state.instances().count(), 0);
         assert_eq!(
             state
                 .reconcile(vec![process(10, 2, "/bin/node")], &present, true)
-                .bindings_created,
+                .instances_selected,
             1
         );
-        assert_eq!(state.bindings().next().unwrap().process.start_time, 2);
+        assert_eq!(state.instances().next().unwrap().start_time, 2);
     }
 
     #[test]
@@ -352,7 +320,7 @@ mod tests {
             ScanResult {
                 matched_checks: 2,
                 cached: 0,
-                bindings_created: 1
+                instances_selected: 1
             }
         );
         let repeated = state.reconcile(
@@ -365,21 +333,21 @@ mod tests {
             ScanResult {
                 matched_checks: 0,
                 cached: 2,
-                bindings_created: 0
+                instances_selected: 0
             }
         );
         let exec = state.reconcile(vec![process(20, 2, "/bin/agent")], &present, true);
-        assert_eq!(exec.bindings_created, 1);
-        assert_eq!(state.bindings().count(), 2);
+        assert_eq!(exec.instances_selected, 1);
+        assert_eq!(state.instances().count(), 2);
         let reused = state.reconcile(vec![process(10, 3, "/bin/agent")], &present, true);
-        assert_eq!(reused.bindings_created, 1);
-        assert_eq!(state.bindings().count(), 2);
-        assert_eq!(state.bindings.get(&10).unwrap()[0].process.start_time, 3);
+        assert_eq!(reused.instances_selected, 1);
+        assert_eq!(state.instances().count(), 2);
+        assert_eq!(state.instances.get(&10).unwrap().start_time, 3);
         let mut replaced = process(10, 3, "/bin/agent");
         replaced.fingerprint.inode = 99;
         let replacement = state.reconcile(vec![replaced], &present, true);
         assert_eq!(replacement.matched_checks, 1);
-        assert_eq!(replacement.bindings_created, 0);
+        assert_eq!(replacement.instances_selected, 0);
     }
 
     #[test]
@@ -391,37 +359,44 @@ mod tests {
             true,
         );
         state.reconcile(Vec::new(), &BTreeSet::new(), false);
-        assert_eq!(state.bindings().count(), 1);
+        assert_eq!(state.instances().count(), 1);
         state.reconcile(Vec::new(), &BTreeSet::from([10]), true);
-        assert_eq!(state.bindings().count(), 1);
+        assert_eq!(state.instances().count(), 1);
         let recovered = state.reconcile(
             vec![process(10, 1, "/bin/agent")],
             &BTreeSet::from([10]),
             true,
         );
-        assert_eq!(recovered.bindings_created, 0);
+        assert_eq!(recovered.instances_selected, 0);
         assert_eq!(recovered.cached, 1);
         state.reconcile(Vec::new(), &BTreeSet::new(), true);
-        assert_eq!(state.bindings().count(), 0);
+        assert_eq!(state.instances().count(), 0);
         assert!(state.checked.is_empty());
     }
 
     #[test]
-    fn djob_scope_scopes_deduplication_to_each_scope_and_keeps_policy_snapshot() {
+    fn selection_is_per_scope_and_independent_of_policy_count() {
         let mut first = state();
+        let mut scope = scope();
+        scope.scope_id = asc_foundation_types::ResourceId::new("scope-two").unwrap();
         let mut policy = policy();
-        policy.policy_name = "second policy".to_owned();
-        let mut second = state_with("scope-two", policy.clone());
+        policy.policy_id = asc_foundation_types::ResourceId::new("policy-two").unwrap();
+        scope.policy_snapshots.push(policy);
+        let mut second = ScopeDiscoveryState::for_scope(scope).unwrap();
         for state in [&mut first, &mut second] {
-            state.reconcile(
-                vec![process(10, 1, "/bin/agent")],
+            let selected = state.reconcile(
+                vec![process(10, 1, "/bin/agent"), process(10, 1, "/bin/agent")],
                 &BTreeSet::from([10]),
                 true,
             );
+            assert_eq!(selected.instances_selected, 1);
+            assert_eq!(
+                state.instances().cloned().collect::<Vec<_>>(),
+                vec![process(10, 1, "/bin/agent").identity]
+            );
         }
-        assert_eq!(first.bindings().count(), 1);
-        let binding = second.bindings().next().unwrap();
-        assert_eq!(binding.scope.scope_id.as_str(), "scope-two");
-        assert_eq!(binding.policy, policy);
+        first.reconcile(Vec::new(), &BTreeSet::new(), true);
+        assert_eq!(first.instances().count(), 0);
+        assert_eq!(second.instances().count(), 1);
     }
 }

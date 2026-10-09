@@ -22,7 +22,6 @@ impl TestAdmission for asc_pap_repository_memory::ProcessLocalPapRepository {
         expected: &ExpectedBinding,
         desired: &BindingView,
     ) -> Result<bool, StoreError> {
-        use asc_pap::PapRepository;
         let Some(mut before) = self.get_binding_state(&expected.id)? else {
             return Ok(false);
         };

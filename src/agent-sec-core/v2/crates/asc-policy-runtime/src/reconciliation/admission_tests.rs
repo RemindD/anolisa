@@ -5,8 +5,8 @@ use asc_policy_repository::{BindingStateWrite, ReconciliationPatch, WriteResult}
 fn pap_with(
     repo: Arc<ProcessLocalPapRepository>,
     queue: Arc<dyn BindingReconcileEnqueuer>,
-) -> PapService<ProcessLocalPapRepository, asc_policy_engine::PolicyTemplateCompiler> {
-    PapService::new(repo, Arc::new(asc_policy_engine::PolicyTemplateCompiler))
+) -> PapService<ProcessLocalPapRepository> {
+    PapService::new(repo)
         .with_reconcile_enqueuer(queue)
         .with_scope_discovery(Arc::new(Discovery))
 }

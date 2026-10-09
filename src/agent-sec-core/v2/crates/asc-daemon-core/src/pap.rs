@@ -1,6 +1,6 @@
 use asc_foundation_types::{ResourceId, Revision};
 pub use asc_pap::EnqueueError;
-use asc_pap::{Page, PapError, PapRepository, PapService, PolicyCompiler};
+use asc_pap::{Page, PapError, PapRepository, PapService};
 use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::BindingView;
 use asc_policy_types::error::ValidationError;
@@ -302,10 +302,9 @@ pub trait PolicyAdministration: Send + Sync {
     ) -> Result<PreparedScope, PolicyAdministrationError>;
 }
 
-impl<R, C> PolicyAdministration for PapService<R, C>
+impl<R> PolicyAdministration for PapService<R>
 where
     R: PapRepository,
-    C: PolicyCompiler,
 {
     fn create_policy(
         &self,
@@ -509,7 +508,7 @@ mod tests {
         assert_eq!(
             project_pap_error(
                 PapError::InvalidPolicy(ValidationError::new(
-                    "canonicalPolicy.policyId",
+                    "internal.validation",
                     "compiler output exposed an internal mismatch"
                 )),
                 None

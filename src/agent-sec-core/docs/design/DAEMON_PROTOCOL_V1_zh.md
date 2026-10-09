@@ -442,7 +442,7 @@ PAP administration 是新增的 V2 method family，不是九个 V1 method 之一
 success 不得再包一层 `{policy}`、`{scope}` 或 `{binding}`。
 
 `v2/crates/asc-daemon-protocol/tests/fixtures/pap-crud-e2e.json` 进一步冻结覆盖
-15 个 method 的有状态 CRUD 场景及完整 response value，包括 Canonical Policy IR、Scope
+15 个 method 的历史有状态 CRUD 场景及完整 response value、Scope
 template、Binding 内嵌快照、revision、status 和确定性 digest。daemon 生成的 request/resource
 UUID 使用具名占位符：fixture 不冻结随机值本身，但必须验证 UUID 格式、CREATE 捕获值在后续
 请求/响应中的一致性，以及不同资源 identity 不混用。该 fixture 同时由 protocol 类型测试、
@@ -512,14 +512,11 @@ reconcile Runtime。当前 Scope 自动管理 Binding，生产使用 SQLite，�
 [Policy SQLite 持久化设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)。内部 status_version、
 deployments 与写回执不进入公共响应。历史内存组合测试不作为真实 PEP 或物理断电验收。
 
-Policy CREATE/UPDATE 在 PAP 内同步调用 `PolicyCompiler::lower(TemplateEnvelope) ->
-PolicyEnvelope`。当前产品 compiler 只实现 `prevent_file_deletion`，其输入与完整 Canonical
-Policy IR 输出由
-`v2/crates/asc-policy-engine/tests/fixtures/compiler-contract.json` 冻结；输出语义是
-`ResourceOperation::Delete + FileResolution::PathEntry`。该模板只覆盖对匹配目录项的删除操作，
-例如 unlink/rmdir；rename/move、link、truncate、内容修改和其它 namespace mutation 不在其
-保护范围内。其它 `PolicyTemplate` kind 在各自 lowering 与直接 Adapter conformance 完成前
-返回 `invalid_argument`，不得生成占位 IR。
+Policy CREATE/UPDATE 在 PAP 内校验 `PolicyTemplate` 并保存完整模板。
+当前仅支持 `prevent_file_deletion`，覆盖对匹配目录项的删除操作；rename/move、link、
+truncate、内容修改和其它 namespace mutation 不在其保护范围内。其它 kind 返回
+`invalid_argument`。Binding Apply 时由 AgentSight Adapter 将快照中的 template 直接生成
+ActPlane DSL，固定输出见 `v2/fixtures/adapters/agentsight/prevent-file-deletion/`。
 
 参数 object 拒绝未知字段。基线 ScopeSelector 支持正数 PID 或 cgroup ID；第 14 节
 SCOPE-CR-001 扩展 name/path process selector 与 policyTemplates assignment。PreparedScope
@@ -527,12 +524,11 @@ SCOPE-CR-001 扩展 name/path process selector 与 policyTemplates assignment。
 Legacy PreparedScope 的输出含 `scopeId`、`revision`、`selector`，assignment 增加 `policyTemplates`；不再包含自动填充的
 `template` 或 `templateDigest`。读取时显式携带这两个已移除字段会被拒绝，不能
 把其中的 lifetime 等约束静默丢弃。Scope Update 直接按 selector 比较内容是否相同；
-PreparedPolicy 保留 policyId/policyName/revision/template/canonicalPolicy，移除
-templateDigest；Policy 的 authored template 保留，canonicalPolicy 不再含预留的 payloadDigest。
+PreparedPolicy 包含 policyId/policyName/revision/template。Scope 和 Binding 中的内嵌
+Policy 使用相同结构。
 PreparedBinding 只含 bindingId/bindingRevision/policy/scope，不再接受顶层
 executionDomainId。已删除的 Policy templateDigest 和 Binding executionDomainId
-（包括显式 null）均按未知字段拒绝；Policy/Scope 的 retired 和 canonicalPolicy 的
-payloadDigest 也不再接受。当前三个模型直接派生严格反序列化，不保留旧字段吞入逻辑。
+（包括显式 null）均按未知字段拒绝；Policy/Scope 的 retired 也不再接受。当前三个模型直接派生严格反序列化，不保留旧字段吞入逻辑。
 LIST 的 `limit` 为 `1..=1000`，`offset` 为 `u32`；total 是
 分页前总数。当前 aggregate byte budget 仍是 Repository/PAP/transport 联合 gate，在该 gate
 完成前 LIST 只达到 integration contract，不构成 distribution-ready 大数据量查询能力。
@@ -547,9 +543,9 @@ PAP error 稳定投影如下：无法构造成 method params 的字段、类型�
 identifier、revision、pagination 和 authored selector）→ `invalid_request`，同时返回最多 256
 字节的参数解码原因；任意层级 JSON object 的 duplicate key 在进入 `serde_json::Value` 前拒绝，
 按 malformed envelope 返回 `invalid_request / request envelope is invalid`。成功构造 params 后
-发生的 authoring/compiler validation → `invalid_argument`，message 为最多 256 字节的稳定
+发生的 template/selector validation → `invalid_argument`，message 为最多 256 字节的稳定
 `invalid policy name: <reason>`、`invalid policy: <authored-path>: <reason>` 或
-`invalid scope: <authored-path>: <reason>`，不得暴露 canonical IR path、输入内容或内部 error
+`invalid scope: <authored-path>: <reason>`，不得暴露 内部字段路径、输入内容或内部 error
 code。
 
 not found → `not_found`，并按操作对象稳定区分 `policy was not found`、
@@ -832,7 +828,7 @@ agent-sec-cli 触发 PyO3、Python backend 或第二套本地业务执行。
 | DPV1-017 | 八个 action method 的 timeout、queue/resource、access-log、blocking 和 cancellation metadata 已冻结并逐项验证 |
 | DPV1-018 | 多 UID 共用 system socket；trusted Principal/QueryScope 隔离 owner，`caller/trace_context` 不参与授权 |
 | DPV1-019 | CLI/TUI 不能用 RPC filter 绕过服务端 QueryScope，也不能直读 SQLite 替代授权查询 |
-| DPV1-020 | 15 个 PAP method 的 strict params、完整请求/响应 CRUD fixture、直接领域 result、错误投影、server-owned Principal；必跑 UDS integration 经 Dispatcher/PapHandler → PapService → Policy Compiler/Repository 执行完整 fixture，真实 `asc-daemon` 子进程通过启动管理员 UID 配置完成非 root 成功场景，同时验证默认拒绝；root 环境验证默认成功 |
+| DPV1-020 | 15 个 PAP method 的 strict params、完整请求/响应 CRUD fixture、直接领域 result、错误投影、server-owned Principal；必跑 UDS integration 经 Dispatcher/PapHandler → PapService → Repository 执行完整 fixture，真实 `asc-daemon` 子进程通过启动管理员 UID 配置完成非 root 成功场景，同时验证默认拒绝；root 环境验证默认成功 |
 
 协议测试必须使用 socket bytes 和解析后 JSON 比较；只测试某个 Python dataclass 或 Rust
 struct 的构造函数不足以证明 wire compatibility。

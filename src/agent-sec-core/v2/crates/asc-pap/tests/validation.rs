@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
-use asc_pap::{PapError, PapRepository, PapService, PolicyCompiler};
+use asc_pap::{PapError, PapRepository, PapService};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_policy_types::Validate;
-use asc_policy_types::authoring::TemplateEnvelope;
+use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::PreparedBinding;
 use asc_policy_types::error::ValidationError;
-use asc_policy_types::identifiers::{PolicyId, Revision};
-use asc_policy_types::policy::PolicyEnvelope;
 use asc_policy_types::scope::ScopeSelector;
 
 fn binding() -> PreparedBinding {
@@ -17,25 +15,10 @@ fn binding() -> PreparedBinding {
     .unwrap()
 }
 
-struct FixtureCompiler(fn(&mut PolicyEnvelope));
-
-impl PolicyCompiler for FixtureCompiler {
-    fn lower(&self, input: &TemplateEnvelope) -> Result<PolicyEnvelope, ValidationError> {
-        let mut policy = binding().policy.canonical_policy;
-        policy.policy_id = input.policy_id.clone();
-        policy.revision = input.revision;
-        (self.0)(&mut policy);
-        Ok(policy)
-    }
-}
-
 #[test]
 fn shared_name_validation_preserves_pap_and_snapshot_errors() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
-    let pap = PapService::new(
-        repository.clone(),
-        Arc::new(FixtureCompiler(|_| panic!("invalid name reached compiler"))),
-    );
+    let pap = PapService::new(repository.clone());
     for (name, reason) in [
         (String::new(), "must contain a visible character"),
         (" \t\n".into(), "must contain a visible character"),
@@ -68,7 +51,7 @@ fn shared_name_validation_preserves_pap_and_snapshot_errors() {
 #[test]
 fn validated_construction_still_produces_valid_policy_and_scope_snapshots() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
-    let pap = PapService::new(repository, Arc::new(FixtureCompiler(|_| {})));
+    let pap = PapService::new(repository);
     for name in ["a".repeat(256), "é".repeat(128), " visible name ".into()] {
         let policy = pap
             .create_policy(&name, &binding().policy.template)
@@ -100,32 +83,48 @@ fn validated_construction_still_produces_valid_policy_and_scope_snapshots() {
 }
 
 #[test]
-fn compiler_output_rejection_keeps_original_error_paths_and_never_writes() {
-    type Mutation = fn(&mut PolicyEnvelope);
-    let cases: [(Mutation, &str, &str); 3] = [
+fn invalid_template_rejects_create_and_update_without_writing() {
+    let repository = Arc::new(ProcessLocalPapRepository::default());
+    let pap = PapService::new(repository.clone());
+    let saved = pap
+        .create_policy("policy", &binding().policy.template)
+        .unwrap();
+    for (template, path) in [
         (
-            |policy| policy.policy_id = PolicyId::new("wrong-policy").unwrap(),
-            "canonicalPolicy.policyId",
-            "compiler output must match the authored Policy identity",
+            PolicyTemplate::PreventFileDeletion { files: vec![] },
+            "template.files",
         ),
         (
-            |policy| policy.revision = Revision::new(2).unwrap(),
-            "canonicalPolicy.revision",
-            "compiler output must match the authored Policy revision",
+            PolicyTemplate::PreventFileDeletion {
+                files: vec!["relative".into()],
+            },
+            "template.files[0]",
         ),
         (
-            |policy| policy.ir_schema_version = 999,
-            "irSchemaVersion",
-            "unsupported IR schema version 999",
+            PolicyTemplate::PreventFileDeletion {
+                files: vec!["/same".into(), "/same".into()],
+            },
+            "template.files[1]",
         ),
-    ];
-    for (mutate, path, message) in cases {
-        let repository = Arc::new(ProcessLocalPapRepository::default());
-        let pap = PapService::new(repository.clone(), Arc::new(FixtureCompiler(mutate)));
+        (
+            PolicyTemplate::HighSensitivityReadDeny {
+                files: vec!["/secret".into()],
+            },
+            "template.kind",
+        ),
+    ] {
+        for result in [
+            pap.create_policy("invalid", &template),
+            pap.update_policy(&saved.policy_id, "invalid", &template),
+        ] {
+            let Err(PapError::InvalidPolicy(error)) = result else {
+                panic!("invalid template was admitted");
+            };
+            assert_eq!(error.path, path);
+        }
         assert_eq!(
-            pap.create_policy("policy", &binding().policy.template),
-            Err(PapError::InvalidPolicy(ValidationError::new(path, message)))
+            repository.list_policies(100, 0).unwrap().items,
+            vec![saved.clone()]
         );
-        assert_eq!(repository.list_policies(100, 0).unwrap().total, 0);
     }
 }

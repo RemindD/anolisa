@@ -303,12 +303,9 @@ fn failed_write_keeps_running_ownership_while_new_delete_wins_cas() {
     };
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(queue.enqueue(&id(2)), Err(asc_pap::EnqueueError::Full));
-    let pap = PapService::new(
-        inner.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(queue.clone())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(inner.clone())
+        .with_reconcile_enqueuer(queue.clone())
+        .with_scope_discovery(Arc::new(Discovery));
     pap.delete_scope(&record(1).binding.spec.scope.scope_id)
         .unwrap();
     let accepted = pap.get_binding(&id(1)).unwrap();

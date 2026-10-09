@@ -12,7 +12,7 @@ use asc_daemon_service::{
 };
 use asc_pap::PapService;
 use asc_pap_repository_memory::ProcessLocalPapRepository;
-use asc_policy_engine::PolicyTemplateCompiler;
+
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -52,7 +52,7 @@ async fn start(
     Arc<Mutex<Vec<Value>>>,
 ) {
     let repository = Arc::new(ProcessLocalPapRepository::default());
-    let application = PapService::new(repository, Arc::new(PolicyTemplateCompiler));
+    let application = PapService::new(repository);
     let registry = Arc::new(asc_daemon::ScopeDiscoveryRegistry::new(Arc::new(
         application.clone(),
     )));

@@ -32,7 +32,6 @@ members = [
     "crates/asc-pap-repository-memory",
     "crates/asc-pcp",
     "crates/asc-policy-runtime",
-    "crates/asc-policy-engine",
     "crates/asc-policy-target-contracts",
     "crates/asc-policy-types",
     "crates/asc-policy-repository",
@@ -80,7 +79,6 @@ asc-pap-repository-memory = { path = "crates/asc-pap-repository-memory" }
 asc-pcp = { path = "crates/asc-pcp" }
 asc-persistence-sqlite = { path = "crates/asc-persistence-sqlite" }
 asc-policy-adapter-agentsight = { path = "crates/asc-policy-adapter-agentsight" }
-asc-policy-engine = { path = "crates/asc-policy-engine" }
 asc-policy-target-contracts = { path = "crates/asc-policy-target-contracts" }
 asc-policy-repository = { path = "crates/asc-policy-repository" }
 asc-policy-types = { path = "crates/asc-policy-types" }

@@ -60,7 +60,7 @@ pub struct PreparedBinding {
     pub binding_id: ResourceId,
     /// Immutable spec revision.
     pub binding_revision: Revision,
-    /// Exactly one authored and lowered Policy revision.
+    /// Exactly one authored Policy revision, compiled by the target Adapter.
     pub policy: PreparedPolicy,
     /// Scope provenance and the selected execution instance.
     pub scope: BindingScope,

@@ -127,30 +127,6 @@ pub trait PapRepository: Send + Sync {
         id: &ResourceId,
     ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError>;
 
-    /// Retained repository contract for lower-level revision/CAS compatibility tests.
-    /// Production admission uses `sync_scope_instances`; reconciliation uses
-    /// `BindingStateRepository::compare_exchange_binding_state`. This method is
-    /// not a public PAP mutation path.
-    ///
-    /// Inserts a fresh Binding (`expected: None`) or conditionally replaces an
-    /// existing Binding (`Some`). Compare the expected spec and complete status (including error) under
-    /// the same transaction as the write. An update of an absent ID is `NotFound`;
-    /// it must never insert. Creation uses a fresh server-generated ID at revision 1.
-    ///
-    /// Only changed specs increment revision. Same-spec Apply retries and Delete
-    /// requests keep revision and deployments. Clear the status error for a new
-    /// request; scheduling progress belongs to the caller, not this repository.
-    /// Delete intent cannot return to Apply. Repeated requests that do not change
-    /// the record preserve its status explanation. No dispatch occurs in this operation.
-    ///
-    /// # Errors
-    /// Returns not-found, operation-in-progress, conflict or persistence failures.
-    fn update_binding(
-        &self,
-        expected: Option<&asc_policy_repository::BindingIntentReceipt>,
-        binding: &BindingView,
-    ) -> Result<BindingView, PapError>;
-
     /// Atomically fail only the supplied ID, revision and pending status.
     /// Set the failed phase and status error in the same transaction; preserve
     /// spec and deployments. No retry progress is stored. Return false on contention, never retry

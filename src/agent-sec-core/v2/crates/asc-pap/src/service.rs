@@ -2,15 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use asc_foundation_types::{ResourceId, Revision};
 use asc_policy_types::Validate;
-use asc_policy_types::authoring::{PolicyTemplate, TemplateEnvelope};
+use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::{BindingStatus, BindingView};
 use asc_policy_types::error::ValidationError;
-use asc_policy_types::identifiers::PolicyId;
 use asc_policy_types::policy::{PreparedPolicy, validate_policy_name};
 use asc_policy_types::scope::{PolicyReference, PreparedScope, ScopeDeletion, ScopeSelector};
 use uuid::Uuid;
 
-use crate::compiler::PolicyCompiler;
 use crate::error::PapError;
 use crate::model::Page;
 use crate::repository::PapRepository;
@@ -25,37 +23,33 @@ enum WriteTarget<'a> {
 }
 
 /// Policy Administration Point for templates, assignments and owned Binding intent.
-pub struct PapService<R, C> {
+pub struct PapService<R> {
     scope_mutations: Arc<Mutex<()>>,
     repository: Arc<R>,
-    compiler: Arc<C>,
     discovery: Option<Arc<dyn crate::ScopeDiscovery>>,
     enqueuer: Option<Arc<dyn crate::BindingReconcileEnqueuer>>,
 }
 
-impl<R, C> Clone for PapService<R, C> {
+impl<R> Clone for PapService<R> {
     fn clone(&self) -> Self {
         Self {
             scope_mutations: self.scope_mutations.clone(),
             repository: Arc::clone(&self.repository),
-            compiler: Arc::clone(&self.compiler),
             enqueuer: self.enqueuer.clone(),
             discovery: self.discovery.clone(),
         }
     }
 }
 
-impl<R, C> PapService<R, C>
+impl<R> PapService<R>
 where
     R: PapRepository,
-    C: PolicyCompiler,
 {
-    /// Creates PAP from explicit persistence and synchronous compiler ports.
-    pub fn new(repository: Arc<R>, compiler: Arc<C>) -> Self {
+    /// Creates PAP with a repository; templates are validated before admission.
+    pub fn new(repository: Arc<R>) -> Self {
         Self {
             scope_mutations: Arc::new(Mutex::new(())),
             repository,
-            compiler,
             enqueuer: None,
             discovery: None,
         }
@@ -135,7 +129,7 @@ where
     /// PAP generates the identity and starts at revision 1.
     ///
     /// # Errors
-    /// Returns validation, lowering, conflict, revision, or persistence errors.
+    /// Returns validation, conflict, revision, or persistence errors.
     #[tracing::instrument(skip_all, name = "pap.create_policy")]
     pub fn create_policy(
         &self,
@@ -148,10 +142,10 @@ where
     /// Updates one existing Policy identity to an authored template.
     ///
     /// Identical latest content is idempotent. Changed content receives the
-    /// next never-reused revision and is lowered synchronously before storage.
+    /// next never-reused revision and is validated before storage.
     ///
     /// # Errors
-    /// Returns validation, lowering, conflict, revision, or persistence errors.
+    /// Returns validation, conflict, revision, or persistence errors.
     #[tracing::instrument(skip_all, name = "pap.update_policy")]
     pub fn update_policy(
         &self,
@@ -193,7 +187,13 @@ where
 
             let revision =
                 next_revision(state.as_ref().map(|value| value.last_allocated_revision))?;
-            let candidate = self.prepare_policy(&selected_id, policy_name, revision, template)?;
+            let candidate = PreparedPolicy {
+                policy_id: selected_id.clone(),
+                policy_name: policy_name.to_owned(),
+                revision,
+                template: template.clone(),
+            };
+            candidate.validate().map_err(PapError::InvalidPolicy)?;
             match self.repository.put_policy(&candidate) {
                 Err(PapError::Conflict) => {
                     if !update_existing {
@@ -422,52 +422,9 @@ where
         validate_limit(limit)?;
         self.repository.list_bindings(limit, offset)
     }
-
-    fn prepare_policy(
-        &self,
-        policy_id: &ResourceId,
-        policy_name: &str,
-        revision: Revision,
-        template: &PolicyTemplate,
-    ) -> Result<PreparedPolicy, PapError> {
-        let domain_id = PolicyId::new(policy_id.as_str()).map_err(PapError::InvalidIdentifier)?;
-        let input = TemplateEnvelope {
-            policy_id: domain_id.clone(),
-            revision,
-            template: template.clone(),
-        };
-        let canonical_policy = self
-            .compiler
-            .lower(&input)
-            .map_err(PapError::InvalidPolicy)?;
-        if canonical_policy.policy_id != domain_id {
-            return Err(PapError::InvalidPolicy(ValidationError::new(
-                "canonicalPolicy.policyId",
-                "compiler output must match the authored Policy identity",
-            )));
-        }
-        if canonical_policy.revision != revision {
-            return Err(PapError::InvalidPolicy(ValidationError::new(
-                "canonicalPolicy.revision",
-                "compiler output must match the authored Policy revision",
-            )));
-        }
-        canonical_policy
-            .validate()
-            .map_err(PapError::InvalidPolicy)?;
-        // Name was checked at admission; the checks above validate every
-        // remaining PreparedPolicy invariant with PAP's compiler error paths.
-        Ok(PreparedPolicy {
-            policy_id: policy_id.clone(),
-            policy_name: policy_name.to_owned(),
-            revision,
-            template: template.clone(),
-            canonical_policy,
-        })
-    }
 }
 
-impl<R: PapRepository, C: PolicyCompiler> crate::ScopeBindingSink for PapService<R, C> {
+impl<R: PapRepository> crate::ScopeBindingSink for PapService<R> {
     fn sync_instances(
         &self,
         id: &ResourceId,

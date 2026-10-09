@@ -219,7 +219,6 @@ dependencies = [
  "asc-observability",
  "asc-pap",
  "asc-pap-repository-memory",
- "asc-policy-engine",
  "asc-policy-types",
  "asc-security-events",
  "clap",
@@ -257,7 +256,6 @@ dependencies = [
  "asc-pap-repository-memory",
  "asc-pcp",
  "asc-policy-adapter-agentsight",
- "asc-policy-engine",
  "asc-policy-repository",
  "asc-policy-repository-sqlite",
  "asc-policy-runtime",
@@ -329,7 +327,6 @@ dependencies = [
  "asc-observability",
  "asc-pap",
  "asc-pap-repository-memory",
- "asc-policy-engine",
  "asc-security-events",
  "serde",
  "serde_json",
@@ -454,7 +451,6 @@ version = "0.13.2"
 dependencies = [
  "asc-foundation-types",
  "asc-pap",
- "asc-policy-engine",
  "asc-policy-repository",
  "asc-policy-types",
  "serde",
@@ -504,17 +500,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "asc-policy-engine"
-version = "0.13.2"
-dependencies = [
- "asc-foundation-types",
- "asc-pap",
- "asc-policy-types",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "asc-policy-repository"
 version = "0.13.2"
 dependencies = [
@@ -536,7 +521,6 @@ dependencies = [
  "asc-pap",
  "asc-pap-repository-memory",
  "asc-pcp",
- "asc-policy-engine",
  "asc-policy-repository",
  "asc-policy-types",
  "asc-sqlite-kernel",
@@ -558,7 +542,6 @@ dependencies = [
  "asc-pap",
  "asc-pap-repository-memory",
  "asc-pcp",
- "asc-policy-engine",
  "asc-policy-repository",
  "asc-policy-types",
  "serde_json",

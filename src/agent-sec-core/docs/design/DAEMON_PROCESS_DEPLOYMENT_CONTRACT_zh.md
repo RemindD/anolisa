@@ -282,12 +282,12 @@ CLI 装配选择 `0666`，可复用 bootstrap 保持私有 `0600` 默认值。�
 `asc-daemon/tests/bootstrap.rs` 验证真实进程 scan 成功及 PAP 授权；系统运行目录、默认
 socket 权限和跨 UID 接入的部署测试沿用 `tests/v2/e2e/test_daemon_process_e2e.py`。
 
-当前 PAP 由 `PolicyTemplateCompiler` 和过渡性的 process-local Repository 组成。Policy、Scope
-和 Binding CRUD 可在同一 daemon 生命周期内经真实 UDS 执行，但所有状态在进程重启后丢失，
-进程启动时会 best-effort 输出该限制（诊断背压规则见 §11）。这些结果只证明 protocol、identity、authorization 和应用装配的
-integration slice，不表示 durable persistence、target enforcement 或 application READY。
+当前 PAP 校验 PolicyTemplate 并将 Policy、Scope 和 Binding 保存到 SQLite Repository。
+启动恢复 discovery 和 reconcile，持久化与恢复验收见
+[Policy SQLite 持久化设计](POLICY_SQLITE_PERSISTENCE_DESIGN_zh.md)。
+真实 UDS 测试验证 protocol、identity、authorization 和应用装配，不代表真实 target enforcement。
 Busy、timeout、shutdown 等 transport failure 由独立且有短 deadline 的
-`RejectionEncoder` 投影，正常依赖图不包含 PAP、Repository 或 Compiler。
+`RejectionEncoder` 投影，正常依赖图不包含 PAP 或 Repository。
 framework 不能证明具体 PAP/Repository 内部没有全局 mutex、长 transaction 或其它共享阻塞
 点；该项必须由 PAP direct-consumer concurrency fixture 在集成时验收。
 

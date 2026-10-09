@@ -77,12 +77,9 @@ fn configured_composition_delivers_pap_intent_and_joins_its_workers() {
     let client = Arc::new(Client::default());
     let runtime =
         start_policy_reconciliation_with_client(repository.clone(), client.clone()).unwrap();
-    let pap = PapService::new(
-        repository.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(runtime.enqueuer())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repository.clone())
+        .with_reconcile_enqueuer(runtime.enqueuer())
+        .with_scope_discovery(Arc::new(Discovery));
     let scope = pap
         .create_scope_assignment(
             &spec.scope.selector,
@@ -138,12 +135,9 @@ fn configured_composition_delivers_pap_intent_and_joins_its_workers() {
 #[test]
 fn unavailable_reconciliation_rejects_new_assignments_but_keeps_policy_crud() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
-    let pap = PapService::new(
-        repository,
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(Arc::new(asc_daemon::UnavailableReconciliation))
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repository)
+        .with_reconcile_enqueuer(Arc::new(asc_daemon::UnavailableReconciliation))
+        .with_scope_discovery(Arc::new(Discovery));
     let policy = pap
         .create_policy(
             "test",
@@ -231,11 +225,7 @@ where
     let client = Arc::new(Client::default());
     let runtime =
         start_policy_reconciliation_with_client(repository.clone(), client.clone()).unwrap();
-    let pap = PapService::new(
-        repository,
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(runtime.enqueuer());
+    let pap = PapService::new(repository).with_reconcile_enqueuer(runtime.enqueuer());
     let discovery = Arc::new(asc_daemon::ScopeDiscoveryRegistry::new(Arc::new(
         pap.clone(),
     )));

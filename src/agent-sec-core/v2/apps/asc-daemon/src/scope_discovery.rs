@@ -15,7 +15,7 @@ use asc_daemon_core::scope_discovery::{
 };
 use asc_pap::PapError;
 use asc_policy_types::identifiers::ResourceId;
-use asc_policy_types::process_discovery::{DiscoveredBinding, ProcessIdentity};
+use asc_policy_types::process_discovery::ProcessIdentity;
 #[cfg(test)]
 use asc_policy_types::scope::PreparedScope;
 
@@ -134,13 +134,13 @@ impl ScopeDiscoveryJob {
                             break;
                         };
                         let result = state.reconcile(scan.observations, &scan.present, scan.complete);
-                        if result.bindings_created > 0 {
+                        if result.instances_selected > 0 {
                             tracing::info!(target: "asc_process_diagnostic", scope_id = %worker_scope_id,
-                                bindings_created = result.bindings_created,
-                                "process discovery selected new policy instances");
+                                instances_selected = result.instances_selected,
+                                "process discovery selected new instances");
                         }
-                        let instances: BTreeSet<_> = state.bindings().map(|b| b.process.clone()).collect();
-                        let submission_failed = match sink.sync_instances(&worker_scope_id, &instances.into_iter().collect::<Vec<_>>()) {
+                        let instances: Vec<_> = state.instances().cloned().collect();
+                        let submission_failed = match sink.sync_instances(&worker_scope_id, &instances) {
                             Ok(()) => false,
                             Err(PapError::OperationInProgress | PapError::NotFound) => break,
                             Err(error) => {
@@ -182,12 +182,12 @@ impl ScopeDiscoveryJob {
     ///
     /// # Errors
     /// Returns an error if a worker panicked while holding its state lock.
-    pub fn bindings(&self) -> io::Result<Vec<DiscoveredBinding>> {
+    pub fn instances(&self) -> io::Result<Vec<ProcessIdentity>> {
         let state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("scope discovery state poisoned"))?;
-        Ok(state.bindings().cloned().collect())
+        Ok(state.instances().cloned().collect())
     }
 
     /// Cancels and joins the worker, reporting any worker panic.
@@ -316,7 +316,6 @@ mod tests {
 
     use asc_pap::PapService;
     use asc_pap_repository_memory::ProcessLocalPapRepository;
-    use asc_policy_engine::PolicyTemplateCompiler;
     use asc_policy_types::authoring::PolicyTemplate;
 
     use super::*;
@@ -324,7 +323,7 @@ mod tests {
 
     fn policies() -> (Arc<ProcessLocalPapRepository>, PreparedPolicy) {
         let repository = Arc::new(ProcessLocalPapRepository::default());
-        let pap = PapService::new(repository.clone(), Arc::new(PolicyTemplateCompiler));
+        let pap = PapService::new(repository.clone());
         let policy = pap
             .create_policy(
                 "test",
@@ -344,17 +343,17 @@ mod tests {
         }
     }
 
-    fn wait_for_bindings(job: &ScopeDiscoveryJob, expected: usize) -> Vec<DiscoveredBinding> {
+    fn wait_for_instances(job: &ScopeDiscoveryJob, expected: usize) -> Vec<ProcessIdentity> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let bindings = job.bindings().unwrap();
-            if bindings.len() == expected {
-                return bindings;
+            let instances = job.instances().unwrap();
+            if instances.len() == expected {
+                return instances;
             }
             assert!(
                 Instant::now() < deadline,
-                "expected {expected} bindings, got {}",
-                bindings.len()
+                "expected {expected} instances, got {}",
+                instances.len()
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -368,10 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn djob_scope_discovery_matches_paths_embeds_policies_and_deletes_only_owned_jobs() {
+    fn discovery_selects_instances_and_pap_expands_policies_for_each_scope() {
         use asc_policy_types::scope::{PolicyReference, ProcessMatcher, ScopeSelector};
         let (repository, policy) = policies();
-        let pap = PapService::new(repository, Arc::new(PolicyTemplateCompiler));
+        let pap = PapService::new(repository);
         let registry = Arc::new(ScopeDiscoveryRegistry::new(Arc::new(pap.clone())));
         let pap = pap.with_scope_discovery(registry.clone());
         let second_policy = pap
@@ -404,22 +403,40 @@ mod tests {
         let second = Process(Command::new(&executable).arg("30").spawn().unwrap());
         {
             let guard = registry.jobs.lock().unwrap();
-            let bindings = wait_for_bindings(&guard.as_ref().unwrap()[0], 4);
-            assert!(
-                bindings
+            let jobs = guard.as_ref().unwrap();
+            let instances = wait_for_instances(&jobs[0], 2);
+            assert_eq!(
+                instances
                     .iter()
-                    .all(|binding| binding.scope.scope_id == scope.scope_id)
+                    .map(|instance| instance.pid)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([first.0.id(), second.0.id()])
             );
-            for pid in [first.0.id(), second.0.id()] {
-                let found = bindings
-                    .iter()
-                    .filter(|binding| binding.process.pid == pid)
-                    .map(|binding| binding.policy.clone())
-                    .collect::<Vec<_>>();
-                assert_eq!(found, vec![policy.clone(), second_policy.clone()]);
+            assert_eq!(wait_for_instances(&jobs[1], 2), instances);
+            let bindings = pap.list_bindings(100, 0).unwrap().items;
+            assert_eq!(bindings.len(), 6);
+            for (assignment, policies) in [
+                (&scope, vec![policy.clone(), second_policy.clone()]),
+                (&other, vec![policy.clone()]),
+            ] {
+                for instance in &instances {
+                    let mut found = bindings
+                        .iter()
+                        .filter(|binding| {
+                            binding.spec.scope.scope_id == assignment.scope_id
+                                && &binding.spec.scope.process == instance
+                        })
+                        .map(|binding| binding.spec.policy.clone())
+                        .collect::<Vec<_>>();
+                    let mut expected = policies.clone();
+                    found.sort_by(|a, b| a.policy_id.cmp(&b.policy_id));
+                    expected.sort_by(|a, b| a.policy_id.cmp(&b.policy_id));
+                    assert_eq!(found, expected);
+                }
             }
             thread::sleep(Duration::from_millis(100));
-            assert_eq!(guard.as_ref().unwrap()[0].bindings().unwrap(), bindings);
+            assert_eq!(jobs[0].instances().unwrap(), instances);
+            assert_eq!(pap.list_bindings(100, 0).unwrap().items, bindings);
         }
         pap.delete_policy_revision(&policy.policy_id, policy.revision)
             .unwrap();
@@ -445,7 +462,7 @@ mod tests {
     #[test]
     fn djob_scope_capacity_releases_on_delete_and_shutdown_closes_admission() {
         let (repository, policy) = policies();
-        let pap = PapService::new(repository, Arc::new(PolicyTemplateCompiler));
+        let pap = PapService::new(repository);
         let registry = Arc::new(ScopeDiscoveryRegistry::new(Arc::new(pap.clone())));
         let pap = pap.with_scope_discovery(registry.clone());
         let scope: PreparedScope = serde_json::from_value(serde_json::json!({
@@ -532,25 +549,25 @@ mod tests {
             Arc::new(TestSink),
         )
         .unwrap();
-        let bindings = wait_for_bindings(&job, 1);
-        assert_eq!(bindings[0].process.pid, first.0.id());
-        assert!(bindings[0].process.start_time > 0);
-        assert!(bindings[0].process.pid_namespace.starts_with("pid:["));
+        let instances = wait_for_instances(&job, 1);
+        assert_eq!(instances[0].pid, first.0.id());
+        assert!(instances[0].start_time > 0);
+        assert!(instances[0].pid_namespace.starts_with("pid:["));
         let second = Process(Command::new(&executable).arg("30").spawn().unwrap());
-        let bindings = wait_for_bindings(&job, 2);
+        let instances = wait_for_instances(&job, 2);
         assert!(
-            bindings
+            instances
                 .iter()
-                .any(|binding| binding.process.pid == second.0.id())
+                .any(|instance| instance.pid == second.0.id())
         );
         thread::sleep(Duration::from_millis(100));
-        assert_eq!(job.bindings().unwrap(), bindings);
+        assert_eq!(job.instances().unwrap(), instances);
         drop(first);
-        wait_for_bindings(&job, 1);
+        wait_for_instances(&job, 1);
         job.shutdown().unwrap();
         drop(second);
         // No scans may run after shutdown returns.
-        assert_eq!(job.bindings().unwrap().len(), 1);
+        assert_eq!(job.instances().unwrap().len(), 1);
     }
 
     #[test]

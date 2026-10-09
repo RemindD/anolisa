@@ -69,12 +69,9 @@ fn delete_during_attempt_panic_keeps_dirty_and_cleans_registered_target() {
         1,
     );
     let queue = service.enqueuer();
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(queue.clone())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(queue.clone())
+        .with_scope_discovery(Arc::new(Discovery));
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     pap.delete_scope(&record(1).binding.spec.scope.scope_id)
         .unwrap();
@@ -283,12 +280,9 @@ fn unconfirmed_panic_retains_result_while_other_bindings_progress() {
         assert_eq!(queue.check_ready(), Ok(()));
         repo.failed.store(false, Ordering::SeqCst);
         repo.allow_finish.store(true, Ordering::SeqCst);
-        let pap = PapService::new(
-            inner.clone(),
-            Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-        )
-        .with_reconcile_enqueuer(queue.clone())
-        .with_scope_discovery(Arc::new(Discovery));
+        let pap = PapService::new(inner.clone())
+            .with_reconcile_enqueuer(queue.clone())
+            .with_scope_discovery(Arc::new(Discovery));
         pap.delete_scope(&record(1).binding.spec.scope.scope_id)
             .unwrap();
         wait_until(|| {

@@ -1,16 +1,14 @@
 use std::sync::{Arc, Mutex};
 
 use asc_foundation_types::{ResourceId, Revision};
-use asc_pap::{Page, PapError, PapRepository, PapService, PolicyCompiler, PolicyRevisionState};
+use asc_pap::{Page, PapError, PapRepository, PapService, PolicyRevisionState};
 use asc_pap_repository_memory::ProcessLocalPapRepository;
 use asc_policy_repository::{
     BindingStateRepository, BindingStateSnapshot, BindingStateWrite, WriteResult,
 };
-use asc_policy_types::authoring::{PolicyTemplate, TemplateEnvelope};
+use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
-use asc_policy_types::error::ValidationError;
-use asc_policy_types::identifiers::PolicyId;
-use asc_policy_types::policy::{PolicyEnvelope, PreparedPolicy};
+use asc_policy_types::policy::PreparedPolicy;
 use asc_policy_types::scope::{PreparedScope, ScopeSelector};
 
 const COMPLETE_BINDING: &str =
@@ -151,14 +149,6 @@ impl PapRepository for FakeRepository {
     ) -> Result<Vec<asc_policy_repository::BindingIntentReceipt>, PapError> {
         self.inner.retry_scope(id)
     }
-    fn update_binding(
-        &self,
-        expected: Option<&asc_policy_repository::BindingIntentReceipt>,
-        binding: &BindingView,
-    ) -> Result<BindingView, PapError> {
-        self.inner.update_binding(expected, binding)
-    }
-
     fn fail_pending_binding(
         &self,
         expected: &asc_policy_repository::BindingIntentReceipt,
@@ -196,37 +186,11 @@ impl PapRepository for FakeRepository {
     }
 }
 
-struct FixtureCompiler {
-    mismatch_identity: bool,
-}
-
-impl PolicyCompiler for FixtureCompiler {
-    fn lower(&self, template: &TemplateEnvelope) -> Result<PolicyEnvelope, ValidationError> {
-        let fixture: PreparedBinding = serde_json::from_str(COMPLETE_BINDING)
-            .map_err(|error| ValidationError::new("fixture", error.to_string()))?;
-        let mut policy = fixture.policy.canonical_policy;
-        policy.policy_id = if self.mismatch_identity {
-            PolicyId::new("compiler-mismatch")
-                .map_err(|error| ValidationError::new("policyId", error))?
-        } else {
-            template.policy_id.clone()
-        };
-        policy.revision = template.revision;
-        Ok(policy)
-    }
-}
-
-type Service = PapService<FakeRepository, FixtureCompiler>;
+type Service = PapService<FakeRepository>;
 
 fn service() -> (Service, Arc<FakeRepository>) {
     let repository = Arc::new(FakeRepository::default());
-    let compiler = Arc::new(FixtureCompiler {
-        mismatch_identity: false,
-    });
-    (
-        PapService::new(Arc::clone(&repository), compiler),
-        repository,
-    )
+    (PapService::new(Arc::clone(&repository)), repository)
 }
 
 fn policy_template(path: &str) -> PolicyTemplate {
@@ -307,23 +271,6 @@ fn policy_crud_keeps_only_the_current_record_and_never_reuses_revisions() {
 }
 
 #[test]
-fn compiler_output_identity_is_checked_before_storage() {
-    let repository = Arc::new(FakeRepository::default());
-    let compiler = Arc::new(FixtureCompiler {
-        mismatch_identity: true,
-    });
-    let pap = PapService::new(repository, compiler);
-
-    let error = pap
-        .create_policy("protect files", &policy_template("/workspace/a"))
-        .unwrap_err();
-    let PapError::InvalidPolicy(error) = error else {
-        panic!("expected invalid compiler output");
-    };
-    assert_eq!(error.path, "canonicalPolicy.policyId");
-}
-
-#[test]
 fn revision_exhaustion_and_pagination_bounds_are_explicit() {
     let (pap, repository) = service();
     let first = pap
@@ -332,7 +279,6 @@ fn revision_exhaustion_and_pagination_bounds_are_explicit() {
     let maximum = Revision::new(u32::MAX).unwrap();
     let mut exhausted = first.clone();
     exhausted.revision = maximum;
-    exhausted.canonical_policy.revision = maximum;
     *repository.policy_read_override.lock().unwrap() = Some(PolicyRevisionState {
         last_allocated_revision: maximum,
         current: Some(exhausted),

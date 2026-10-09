@@ -6,8 +6,8 @@ and [migration/acceptance boundaries](../docs/design/SKILL_SEC_PHASE_ONE.md).
 Agent Hook migration is separate; the core never calls Python Ledger.
 
 This workspace slice contains the dependency-light contracts, Policy
-Administration Point, first-version PAP daemon protocol, product Policy-template
-compiler, protocol-independent Unix-domain-socket service framework, and runnable
+Administration Point, first-version PAP daemon protocol, Policy-template
+validation, protocol-independent Unix-domain-socket service framework, and runnable
 foreground process bootstrap, together with the first AgentSight file-deletion
 target Adapter, and its independent deployment Client used by later AgentSecCore
 V2 work packages. `asc-pcp` provides synchronous attempts and
@@ -58,14 +58,13 @@ The current crates are:
 
 - `asc-foundation-types`: bounded transport-independent identifiers and revisions.
 - `asc-policy-types`: authored Policy and immutable prepared Policy/Scope/Binding
-  snapshots, backend-independent IR, and target Adapter contracts.
-- `asc-policy-engine`: deterministic `prevent_file_deletion` authoring-template
-  compiler with a frozen Canonical Policy IR golden. Other template kinds remain
-  explicitly unsupported until their lowering and Adapter evidence are defined.
-  The implemented template covers path-entry deletion only; rename, move, and
-  other namespace mutations are outside its contract.
+  snapshots, template validation, and target Adapter contracts. Snapshots retain
+  `policyId`, `policyName`, `revision` and `template`.
 - `asc-policy-adapter-agentsight`: deterministic file-deletion and pinned-process
-  translation into an AgentSight/ActPlane plan, with semantic and encoding checks.
+  translation directly from the Binding's template into an AgentSight/ActPlane
+  plan, with semantic and encoding checks. The implemented template covers
+  path-entry deletion only; rename, move and other namespace mutations are outside
+  its contract. Other template kinds remain explicitly unsupported.
   Compiler acceptance belongs to the deployed target, not an embedded compiler.
 - `asc-agentsight-client`: health-gated AgentSight apply/delete transport for
   one configured endpoint, with process identity resolution and complete HTTP
@@ -79,7 +78,8 @@ The current crates are:
 - `asc-policy-runtime`: bounded Binding queue, workers, retry timers, compensation
   scans and owned shutdown; the daemon supplies target-specific composition.
 - `asc-pap`: transport-independent revisioned Policies, immutable Scope assignments and
-  system-owned Binding admission over compiler and repository ports.
+  system-owned Binding admission over the repository port. PAP validates authored
+  templates before saving them.
 - `asc-policy-repository-sqlite`: authoritative Policy, Scope and Binding storage,
   atomic lifecycle writes, status CAS, durable write receipts and recovery scans.
 - `asc-pap-repository-memory`: process-local test backend implementing the same
@@ -88,10 +88,10 @@ The current crates are:
   allowlist for 12 Policy, Scope, and Binding administration methods.
 - `asc-daemon-handler`: inbound protocol adapter that decodes daemon requests,
   applies server-owned authorization, routes PAP methods, and projects protocol
-  responses without depending on a concrete Repository or compiler.
+  responses through the application port.
 - `asc-daemon-core`: trusted Principal construction boundary and the
-  `PolicyAdministration` application port. `PapService<R, C>` implements this
-  port directly, so repository/compiler generics do not leak into dispatch.
+  `PolicyAdministration` application port. `PapService<R>` implements this
+  port directly, so repository generics do not leak into dispatch.
 - `asc-daemon-service`: bounded UDS admission, one-request framing, kernel peer
   credentials, dispatcher/rejection-encoder injection, connection isolation,
   dispatch cancellation, and controlled drain.
@@ -193,8 +193,8 @@ locks; that remains a required direct-consumer concurrency test at integration.
 
 The current `asc-daemon` executable composes and registers the PAP dispatcher and
 protocol rejection encoder from `asc-daemon-handler`. It composes `PapService`
-with `PolicyTemplateCompiler`, a root-managed Principal policy, and the SQLite
-Repository. Policy state lives in `policy-state.db` under `AGENT_SEC_DATA_DIR`
+with a root-managed Principal policy and the SQLite Repository. Policy state lives
+in `policy-state.db` under `AGENT_SEC_DATA_DIR`
 (default `/var/log/agent-sec`). The data directory must be private (0700), with
 database and lock files restricted to 0600. Unsafe existing permissions, incompatible
 schema and corruption fail startup; the daemon never deletes or rebuilds this state.
@@ -235,7 +235,7 @@ cargo run -p asc-daemon -- serve --socket /absolute/existing-directory/daemon.so
 and is injected by the executable composition root together with
 `JsonRejectionEncoder`. PAP is one
 registered method family inside the dispatcher; the service framework and
-rejection path remain independent of PAP, its compiler, and its repository.
+rejection path remain independent of PAP and its repository.
 
 ## PAP RPC contract
 
@@ -318,7 +318,7 @@ status versions, deployment responsibility, discovery pins and stop barriers. WA
 with synchronous FULL protects committed local state; remote operations still depend
 on the Client's idempotency and absence contract. Local SIGKILL tests use an external
 mock ledger; they do not establish physical power-loss or real PEP/kernel guarantees.
-The compiler currently supports the `prevent_file_deletion` lowering described above.
+The Adapter compiles the saved `prevent_file_deletion` template on every Apply attempt.
 
 Dependency sources, TLS/unsafe boundaries and release audit requirements are
 recorded in [DEPENDENCIES.md](DEPENDENCIES.md).
@@ -360,7 +360,7 @@ their correlation meaning separately from SDK TraceId/SpanId.
 
 `asc-observability` supplies the current OTel Context, five Agent baggage fields,
 read-only correlation snapshots and a process-owned `runtime` feature. CLI/client,
-daemon, PAP and compiler spans share SDK identity. A raw UDS caller that omits
+daemon and PAP spans share SDK identity. A raw UDS caller that omits
 context gets a fresh daemon root. Missing Agent metadata is allowed for ordinary
 PAP calls; future observability consumers call `validate_metadata` when required.
 Adapters for the existing V1 record input use `bind_metadata(parent, value, kind)` with `AgentRun`,

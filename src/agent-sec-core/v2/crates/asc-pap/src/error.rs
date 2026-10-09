@@ -39,7 +39,7 @@ pub enum PapError {
     /// Human-readable Policy name validation failed.
     #[error("invalid policy name: {0}")]
     InvalidPolicyName(String),
-    /// Policy authoring or lowering validation failed.
+    /// Policy template validation failed.
     #[error("invalid policy: {0}")]
     InvalidPolicy(ValidationError),
     /// Scope authoring validation failed.

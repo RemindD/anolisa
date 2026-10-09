@@ -121,7 +121,7 @@ pub struct PreparedScope {
     pub scope_id: ResourceId,
     /// Authored selection criteria.
     pub selector: ScopeSelector,
-    /// Server-resolved authored policies and canonical IR.
+    /// Server-resolved authored Policy revisions.
     pub policy_snapshots: Vec<crate::policy::PreparedPolicy>,
     /// Mutable lifecycle, independent of policy revisions.
     pub status: ScopeStatus,

@@ -447,12 +447,9 @@ fn delete_admitted_during_apply_waits_for_exit_and_preserves_cleanup() {
         2,
         2,
     );
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(service.enqueuer())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(service.enqueuer())
+        .with_scope_discovery(Arc::new(Discovery));
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     pap.delete_scope(&record(1).binding.spec.scope.scope_id)
         .unwrap();
@@ -522,12 +519,9 @@ fn delete_preempts_waiting_retry_without_waiting_for_clock() {
             Some(Entry::WaitingRetry { .. })
         )
     });
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(service.enqueuer())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(service.enqueuer())
+        .with_scope_discovery(Arc::new(Discovery));
     pap.delete_scope(&record(1).binding.spec.scope.scope_id)
         .unwrap();
     wait_until(|| status(&repo, 1).is_none());
@@ -635,12 +629,9 @@ fn pap_notification_observes_committed_state_and_failed_admission_never_notifies
         repo: repo.clone(),
         seen: Mutex::new(vec![]),
     });
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(observer.clone())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(observer.clone())
+        .with_scope_discovery(Arc::new(Discovery));
     let spec = record(1).binding.spec;
     let policy = pap.create_policy("test", &spec.policy.template).unwrap();
     let refs = [asc_policy_types::scope::PolicyReference {
@@ -759,7 +750,9 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
             RuntimeConfig {
                 workers: 1,
                 max_auto_retries: 2,
-                tick_interval: Duration::from_millis(1),
+                // Drive deadlines explicitly so compensation cannot race PAP's
+                // retry notification and add an unrelated scheduling series.
+                tick_interval: Duration::from_secs(60),
                 ..RuntimeConfig::default()
             },
         )
@@ -790,6 +783,7 @@ fn automatic_retries_wait_and_stop_at_budget_without_blocking_other_bindings() {
                 retry as usize
             );
             clock.0.store(deadline, Ordering::SeqCst);
+            q.tick(deadline);
         }
         wait_until(|| {
             status(&repo, 1) == Some(BindingStatus::ApplyFailed)
@@ -988,12 +982,9 @@ fn binding_errors_retry_without_blocking_other_bindings_or_pap_writes() {
 }
 
 fn exercise_independent_pap_crud(repo: &Arc<ProcessLocalPapRepository>, q: &Arc<WorkQueue>) {
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(q.clone())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(q.clone())
+        .with_scope_discovery(Arc::new(Discovery));
     let policy = pap
         .create_policy("independent", &record(1).binding.spec.policy.template)
         .unwrap();
@@ -1036,12 +1027,9 @@ fn exercise_independent_pap_crud(repo: &Arc<ProcessLocalPapRepository>, q: &Arc<
 mod termination_tests;
 
 fn retry_failed_binding(repo: &Arc<ProcessLocalPapRepository>, queue: &Arc<WorkQueue>) {
-    let pap = PapService::new(
-        repo.clone(),
-        Arc::new(asc_policy_engine::PolicyTemplateCompiler),
-    )
-    .with_reconcile_enqueuer(queue.clone())
-    .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repo.clone())
+        .with_reconcile_enqueuer(queue.clone())
+        .with_scope_discovery(Arc::new(Discovery));
     pap.retry_scope(&record(1).binding.spec.scope.scope_id)
         .unwrap();
 }

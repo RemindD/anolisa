@@ -18,7 +18,6 @@ use asc_daemon_handler::{DaemonDispatcher, JsonRejectionEncoder};
 use asc_daemon_service::ShutdownToken;
 use asc_event_sink::ConfiguredSecurityEventSinks;
 use asc_pap::{PapRepository, PapService, ScopeDiscovery};
-use asc_policy_engine::PolicyTemplateCompiler;
 use asc_policy_repository_sqlite::SqlitePolicyRepository;
 use asc_policy_runtime::reconciliation::ReconciliationRuntime;
 use asc_policy_types::scope::ScopeStatus;
@@ -168,18 +167,17 @@ async fn run(
             return (ExitCode::FAILURE, Some(durable_sinks));
         }
     };
-    let pap = PapService::new(repository.clone(), Arc::new(PolicyTemplateCompiler))
-        .with_reconcile_enqueuer(policy_runtime.enqueuer());
+    let pap =
+        PapService::new(repository.clone()).with_reconcile_enqueuer(policy_runtime.enqueuer());
     // The sink clone has no registry, avoiding a worker/service ownership cycle.
     let discovery_registry = Arc::new(asc_daemon::ScopeDiscoveryRegistry::new(Arc::new(
         pap.clone(),
     )));
     if let Err(error) = recover_active_scopes(repository.as_ref(), discovery_registry.as_ref()) {
         report_error(telemetry, &error);
-        drain_runtimes(skill_worker, discovery_registry, Some(policy_runtime)).await;
+        drain_runtimes(skill_worker, discovery_registry, policy_runtime).await;
         return (ExitCode::FAILURE, Some(durable_sinks));
     }
-    let policy_runtime = Some(policy_runtime);
     let pap = pap.with_scope_discovery(discovery_registry.clone());
     let principal_policy = Arc::new(RootManagedPrincipalPolicy::with_admin_uids(
         cli.policy_admin_uids,
@@ -195,9 +193,7 @@ async fn run(
     ));
 
     let shutdown = ShutdownToken::new();
-    let health_task = policy_runtime
-        .as_ref()
-        .map(|runtime| watch_policy_health(runtime.enqueuer(), telemetry.reporter()));
+    let health_task = watch_policy_health(policy_runtime.enqueuer(), telemetry.reporter());
     let signal_task = tokio::spawn(signals.request_shutdown(shutdown.clone()));
     let result = serve(
         cli.bootstrap,
@@ -207,9 +203,7 @@ async fn run(
     )
     .await;
     signal_task.abort();
-    if let Some(health_task) = health_task {
-        health_task.abort();
-    }
+    health_task.abort();
     // UDS has stopped admission and completed its request drain before workers stop.
     let exit_code = if drain_runtimes(skill_worker, discovery_registry, policy_runtime).await {
         match result {
@@ -311,7 +305,7 @@ fn recover_and_start_skills(
 async fn drain_runtimes(
     worker: Arc<asc_daemon::SkillWorker>,
     discovery_registry: Arc<asc_daemon::ScopeDiscoveryRegistry>,
-    policy: Option<ReconciliationRuntime>,
+    policy: ReconciliationRuntime,
 ) -> bool {
     // Both joins remain tracked by Tokio after timeout; process exit is the final cutoff.
     let skill = tokio::task::spawn_blocking(move || worker.shutdown());
@@ -326,7 +320,7 @@ async fn drain_runtimes(
 
 fn stop_background_jobs(
     discovery_registry: &asc_daemon::ScopeDiscoveryRegistry,
-    policy_runtime: Option<ReconciliationRuntime>,
+    policy_runtime: ReconciliationRuntime,
 ) -> bool {
     let discovery_ok = match discovery_registry.shutdown() {
         Ok(()) => true,
@@ -335,9 +329,7 @@ fn stop_background_jobs(
             false
         }
     };
-    let policies_ok = policy_runtime
-        .map_or(Ok(()), ReconciliationRuntime::shutdown)
-        .is_ok();
+    let policies_ok = policy_runtime.shutdown().is_ok();
     discovery_ok && policies_ok
 }
 

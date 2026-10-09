@@ -28,7 +28,7 @@ asc-cli -> asc-daemon-client -> asc-daemon-protocol
         -> asc-daemon-protocol / asc-policy-types / asc-foundation-types
 ```
 
-CLI 与 client 不在运行时依赖 PAP、Repository、Compiler、daemon handler/service 或
+CLI 与 client 不在运行时依赖 PAP、Repository、daemon handler/service 或
 Reconciler。CLI 测试依赖服务端组件，仅用于真实 CLI 子进程与 UDS 集成。当前协议 crate
 已经与服务端实现分离，本变更不复制 domain DTO、不修改 PAP 协议。
 

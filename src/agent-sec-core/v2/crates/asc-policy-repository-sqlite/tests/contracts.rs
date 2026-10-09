@@ -615,7 +615,6 @@ fn scope_admission_serializes_with_template_update_and_delete() {
             scope.scope_id = ResourceId::new("concurrent-assignment").unwrap();
             let mut policy = initial.binding.spec.policy.clone();
             policy.revision = Revision::new(2).unwrap();
-            policy.canonical_policy.revision = policy.revision;
             let barrier = Arc::new(Barrier::new(2));
             let created = std::thread::scope(|threads| {
                 let create = threads.spawn(|| {
@@ -661,8 +660,6 @@ fn discovery_is_idempotent_and_pages_use_global_byte_order() {
         for key in ["z", "Z", "a", "A", "a-1"] {
             let mut policy = initial.binding.spec.policy.clone();
             policy.policy_id = ResourceId::new(key).unwrap();
-            policy.canonical_policy.policy_id =
-                asc_policy_types::identifiers::PolicyId::new(key).unwrap();
             repo.put_policy(&policy).unwrap();
             names.push(key.into());
         }

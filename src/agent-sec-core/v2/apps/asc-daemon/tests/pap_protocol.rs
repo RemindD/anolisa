@@ -14,7 +14,6 @@ use asc_daemon_protocol::{DaemonRequest, DaemonResponse, RequestId, error_code};
 use asc_foundation_types::{ResourceId, Revision};
 use asc_pap::PapService;
 use asc_pap_repository_memory::ProcessLocalPapRepository;
-use asc_policy_engine::PolicyTemplateCompiler;
 use asc_policy_types::authoring::PolicyTemplate;
 use asc_policy_types::binding::{BindingStatus, BindingView, PreparedBinding};
 use asc_policy_types::policy::PreparedPolicy;
@@ -54,8 +53,7 @@ impl RunningPapDaemon {
         max_request_frame_bytes: usize,
         repository: Arc<ProcessLocalPapRepository>,
     ) -> Self {
-        let application = PapService::new(repository, Arc::new(PolicyTemplateCompiler))
-            .with_scope_discovery(Arc::new(Discovery));
+        let application = PapService::new(repository).with_scope_discovery(Arc::new(Discovery));
         Self::start_with_application(role, max_request_frame_bytes, application).await
     }
 
@@ -1176,8 +1174,7 @@ async fn real_uds_accepts_domain_and_pagination_boundary_values() {
 )]
 async fn real_uds_distinguishes_stale_references_and_closed_scope_admission() {
     let repository = Arc::new(ProcessLocalPapRepository::default());
-    let pap = PapService::new(repository.clone(), Arc::new(PolicyTemplateCompiler))
-        .with_scope_discovery(Arc::new(Discovery));
+    let pap = PapService::new(repository.clone()).with_scope_discovery(Arc::new(Discovery));
     let original = pap
         .create_policy(
             "v1",
@@ -1281,7 +1278,7 @@ async fn real_uds_scheduling_rejection_and_get_list_match_frozen_wire() {
         } else {
             asc_pap::EnqueueError::Stopped
         };
-        let pap = PapService::new(repo, Arc::new(PolicyTemplateCompiler))
+        let pap = PapService::new(repo)
             .with_reconcile_enqueuer(Arc::new(Reject(reason)))
             .with_scope_discovery(Arc::new(Discovery));
         let daemon = RunningPapDaemon::start_with_application(
@@ -1321,7 +1318,7 @@ async fn real_uds_scheduling_rejection_and_get_list_match_frozen_wire() {
 #[tokio::test]
 async fn unavailable_preflight_returns_wire_error_without_creating_binding() {
     let repo = Arc::new(ProcessLocalPapRepository::default());
-    let pap = PapService::new(repo, Arc::new(PolicyTemplateCompiler))
+    let pap = PapService::new(repo)
         .with_reconcile_enqueuer(Arc::new(asc_daemon::UnavailableReconciliation))
         .with_scope_discovery(Arc::new(Discovery));
     let daemon = RunningPapDaemon::start_with_application(
