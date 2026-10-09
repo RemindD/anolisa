@@ -1,4 +1,4 @@
-//! Real-store acceptance for initial schema, owner isolation and query failures.
+//! Real-store acceptance for schema upgrades, owner isolation and query failures.
 
 use std::{
     sync::{
@@ -209,9 +209,9 @@ fn totals_and_half_open_time_windows_precede_pagination() {
     assert_eq!(result["items"][0]["security_event_count"], 2);
 }
 
-/// QRY-005: first-release schema includes ownership without a migration.
+/// QRY-005: new databases use revision 2 and retain trusted ownership.
 #[test]
-fn initial_schema_is_revision_one_with_uid() {
+fn initial_schema_is_revision_two_with_uid() {
     let (directory, _, _) = seed();
     let path = directory.path().join("obs.db");
     let writer = OwnedObservabilityWriter::new(&path).unwrap();
@@ -221,7 +221,7 @@ fn initial_schema_is_revision_one_with_uid() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        1
+        2
     );
     assert_eq!(
         conn.query_row(
@@ -316,7 +316,7 @@ fn unknown_rows_stay_isolated_after_reopen() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        1
+        2
     );
     assert_eq!(
         conn.query_row(
@@ -678,5 +678,353 @@ fn unique_sessions_keep_their_ids_and_ambiguous_qualified_names_fail() {
             &control()
         ),
         Err(QueryError::InvalidArgument)
+    ));
+}
+
+/// QRY-005: legacy records survive upgrade without acquiring another user's identity.
+#[test]
+fn legacy_schema_upgrade_preserves_unknown_rows_and_admits_owned_writes() {
+    let (directory, _, _) = seed();
+    let path = directory.path().join("legacy.db");
+    let legacy =
+        asc_persistence_sqlite::observability::ObservabilitySqliteWriter::new(&path).unwrap();
+    legacy
+        .write_or_raise(&record("shared-session", "before_tool_call", 1))
+        .unwrap();
+    drop(legacy);
+    let conn = Connection::open(&path).unwrap();
+    let original: String = conn
+        .query_row("SELECT metrics_json FROM observability_events", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let reader = SqliteObservabilityQueries::new(path.clone());
+    assert!(matches!(
+        reader.sessions(
+            QueryScope::All,
+            None,
+            QueryWindow::default(),
+            page(0),
+            &control()
+        ),
+        Err(QueryError::Unavailable)
+    ));
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    let writer = OwnedObservabilityWriter::new(&path).unwrap();
+    writer.probe().unwrap();
+    writer.probe().unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT uid,metrics_json FROM observability_events WHERE id=1",
+            [],
+            |r| Ok((r.get::<_, Option<u32>>(0)?, r.get::<_, String>(1)?))
+        )
+        .unwrap(),
+        (None, original)
+    );
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_observability_owner_time','idx_observability_owner_session_run_time')", [], |r| r.get::<_, u32>(0)).unwrap(), 2);
+    writer
+        .write(&record("shared-session", "before_tool_call", 2), 1000)
+        .unwrap();
+    drop(writer);
+    OwnedObservabilityWriter::new(&path)
+        .unwrap()
+        .probe()
+        .unwrap();
+    let service = ObservabilityQueryService::new(
+        reader,
+        SqliteSecurityQueries::new(directory.path().join("sec.db")),
+    );
+    let own = service
+        .sessions(
+            QueryScope::Own(1000),
+            None,
+            QueryWindow::default(),
+            page(0),
+            &control(),
+        )
+        .unwrap();
+    assert_eq!(own["total"], 1);
+    assert_eq!(own["items"][0]["observability_event_count"], 1);
+    let historical = service
+        .timeline(
+            QueryScope::All,
+            "unknown_shared-session",
+            "shared-run",
+            QueryWindow::default(),
+            page(0),
+            true,
+            &control(),
+        )
+        .unwrap();
+    assert_eq!(historical["items"].as_array().unwrap().len(), 1);
+    assert!(historical["items"][0]["uid"].is_null());
+    assert_eq!(historical["items"][0]["kind"], "observability");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM observability_events", [], |r| r
+            .get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+}
+
+/// QRY-005: revision-1 databases that already carry UIDs must retain them unchanged.
+#[test]
+fn upgrading_owned_revision_one_preserves_existing_owners() {
+    let (directory, _, _) = seed();
+    let path = directory.path().join("obs.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("UPDATE observability_events SET uid=0 WHERE id=1; UPDATE observability_events SET uid=NULL WHERE id=2; PRAGMA user_version=1").unwrap();
+    let owners = || {
+        conn.prepare("SELECT uid FROM observability_events ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, Option<u32>>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let original = owners();
+    let writer = OwnedObservabilityWriter::new(&path).unwrap();
+    writer.probe().unwrap();
+    writer.probe().unwrap();
+    assert_eq!(owners(), original);
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+}
+
+/// QRY-005: failed index creation rolls back the column and version, then allows retry.
+#[test]
+fn legacy_schema_upgrade_failure_rolls_back_and_can_be_retried() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("obs.db");
+    let legacy =
+        asc_persistence_sqlite::observability::ObservabilitySqliteWriter::new(&path).unwrap();
+    legacy
+        .write_or_raise(&record("s", "before_agent_run", 1))
+        .unwrap();
+    drop(legacy);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TABLE idx_observability_owner_time (id INTEGER)")
+        .unwrap();
+    let writer = OwnedObservabilityWriter::new(&path).unwrap();
+    assert!(writer.probe().is_err());
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('observability_events') WHERE name='uid'",
+            [],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM observability_events", [], |r| r
+            .get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    conn.execute_batch("DROP TABLE idx_observability_owner_time")
+        .unwrap();
+    writer.probe().unwrap();
+    writer
+        .write(&record("s", "before_agent_run", 2), 1000)
+        .unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM observability_events WHERE uid IS NULL",
+            [],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM observability_events WHERE uid=1000",
+            [],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+/// QRY-008: V1 reads the first 1000 candidates without rejecting a larger match set.
+#[test]
+fn correlation_candidates_keep_v1_order_and_limit_without_failing_timeline() {
+    use asc_daemon_core::query::SecurityQueries;
+
+    let (directory, service, reader) = seed();
+    let path = directory.path().join("sec.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM n WHERE x<999) INSERT INTO security_events(event_id,event_type,category,result,timestamp,timestamp_epoch,trace_id,pid,uid,session_id,run_id,tool_call_id,details) SELECT printf('candidate-%04d',x),'scan','code_scan','succeeded','2030-01-01T00:00:03Z',1893456003+x,'',1,1000,'shared-session','shared-run','shared-tool','{}' FROM n").unwrap();
+    let record = reader
+        .observations(
+            QueryScope::Own(1000),
+            "shared-session",
+            "shared-run",
+            QueryWindow::default(),
+            page(1),
+            &control(),
+        )
+        .unwrap()
+        .items
+        .remove(0);
+    let candidates = SqliteSecurityQueries::new(path)
+        .candidates(QueryScope::Own(1000), &record, &control())
+        .unwrap();
+    assert_eq!(candidates.len(), 1000);
+    assert_eq!(candidates[0].event.event_id, "event-1000");
+    assert_eq!(candidates.last().unwrap().event.event_id, "candidate-0998");
+    let timeline = service
+        .timeline(
+            QueryScope::Own(1000),
+            "shared-session",
+            "shared-run",
+            QueryWindow::default(),
+            page(1),
+            true,
+            &control(),
+        )
+        .unwrap();
+    let items = timeline["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().any(|item| item["kind"] == "observability"));
+    assert!(
+        items
+            .iter()
+            .any(|item| item["event"]["event_id"] == "event-1000")
+    );
+}
+
+/// QRY-008: bad candidates are skipped while other same-owner matches remain visible.
+#[test]
+fn malformed_candidates_do_not_hide_valid_correlations_or_observations() {
+    let (directory, service, _) = seed();
+    let conn = Connection::open(directory.path().join("sec.db")).unwrap();
+    conn.execute("INSERT INTO security_events(event_id,event_type,category,result,timestamp,timestamp_epoch,trace_id,pid,uid,session_id,run_id,call_id,tool_call_id,details) SELECT 'valid-event',event_type,category,result,timestamp,timestamp_epoch,trace_id,pid,1000,session_id,run_id,call_id,tool_call_id,details FROM security_events WHERE event_id='event-2000'", []).unwrap();
+    for (details, result) in [
+        ("not json", "succeeded"),
+        ("[]", "succeeded"),
+        ("{}", "invalid"),
+    ] {
+        conn.execute(
+            "UPDATE security_events SET details=?1,result=?2 WHERE event_id='event-1000'",
+            [details, result],
+        )
+        .unwrap();
+        let timeline = service
+            .timeline(
+                QueryScope::Own(1000),
+                "shared-session",
+                "shared-run",
+                QueryWindow::default(),
+                page(1),
+                true,
+                &control(),
+            )
+            .unwrap();
+        let items = timeline["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|item| item["kind"] == "observability"));
+        assert!(
+            items
+                .iter()
+                .any(|item| item["event"]["event_id"] == "valid-event")
+        );
+        assert!(items.iter().all(|item| item["uid"] == 1000));
+    }
+}
+
+/// QRY-008/011: optional correlation storage faults preserve the observation page.
+#[test]
+fn candidate_storage_failures_do_not_fail_the_observation_page() {
+    for fault in ["missing", "corrupt", "future", "oversized"] {
+        let (directory, service, _) = seed();
+        let path = directory.path().join("sec.db");
+        match fault {
+            "missing" => std::fs::rename(&path, path.with_extension("backup")).unwrap(),
+            "corrupt" => std::fs::write(&path, b"not sqlite").unwrap(),
+            "future" => Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", 99)
+                .unwrap(),
+            _ => {
+                Connection::open(&path)
+                    .unwrap()
+                    .execute(
+                        "UPDATE security_events SET details=?1 WHERE event_id='event-1000'",
+                        [json!({"large":"x".repeat(4*1024*1024)}).to_string()],
+                    )
+                    .unwrap();
+            }
+        }
+        let timeline = service
+            .timeline(
+                QueryScope::Own(1000),
+                "shared-session",
+                "shared-run",
+                QueryWindow::default(),
+                page(1),
+                true,
+                &control(),
+            )
+            .unwrap();
+        let items = timeline["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{fault}");
+        assert_eq!(items[0]["kind"], "observability", "{fault}");
+        assert_eq!(items[0]["uid"], 1000);
+    }
+}
+
+/// QRY-003/011: best-effort correlation never hides authorization or cancellation errors.
+#[test]
+fn candidate_fault_tolerance_preserves_scope_and_deadline_errors() {
+    use asc_daemon_core::query::SecurityQueries;
+
+    let (directory, _, reader) = seed();
+    let record = reader
+        .observations(
+            QueryScope::Own(1000),
+            "shared-session",
+            "shared-run",
+            QueryWindow::default(),
+            page(1),
+            &control(),
+        )
+        .unwrap()
+        .items
+        .remove(0);
+    let security = SqliteSecurityQueries::new(directory.path().join("absent.db"));
+    assert!(matches!(
+        security.candidates(QueryScope::Own(2000), &record, &control()),
+        Err(QueryError::PermissionDenied)
+    ));
+    let cancelled = QueryControl::new(Instant::now() + Duration::from_secs(5), || true);
+    assert!(matches!(
+        security.candidates(QueryScope::Own(1000), &record, &cancelled),
+        Err(QueryError::DeadlineExceeded)
     ));
 }

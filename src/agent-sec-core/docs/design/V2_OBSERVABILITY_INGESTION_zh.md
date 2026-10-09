@@ -6,7 +6,9 @@
 
 本分支后续增加的查询接口与 UDS UID 归属扩展见
 [V2 安全事件与 Observability 查询设计](V2_SECURITY_OBSERVABILITY_QUERY_zh.md)
-（obs 已实现）；首次发布的 schema revision 1 已包含 peer UID 原子落盘，无数据库迁移。下文首批采集验收是历史基线，
+（obs 已实现）；当前 schema revision 2 支持 peer UID 原子落盘，并自动升级 revision 1。
+历史记录的 UID 保留 NULL，不归 UID 0；升级的补列、建索引与版本更新在同一事务内完成。
+下文首批采集验收是历史基线，
 本次查询扩展证据单列在该设计文档，不能将历史 PASS 等同于当前安装态验收。
 
 ## 1. CLI 兼容接口 [PRESERVE V1]

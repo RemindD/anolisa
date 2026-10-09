@@ -1,15 +1,20 @@
-//! Initial system-daemon observability schema with trusted UID ownership.
+//! System-daemon observability schema with trusted UID ownership and legacy upgrades.
 
 use std::path::Path;
 
 use asc_observability::{OBSERVABILITY_LOG_PREFIX, ObservabilityRecord};
-use asc_sqlite_kernel::{ColumnSpec, IndexSpec, KernelError, SqliteStore, TableSpec};
+use asc_sqlite_kernel::{ColumnSpec, ExtraColumn, IndexSpec, KernelError, SqliteStore, TableSpec};
 use rusqlite::Connection;
 
 use super::table::OBSERVABILITY_TABLES;
 
-/// First released system-daemon observability schema.
-pub const OWNED_OBSERVABILITY_VERSION: u32 = 1;
+/// Adds trusted ownership to revision 1; historical rows keep an unknown owner.
+pub const OWNED_OBSERVABILITY_VERSION: u32 = 2;
+
+const OWNER_COLUMN: ColumnSpec = ColumnSpec {
+    name: "uid",
+    definition: "INTEGER CHECK(uid BETWEEN 0 AND 4294967295)",
+};
 
 const _: () = assert!(OBSERVABILITY_TABLES[0].columns.len() == 10);
 
@@ -27,10 +32,7 @@ pub const OWNED_OBSERVABILITY_TABLES: &[TableSpec] = &[TableSpec {
         OBSERVABILITY_TABLES[0].columns[7],
         OBSERVABILITY_TABLES[0].columns[8],
         OBSERVABILITY_TABLES[0].columns[9],
-        ColumnSpec {
-            name: "uid",
-            definition: "INTEGER CHECK(uid BETWEEN 0 AND 4294967295)",
-        },
+        OWNER_COLUMN,
     ],
     indexes: &[
         OBSERVABILITY_TABLES[0].indexes[0],
@@ -46,7 +48,13 @@ pub const OWNED_OBSERVABILITY_TABLES: &[TableSpec] = &[TableSpec {
             columns: &["uid", "session_id", "run_id", "observed_at_epoch", "id"],
         },
     ],
-    extra_columns: &[],
+    // The kernel adds this nullable column, indexes and revision in one transaction.
+    // TODO(sec-core): evaluate an explicit SQLite migration phase at daemon startup
+    // instead of writer schema convergence, which warm_owned currently triggers at startup.
+    extra_columns: &[ExtraColumn {
+        name: OWNER_COLUMN.name,
+        definition: OWNER_COLUMN.definition,
+    }],
 }];
 
 /// Strict daemon writer: every new row carries its owner in the same INSERT.
@@ -56,7 +64,7 @@ pub struct OwnedObservabilityWriter {
 }
 
 impl OwnedObservabilityWriter {
-    /// Configures the initial system schema without opening a database.
+    /// Configures the system schema and legacy upgrade without opening a database.
     ///
     /// # Errors
     /// Returns invalid-path errors from the `SQLite` kernel.
