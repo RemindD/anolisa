@@ -245,6 +245,7 @@ where
     /// Creates an immutable assignment from exact current policy revisions.
     /// # Errors
     /// Rejects stale references, invalid selectors, and unavailable discovery.
+    #[tracing::instrument(skip_all, name = "pap.create_scope", fields(scope_id = tracing::field::Empty))]
     pub fn create_scope_assignment(
         &self,
         selector: &ScopeSelector,
@@ -294,10 +295,16 @@ where
             },
             result => result?,
         };
+        tracing::Span::current().record("scope_id", tracing::field::display(&scope.scope_id));
         let started = self
             .repository
             .scope_discovery_seed(&scope.scope_id)
             .and_then(|seed| discovery.start(&seed));
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_pap",
+            scope_id = %scope.scope_id, discovery_result = ?started,
+            "scope admitted; discovery start attempted"
+        );
         if let Err(error) = started {
             let cleanup = self
                 .repository
@@ -337,6 +344,7 @@ where
     /// A successful response acknowledges intent, not remote completion.
     /// # Errors
     /// Returns not-found, discovery or storage failures, retaining admitted intent.
+    #[tracing::instrument(skip_all, name = "pap.delete_scope", fields(scope_id = %id))]
     pub fn delete_scope(&self, id: &ResourceId) -> Result<ScopeDeletion, PapError> {
         let _guard = self
             .scope_mutations
@@ -348,6 +356,10 @@ where
                 completed: true,
             });
         }
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_pap",
+            scope_id = %id, "scope deletion intent committed"
+        );
         // Close child admission before joining discovery. A stop failure retains
         // deletion intent; retry delete/retry_scope after discovery is available.
         self.discovery
@@ -355,6 +367,10 @@ where
             .ok_or(PapError::Unavailable)?
             .stop(id)?;
         self.notify_all(self.repository.finish_scope_discovery(id)?)?;
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_pap",
+            scope_id = %id, "scope discovery stopped; binding cleanup notified"
+        );
         let completed = match self.repository.get_scope(id) {
             Ok(_) => false,
             Err(PapError::NotFound) => true,

@@ -231,6 +231,7 @@ impl Drop for ReconciliationRuntime {
     }
 }
 
+#[tracing::instrument(skip_all, name = "policy.reconcile", fields(binding_id = %id))]
 fn run_attempt(
     repository: &dyn BindingStateRepository,
     reconciler: &dyn ReconcileAttempt,
@@ -255,8 +256,21 @@ fn run_attempt(
             })
         } else {
             original = repository.get_binding_state(&id)?;
+            tracing::debug!(
+                target: "asc_observability::diagnostic", component = "policy_runtime",
+                binding_id = %id,
+                scope_id = ?original.as_ref().map(|state| &state.binding.spec.scope.scope_id),
+                phase = ?original.as_ref().map(|state| state.binding.status.phase),
+                status_version = ?original.as_ref().map(|state| state.status_version),
+                "binding attempt started"
+            );
             reconciler.reconcile(&id, &mut schedule)
         };
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_runtime",
+            binding_id = %id, result = ?result,
+            "binding attempt finished"
+        );
         Ok::<_, StoreError>(scheduling_decision(
             repository,
             &id,

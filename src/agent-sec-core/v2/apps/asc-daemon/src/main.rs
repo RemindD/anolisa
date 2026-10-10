@@ -220,6 +220,11 @@ async fn run(
     (exit_code, Some(durable_sinks))
 }
 
+#[tracing::instrument(
+    skip_all,
+    target = "asc_daemon",
+    name = "policy.recovery.deleting_scopes"
+)]
 fn recover_deleting_scopes(repository: &dyn PapRepository) -> Result<(), asc_pap::PapError> {
     let mut cursor = None;
     loop {
@@ -231,11 +236,20 @@ fn recover_deleting_scopes(repository: &dyn PapRepository) -> Result<(), asc_pap
             cursor = Some(scope.scope_id.clone());
             if scope.status == ScopeStatus::Deleting {
                 repository.finish_scope_discovery(&scope.scope_id)?;
+                tracing::debug!(
+                    target: "asc_observability::diagnostic", component = "policy_recovery",
+                    scope_id = %scope.scope_id, "deleting scope recovery barrier committed"
+                );
             }
         }
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    target = "asc_daemon",
+    name = "policy.recovery.active_scopes"
+)]
 fn recover_active_scopes(
     repository: &dyn PapRepository,
     discovery: &dyn ScopeDiscovery,
@@ -250,6 +264,10 @@ fn recover_active_scopes(
             cursor = Some(scope.scope_id.clone());
             if scope.status == ScopeStatus::Active {
                 discovery.start(&repository.scope_discovery_seed(&scope.scope_id)?)?;
+                tracing::debug!(
+                    target: "asc_observability::diagnostic", component = "policy_recovery",
+                    scope_id = %scope.scope_id, "active scope discovery restored"
+                );
             }
         }
     }

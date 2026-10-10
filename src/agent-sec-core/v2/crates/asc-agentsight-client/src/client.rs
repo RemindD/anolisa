@@ -107,16 +107,26 @@ where
     T: AgentSightTransport,
     R: ProcessIdentityResolver,
 {
+    #[tracing::instrument(skip_all, name = "policy.agentsight.apply", fields(target_id = %request_body.binding_id))]
     fn post_request(
         &self,
         request_body: &ApplyBindingRequest,
         body: Vec<u8>,
     ) -> Result<AgentSightDeploymentState, AgentSightClientError> {
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_agentsight",
+            target_id = %request_body.binding_id, "AgentSight Apply started"
+        );
         let response = self.send(&AgentSightHttpRequest {
             method: AgentSightHttpMethod::Post,
             path: ENFORCEMENT_BINDINGS_PATH.to_owned(),
             body: Some(body),
         })?;
+        tracing::debug!(
+            target: "asc_observability::diagnostic", component = "policy_agentsight",
+            target_id = %request_body.binding_id, status = response.status,
+            "AgentSight Apply response received"
+        );
         if !(200..300).contains(&response.status) {
             return Err(classify_http_error(response.status, &response.body));
         }
@@ -141,6 +151,7 @@ where
         }
     }
 
+    #[tracing::instrument(skip_all, name = "policy.agentsight.delete", fields(target_id = %target_binding_id))]
     fn delete_target_id(
         &self,
         target_binding_id: Uuid,
