@@ -265,7 +265,11 @@ RPC error、SecurityEvent 或 telemetry。`agent-sec-daemon` binary 单元测试
 OTel 初始化后由 §11 的有界 hook 接管，仅输出固定诊断且不等待 stderr。
 
 该 slice 已由唯一的 concrete `DaemonDispatcher` 注册 first-version PAP daemon protocol，
-但尚未注册 `daemon.health`。dispatcher 完成 envelope decode、request ID、kernel peer
+并注册 `daemon.health`，供任意经过内核认证的本地调用方检查进程响应。
+返回 `status: "ok"`、`pid` 和从 dispatcher 初始化起计的 `uptime_seconds`；
+该快照不代表扫描模型、后台任务或存储的健康状态，也不包含 V1 的完整 jobs/queues 快照。
+`caller: "agentsight"` 沿用 V1 响应外壳，其余请求使用 V2 外壳。
+dispatcher 完成 envelope decode、request ID、kernel peer
 credentials 到 trusted Principal 的绑定、method allowlist、authorization 和 response
 encode；PAP 是其中一组显式注册的方法，不增加第二个 service dispatch 层。当前 composition
 root 使用 `RootManagedPrincipalPolicy`：UID 0 始终具有 PAP 管理权限。部署者可用
@@ -627,7 +631,7 @@ Client 组合验证自动 Binding 和清理；bootstrap SIGTERM 验证任务停�
 
 查询 reader 使用与 writer 一致的显式系统数据路径，由 daemon 装配；只读连接随每次查询结束关闭，writers 在请求 drain 后关闭。
 CLI/TUI 不直读数据库；普通用户按 UDS peer UID 过滤，root 可查询全部；非 root 的
-PolicyAdministrator 不获得跨 UID 查询权限。可观测数据已在单次 INSERT 中持久化 peer owner，历史无主记录
+PolicyAdministrator 不获得跨 UID 查询权限。可观测数据已在单次 INSERT 中持久化 peer UID，历史无主记录
 仅 root 可见且标记为未知，不自动归 UID 0。
 启动时由 writer 将已配置的 revision 1 obs 数据库原子升级至 revision 2：补上 nullable `uid`
 及归属索引，保留历史 NULL 和已有 UID；失败回滚，obs 查询不可用且采集显式报错。
@@ -650,10 +654,12 @@ DPROC-QRY-001 源码 fixture：
 不算该启动场景通过。QRY-001..011 的逐项 fixture 映射见查询设计 §8；安装态仍未执行。
 
 
-DPROC-QRY-001 查询身份补充：所有查询的授权范围仅由 UDS peer UID 决定；不接受
-`uid/owner_uid` 参数，CLI 不提供对应选项。root 默认 All，普通用户固定 Own(peer_uid)。
-root 列表只在跨 owner 同名时返回 `UID_SessionId`；组合名称由服务端解析到已有数据，
-不授予权限，普通用户不解析该前缀。组合名称仍有歧义时拒绝，不混合不同 owner。
+DPROC-QRY-001 查询身份补充：所有查询的授权范围仅由 UDS peer UID 决定；obs 和 sec 都不接受
+`uid/owner_uid` 参数，CLI 不提供对应选项。root 为 All，普通用户固定 Own(peer_uid)。
+root 列表只在跨 UID 同名时返回 `UID_SessionId`；组合名称由服务端解析到已有数据，
+不授予权限，普通用户不解析该前缀。组合名称仍有歧义时拒绝，不混合不同 UID。
 可执行 fixture：`v2/apps/asc-cli/tests/observability_query.rs` 验证真实 peer、UID 参数拒绝、
 无 UID 的 report/review；`v2/crates/asc-persistence-sqlite/tests/owned_queries.rs` 验证 root
-组合名称、普通用户隔离和歧义拒绝。以上不替代安装态不同 UID/systemd 验收。
+组合名称、普通用户隔离和歧义拒绝；`v2/apps/asc-daemon/tests/sec_query_protocol.rs` 与
+`v2/apps/asc-cli/tests/events_dual_uid.rs` 验证 sec 的真实 UDS UID、参数拒绝和组合 ID 回查。
+以上不替代安装态不同 UID/systemd 验收。

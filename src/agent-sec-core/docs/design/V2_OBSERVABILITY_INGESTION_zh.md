@@ -98,8 +98,8 @@ SQLite 或文件 writer。core 在请求的 OTel Context 中读取 metadata，�
 
 文件使用 daemon 已解析的系统数据目录，默认 `/var/log/agent-sec`，部署可用绝对路径
 `AGENT_SEC_DATA_DIR` 覆盖；不回退 HOME。文件为 `observability.jsonl` 和 `observability.db`，
-复用现有 owner-only 文件权限。系统 obs schema 在启动时初始化/升级，JSONL 惰性创建；
-新记录与 peer owner 同次 INSERT。存储故障仍由调用显式返回，初始化失败的查询返回 unavailable。
+复用现有仅所属 UID 可访问的文件权限。系统 obs schema 在启动时初始化/升级，JSONL 惰性创建；
+新记录与 peer UID 同次 INSERT。存储故障仍由调用显式返回，初始化失败的查询返回 unavailable。
 
 1. 先写 JSONL；失败就不尝试 SQLite。
 2. 再写 SQLite；失败不撤销已追加的 JSONL。

@@ -1,6 +1,6 @@
 //! Observability `SQLite` binding: table spec, repository, policy.
 //!
-//! Legacy facades retain revision 1. The system daemon uses [`owned`] at revision 3;
+//! Legacy facades retain revision 1. The system daemon uses [`owned`] at revision 2;
 //! the kernel transactionally converges its nullable owner column and indexes.
 
 pub mod policy;
