@@ -65,7 +65,13 @@ impl BindingStateRepository for FaultBoundary {
                             BindingStatus::PendingApply => gate("recovery_saved"),
                             _ => {}
                         }
-                    } else if patch.deployments.is_some() {
+                    } else if let Some(deployments) = &patch.deployments {
+                        if deployments
+                            .iter()
+                            .any(|deployment| deployment.presence == Presence::Present)
+                        {
+                            gate("compound_observation_saved");
+                        }
                         gate(
                             if expected.binding.status.phase == BindingStatus::Deleting {
                                 "delete_unknown_saved"
@@ -86,10 +92,13 @@ impl Clock for Tick {
         self.0.load(Ordering::SeqCst)
     }
 }
-struct Remote(String);
+struct Remote {
+    address: String,
+    repository: Arc<SqlitePolicyRepository>,
+}
 impl Remote {
     fn send(&self, operation: &str, target: &TargetRef) -> Observation {
-        let mut stream = TcpStream::connect(&self.0).unwrap();
+        let mut stream = TcpStream::connect(&self.address).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -102,6 +111,17 @@ impl Remote {
         let mut response = String::new();
         BufReader::new(stream).read_line(&mut response).unwrap();
         assert_eq!(response.trim(), "committed");
+        if operation == "apply"
+            && std::env::var("ASC_POLICY_CRASH_STAGE")
+                .is_ok_and(|stage| stage.starts_with("compound_"))
+        {
+            // Accept deletion while this Apply still owns its earlier status snapshot.
+            let scope_id = fixture().scope.scope_id;
+            self.repository.begin_scope_delete(&scope_id).unwrap();
+            gate("compound_delete_intent");
+            self.repository.finish_scope_discovery(&scope_id).unwrap();
+            gate("compound_pending_delete");
+        }
         gate(if operation == "apply" {
             "applied_before_result"
         } else {
@@ -149,7 +169,10 @@ impl TargetDeploymentClient for Remote {
 }
 fn converge(repo: &Arc<SqlitePolicyRepository>, remote: &str) {
     let clock = Arc::new(Tick(AtomicU64::new(0)));
-    let client: Arc<dyn TargetDeploymentClient> = Arc::new(Remote(remote.into()));
+    let client: Arc<dyn TargetDeploymentClient> = Arc::new(Remote {
+        address: remote.into(),
+        repository: repo.clone(),
+    });
     let core = BindingReconciler::new(
         Arc::new(FaultBoundary(repo.clone())),
         Arc::new(|binding: &PreparedBinding| {
@@ -405,6 +428,32 @@ fn sigkill_at_confirmed_windows_recovers_and_cleans_external_ledger() {
         drop(before);
         let calls = mock.calls.lock().unwrap().len();
         child(root.path(), &mock.address, "none", false, false);
+        if !deleting {
+            let restored =
+                SqlitePolicyRepository::open(&root.path().join("policy-state.db")).unwrap();
+            let recovered = restored.list_bindings(100, 0).unwrap();
+            assert_eq!(recovered.total, 1, "{stage}");
+            assert_eq!(
+                recovered.items[0].status.phase,
+                BindingStatus::Ready,
+                "{stage}"
+            );
+            assert_eq!(recovered.items[0].spec.policy, fixture().policy, "{stage}");
+            if let Some(original) = records.items.first() {
+                assert_eq!(
+                    recovered.items[0].spec.binding_id, original.spec.binding_id,
+                    "{stage}"
+                );
+            }
+            assert_eq!(
+                restored
+                    .get_scope(&fixture().scope.scope_id)
+                    .unwrap()
+                    .status,
+                ScopeStatus::Active
+            );
+            assert_eq!(mock.present().len(), 1, "{stage}");
+        }
         if stage == "result_saved" {
             assert_eq!(
                 mock.calls.lock().unwrap().len(),
@@ -420,5 +469,57 @@ fn sigkill_at_confirmed_windows_recovers_and_cleans_external_ledger() {
             mock.present().is_empty(),
             "orphaned remote target at {stage}"
         );
+    }
+}
+
+#[test]
+fn sigkill_during_apply_and_scope_deletion_preserves_cleanup_intent() {
+    for stage in [
+        "compound_delete_intent",
+        "compound_pending_delete",
+        "compound_observation_saved",
+    ] {
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let mock = Mock::start(root.path());
+        child(root.path(), &mock.address, stage, true, false);
+        let before = SqlitePolicyRepository::open(&root.path().join("policy-state.db")).unwrap();
+        assert_eq!(
+            before.get_scope(&fixture().scope.scope_id).unwrap().status,
+            ScopeStatus::Deleting
+        );
+        let bindings = before.list_bindings(100, 0).unwrap();
+        assert_eq!(bindings.total, 1, "{stage}");
+        let id = &bindings.items[0].spec.binding_id;
+        let saved = before.get_binding_state(id).unwrap().unwrap();
+        assert_eq!(
+            saved.binding.status.phase,
+            if stage == "compound_delete_intent" {
+                BindingStatus::Applying
+            } else {
+                BindingStatus::PendingDelete
+            },
+            "an old Apply overwrote deletion at {stage}"
+        );
+        assert_eq!(saved.deployments.len(), 1, "{stage}");
+        assert_eq!(
+            saved.deployments[0].presence,
+            if stage == "compound_observation_saved" {
+                Presence::Present
+            } else {
+                Presence::Unknown
+            },
+            "{stage}"
+        );
+        assert_eq!(mock.present(), BTreeSet::from([id.to_string()]), "{stage}");
+        drop(before);
+        child(root.path(), &mock.address, "none", false, false);
+        let after = SqlitePolicyRepository::open(&root.path().join("policy-state.db")).unwrap();
+        assert_eq!(after.list_bindings(100, 0).unwrap().total, 0, "{stage}");
+        assert_eq!(after.list_scopes(100, 0).unwrap().total, 0, "{stage}");
+        assert!(mock.present().is_empty(), "orphaned target at {stage}");
+        assert_eq!(*mock.calls.lock().unwrap(), ["apply", "delete"], "{stage}");
     }
 }

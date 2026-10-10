@@ -86,7 +86,9 @@ def agentsight_mock() -> Iterator[Queue]:
         created_token = False
         try:
             try:
-                descriptor = os.open(_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                descriptor = os.open(
+                    _TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
             except FileExistsError:
                 pass
             else:
@@ -120,14 +122,17 @@ def _wait_for(
 
 
 def test_discovered_binding_delivers_saved_revision_and_cleans_up(
-    tmp_path: Path, agentsight_mock: Queue, start_daemon: Callable, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    agentsight_mock: Queue,
+    start_daemon: Callable,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data = tmp_path / "policy-data"
     monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(data))
     daemon: DaemonHandle = start_daemon()
-    template = _fixture(_V2 / "crates/asc-policy-types/tests/fixtures/prepared-binding.json")[
-        "policy"
-    ]["template"]
+    template = _fixture(
+        _V2 / "crates/asc-policy-types/tests/fixtures/prepared-binding.json"
+    )["policy"]["template"]
     template_file = tmp_path / "template.json"
     template_file.write_text(json.dumps(template))
     original = daemon.request(
@@ -194,7 +199,8 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
         }
         listing = _wait_for(
             lambda: daemon.request("binding", "list", timeout=2),
-            lambda value: value["total"] == 1 and value["items"][0]["status"] == {"phase": "READY"},
+            lambda value: value["total"] == 1
+            and value["items"][0]["status"] == {"phase": "READY"},
         )
         binding = listing["items"][0]
         spec = binding["spec"]
@@ -217,24 +223,33 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
             process_start_time=identity["startTime"],
             policy_id=policy_id,
         )
-        assert agentsight_mock.get(timeout=2) == ("GET", "/api/enforcement/health", None)
+        assert agentsight_mock.get(timeout=2) == (
+            "GET",
+            "/api/enforcement/health",
+            None,
+        )
         assert agentsight_mock.get(timeout=2) == ("POST", _BINDINGS_PATH, expected)
         assert agentsight_mock.empty(), "unexpected additional AgentSight request"
 
         # Read-only inspection confirms this actual daemon used durable storage.
-        with closing(sqlite3.connect(f"file:{data / 'policy-state.db'}?mode=ro", uri=True)) as db:
+        with closing(
+            sqlite3.connect(f"file:{data / 'policy-state.db'}?mode=ro", uri=True)
+        ) as db:
             saved = db.execute(
-                "SELECT spec_json,phase FROM bindings WHERE binding_id=?", (spec["bindingId"],)
+                "SELECT spec_json,phase FROM bindings WHERE binding_id=?",
+                (spec["bindingId"],),
             ).fetchone()
             assert saved is not None
             assert (json.loads(saved[0]), saved[1]) == (spec, "READY")
 
         daemon.request("scope", "delete", "--scope-id", scope["scopeId"])
         _wait_for(
-            lambda: daemon.request("binding", "list", timeout=2), lambda value: value["total"] == 0
+            lambda: daemon.request("binding", "list", timeout=2),
+            lambda value: value["total"] == 0,
         )
         _wait_for(
-            lambda: daemon.request("scope", "list", timeout=2), lambda value: value["total"] == 0
+            lambda: daemon.request("scope", "list", timeout=2),
+            lambda value: value["total"] == 0,
         )
         assert agentsight_mock.get(timeout=2) == (
             "DELETE",
@@ -245,7 +260,9 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
         assert (
             process.poll() is None
         ), "Scope deletion should clean up while the target remains alive"
-        with closing(sqlite3.connect(f"file:{data / 'policy-state.db'}?mode=ro", uri=True)) as db:
+        with closing(
+            sqlite3.connect(f"file:{data / 'policy-state.db'}?mode=ro", uri=True)
+        ) as db:
             assert db.execute("SELECT count(*) FROM bindings").fetchone() == (0,)
             assert db.execute("SELECT count(*) FROM scopes").fetchone() == (0,)
     finally:
@@ -258,13 +275,16 @@ def test_discovered_binding_delivers_saved_revision_and_cleans_up(
 
 
 def test_unsupported_rule_is_saved_but_prevents_partial_http_delivery(
-    tmp_path: Path, agentsight_mock: Queue, start_daemon: Callable, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    agentsight_mock: Queue,
+    start_daemon: Callable,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_SEC_DATA_DIR", str(tmp_path / "policy-data"))
     daemon: DaemonHandle = start_daemon()
-    template = _fixture(_V2 / "crates/asc-policy-types/tests/fixtures/prepared-binding.json")[
-        "policy"
-    ]["template"]
+    template = _fixture(
+        _V2 / "crates/asc-policy-types/tests/fixtures/prepared-binding.json"
+    )["policy"]["template"]
     template["rules"][1]["effect"] = "require_confirmation"
     template_file = tmp_path / "review-policy.json"
     template_file.write_text(json.dumps(template))
@@ -294,9 +314,13 @@ def test_unsupported_rule_is_saved_but_prevents_partial_http_delivery(
             "kind": "REJECTED",
             "code": "RULE_1_UNSUPPORTED_EFFECT",
         }
-        assert agentsight_mock.empty(), "an unsupported rule must prevent all HTTP delivery"
+        assert (
+            agentsight_mock.empty()
+        ), "an unsupported rule must prevent all HTTP delivery"
         daemon.request("scope", "delete", "--scope-id", scope["scopeId"])
-        _wait_for(lambda: daemon.request("binding", "list"), lambda value: value["total"] == 0)
+        _wait_for(
+            lambda: daemon.request("binding", "list"), lambda value: value["total"] == 0
+        )
         assert (
             agentsight_mock.empty()
         ), "rejected translation must not create cleanup responsibility"

@@ -22,7 +22,9 @@ CASES = json.loads((ROOT / "v2/fixtures/observability/v1-records.json").read_tex
 
 @pytest.fixture
 def ingestion():
-    binaries = {name: shutil.which(name) for name in ("agent-sec-cli", "agent-sec-daemon")}
+    binaries = {
+        name: shutil.which(name) for name in ("agent-sec-cli", "agent-sec-daemon")
+    }
     assert all(binaries.values()), "build V2 binaries and place them on PATH"
     # RuntimeLease requires an owner-only directory, independent of ambient TMPDIR.
     with tempfile.TemporaryDirectory(prefix="asc-obs-", dir="/tmp") as directory:
@@ -123,7 +125,9 @@ def test_v1_cli_records_persist_and_survive_restart(ingestion):
         if item.get("fields", {}).get("reason") == "request_started"
     ]
     assert len(contexts) == len(CASES)
-    assert all(item["trace_id"] == "11111111111111111111111111111111" for item in contexts)
+    assert all(
+        item["trace_id"] == "11111111111111111111111111111111" for item in contexts
+    )
     assert all(
         item["agent"]["session_id"] == CASES[0]["expected"]["metadata"]["sessionId"]
         for item in contexts
@@ -175,10 +179,14 @@ def test_concurrent_ingestion_isolates_baggage_and_no_carrier_does_not_inherit(
 ):
     ingestion.start(authorize=False)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        responses = list(pool.map(lambda i: ingestion.call(raw_request(f"s-{i}")), range(24)))
+        responses = list(
+            pool.map(lambda i: ingestion.call(raw_request(f"s-{i}")), range(24))
+        )
     assert all(response.get("result") == {} for response in responses), responses
     stored = persisted(ingestion)
-    assert {record["metadata"]["sessionId"] for record in stored} == {f"s-{i}" for i in range(24)}
+    assert {record["metadata"]["sessionId"] for record in stored} == {
+        f"s-{i}" for i in range(24)
+    }
     assert len(stored) == 24
     request = raw_request()
     request.pop("traceContext")
@@ -237,7 +245,9 @@ def run_v1_record_cli(ingestion, *args, input_text):
     with closing(
         sqlite3.connect(f"file:{data_dir / 'security-events.db'}?mode=ro", uri=True)
     ) as connection:
-        baseline_count = connection.execute("SELECT count(*) FROM security_events").fetchone()[0]
+        baseline_count = connection.execute(
+            "SELECT count(*) FROM security_events"
+        ).fetchone()[0]
         result = subprocess.run(
             [
                 ingestion.binaries["agent-sec-cli"],
@@ -291,7 +301,9 @@ def test_v1_observability_record_json_creates_observability_jsonl(ingestion):
     assert result.stdout == ""
     records = [
         json.loads(line)
-        for line in (data_dir / "observability.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (data_dir / "observability.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert records[0]["hook"] == "after_tool_call"
     assert "schemaVersion" not in records[0]

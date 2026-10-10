@@ -39,7 +39,9 @@ def _write_template(tmp_path: Path, name: str, files: list[str]) -> str:
 
 
 def test_policy_assignment_snapshot_and_cleanup(daemon, tmp_path):
-    template_v1 = _write_template(tmp_path, "policy-v1.json", ["/workspace/important/**"])
+    template_v1 = _write_template(
+        tmp_path, "policy-v1.json", ["/workspace/important/**"]
+    )
     template_v2 = _write_template(tmp_path, "policy-v2.json", ["/srv/data"])
     policy = daemon.request(
         "policy", "create", "--name", "protect-important-files", "--file", template_v1
@@ -71,7 +73,10 @@ def test_policy_assignment_snapshot_and_cleanup(daemon, tmp_path):
         template_v2,
     )
     assert updated["revision"] == 2
-    assert daemon.request("policy", "get", "--policy-id", policy_id, "--revision", "2") == updated
+    assert (
+        daemon.request("policy", "get", "--policy-id", policy_id, "--revision", "2")
+        == updated
+    )
     stale = daemon.cli(
         "scope",
         "create",
