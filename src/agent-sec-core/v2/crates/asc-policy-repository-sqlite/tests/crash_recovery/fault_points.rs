@@ -125,9 +125,6 @@ pub(super) fn before_cas(write: &BindingStateWrite) {
     };
     let selected = match stage.as_str() {
         "sql_unknown_state_saved" => deployments.iter().any(|d| d.presence == Presence::Unknown),
-        "compound_sql_observation_saved" => {
-            deployments.iter().any(|d| d.presence == Presence::Present)
-        }
         _ => false,
     };
     if selected {
@@ -150,7 +147,6 @@ fn claim_write(expected: &BindingStateSnapshot) -> BindingStateWrite {
                 presence: Presence::Unknown,
                 last_confirmed: None,
             }]),
-            preserve_observations_on_conflict: false,
         }),
     }
 }
@@ -435,37 +431,6 @@ fn uncommitted_unknown_never_precedes_remote_apply() {
     assert_eq!(*case.mock.calls.lock().unwrap(), ["apply"]);
     drop(repo);
     case.recover(true);
-    case.assert_clean();
-    assert_eq!(*case.mock.calls.lock().unwrap(), ["apply", "delete"]);
-}
-
-#[test]
-fn interrupted_old_apply_observation_cannot_undo_scope_deletion() {
-    let case = Case::new();
-    child(
-        case.root.path(),
-        &case.mock.address,
-        "compound_sql_observation_saved",
-        true,
-        false,
-    );
-    let repo = case.repository();
-    assert_eq!(
-        repo.get_scope(&fixture().scope.scope_id).unwrap().status,
-        ScopeStatus::Deleting
-    );
-    let bindings = repo.list_bindings(100, 0).unwrap();
-    assert_eq!(bindings.total, 1);
-    let id = &bindings.items[0].spec.binding_id;
-    let saved = repo.get_binding_state(id).unwrap().unwrap();
-    assert_eq!(saved.binding.status.phase, BindingStatus::PendingDelete);
-    assert_eq!(saved.status_version, 3);
-    assert_eq!(saved.deployments.len(), 1);
-    assert_eq!(saved.deployments[0].presence, Presence::Unknown);
-    assert_eq!(case.mock.present(), BTreeSet::from([id.to_string()]));
-    drop(repo);
-    case.recover(false);
-    case.recover(false);
     case.assert_clean();
     assert_eq!(*case.mock.calls.lock().unwrap(), ["apply", "delete"]);
 }

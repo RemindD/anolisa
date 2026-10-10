@@ -15,7 +15,7 @@ Reconciler 提交边界；启用可选 `fault-injection` feature 后，还覆盖
 | 已接受的 assignment 无需用户再次请求即可恢复 | 内存通知和 discovery worker 随崩溃消失，已提交的 Scope 必须继续作为事实来源。 | discovery 恢复及 `scope_saved`/`binding_saved` 窗口 |
 | 保留 assignment 身份和策略快照 | 更新当前 PolicyTemplate 不应改变已有 Scope 选择的 revision。 | Scope 两次崩溃黑盒场景、Repository 重开契约 |
 | 远端 I/O 前持久化清理责任 | Apply 可能远端成功，但响应或本地结果丢失；`UNKNOWN` 表示仍可能需要清理。 | `unknown_saved`、`applied_before_result` 及 Apply/delete 复合窗口 |
-| 旧 Apply 结果不能撤销删除意图 | 可以保存旧观察，但不能把 `PendingDelete` 覆盖为 `Ready`。 | 三个复合窗口及 CAS 契约 |
+| 旧 Apply 结果不能撤销删除意图 | 旧结果版本失效后整笔拒绝，status 与 Deployment 都不更新；保留已有 UNKNOWN。 | 三个复合窗口及 CAS 契约 |
 | discovery 停止且最后一个 Binding 删除后才删除 Scope | 提前删除父对象会丢失清理责任；没有匹配实例的 Active Scope 仍需保留以继续发现。 | 两次崩溃间的部分清理、Repository 生命周期契约 |
 | 恢复过程中再次崩溃仍能继续 | 重启恢复本身并非原子操作。 | 两次崩溃黑盒场景及 `recovery_saved` |
 | 保持 SQLite 跨进程 WAL 锁 | 外部 SQLite reader 不应破坏 SHM 协调或引发 SIGBUS。 | WAL 锁契约、黑盒 `saved()` 的独立只读连接查询 |
@@ -116,7 +116,7 @@ Binding，其 ID 必须保持不变。最后显式删除后，Binding、Scope、
 | --- | --- | --- |
 | `compound_delete_intent` | 远端 Apply 已提交；Scope `Deleting`，Binding 仍为 `Applying`，Deployment `UNKNOWN`。 | 完成 discovery 停止，清理目标。 |
 | `compound_pending_delete` | 远端 Apply 已提交；Scope `Deleting`，Binding `PendingDelete`，Deployment `UNKNOWN`。 | 继续删除，不再次 Apply。 |
-| `compound_observation_saved` | 旧 Apply 的 `Present` 观察已提交，Binding 仍为 `PendingDelete`。 | 保留删除意图，清理已确认目标。 |
+| `compound_result_superseded` | 旧 Apply 结果已被整笔拒绝，Binding 仍为 `PendingDelete`，Deployment 仍为 `UNKNOWN`。 | 按已有责任清理目标，不再次 Apply。 |
 
 每个复合用例还断言远端操作序列严格为 `apply, delete`。
 该文件用两个父测试覆盖 **12 + 3 个窗口**，加上被 Rust harness 收集的 `crash_child`
@@ -130,7 +130,7 @@ Binding，其 ID 必须保持不变。最后显式删除后，Binding、Scope、
 ### 可选白盒事务矩阵
 
 [`fault_points.rs`](../../../v2/crates/asc-policy-repository-sqlite/tests/crash_recovery/fault_points.rs)
-在启用 `fault-injection` 后增加七个父测试，设计覆盖十一个窗口。复用原有子进程、
+在启用 `fault-injection` 后增加六个父测试，覆盖十个窗口。复用原有子进程、
 SIGKILL、真实 Repository/Reconciler 和远端账本。仅子进程配置 fail-rs callback：
 到达断点后确认边界并暂停，父进程杀掉子进程。不以 panic、注入错误或正常事务回滚
 代替进程死亡。
@@ -148,7 +148,6 @@ Scope 准入与实例同步是两个事务。已提交 Scope 尚无 Binding 是�
 | `sql_cas_state_saved` | Binding 状态已保存，尚未执行 write receipt SQL。 | 状态、版本、Deployment、receipt 一起回滚。重放原写入只应用一次。 |
 | `sql_cas_after_transaction` | CAS 已提交，尚未向调用者返回结果。 | 状态与对应 digest/receipt 保留。同一写入重放返回 `AlreadyApplied`，不再次增加版本。 |
 | `sql_unknown_state_saved` | Apply claim 已提交；UNKNOWN 已写入但事务未提交。 | Applying 保留，但无 Deployment 或远端 Apply。恢复后执行一次 Apply，再次重启不重复。 |
-| `compound_sql_observation_saved` | 远端 Apply、Scope 删除及 PendingDelete 已提交；旧 Present 观察已保存但未提交。 | PendingDelete 与 UNKNOWN 保留。恢复只执行 Delete，并清空本地和远端状态。 |
 | `sql_binding_deleted` | 最后一个 Binding 已 DELETE，尚未执行 Scope 最终删除 SQL。 | 回滚后 Binding、Deleting Scope 及 UNKNOWN 清理责任均保留。恢复可能重复 Delete。 |
 | `sql_scope_finalized` | 最后一个 Binding 和 Scope 已删除，事务尚未提交。 | 回滚后两者及清理责任均保留；恢复删除两者及远端目标。 |
 
@@ -168,9 +167,25 @@ Binding、status version 5，以及一个 UNKNOWN Deployment、`lastConfirmed=PR
 场景间串行化保留各场景内部的 Apply/删除交错。失败场景先释放自己的资源，再释放
 guard；后续场景恢复 poisoned mutex，仍会继续执行。没有添加重试或放宽租约检查。
 
-完整 feature 套件十项收集测试全部通过，其中七个新增父测试覆盖全部十一个白盒
-窗口，其余三项为原有两个父测试和子进程 helper。子进程 exec 延迟 100ms、
-`--test-threads=8` 条件下，完整套件同样全部通过，没有排除任何用例。
+完整 feature 套件九项收集测试，其中六个新增父测试覆盖全部十个白盒窗口，
+其余三项为原有两个父测试和子进程 helper。旧观察写入现已不可达，删除了该事务内
+断点，改由 `compound_result_superseded` 验证整笔拒绝后 UNKNOWN 与删除意图保留。
+
+## 存储故障与 Runtime 组合回归
+
+[`storage_faults.rs`](../../../v2/apps/asc-daemon/tests/reconciliation/storage_faults.rs)
+使用真实 SQLite、PCP、Adapter 与多 worker runtime，在 Repository 端口模拟写前 I/O
+失败或提交后 `OutcomeUnknown`。它是组件故障测试，不是 SIGKILL 或真实磁盘故障测试；
+重启分支关闭 runtime、释放 Repository 后重新打开同一数据库。
+
+四个写入边界（claim、UNKNOWN 登记、Apply 结果、最终删除）分别覆盖提交前/后和
+运行中恢复/重开数据库，共十六项。受阻 Binding 的存储写入连续失败六次；另一 Binding
+仍须达到 Ready。Scope 删除不发入队通知，恢复后必须清空其 Binding/Scope；断言原
+write ID 重放、无额外 Apply，以及只在重启丢失 DELETE 结果时重复清理。
+
+另外四项使用默认四次自动重试预算，缩短定时器：先让旧 Apply 遇到四次可重试远端
+失败，再叠加结果写入失败和 Scope 删除；分别验证运行中恢复、重开 DB、正常通知和
+新 Delete 首次失败后仍能重试。旧结果取消后 UNKNOWN 不变，新 Delete 不继承旧预算。
 
 ## 相关契约与已知缺口
 
