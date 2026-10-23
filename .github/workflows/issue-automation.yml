@@ -60,13 +60,18 @@ concurrency:
 jobs:
   triage:
     name: Validate and apply triage
-    runs-on: anolisa-k8s-general-ci-x64
+    runs-on: ${{ github.repository_id == '1197072745' && 'ubuntu-24.04' || 'anolisa-k8s-general-ci-x64' }}
+    outputs:
+      routing_accepted: ${{ steps.triage.outputs.routing_accepted }}
+      component_label: ${{ steps.triage.outputs.component_label }}
+      triage_comment_id: ${{ steps.triage.outputs.triage_comment_id }}
     env:
       AUTOMATION_MODE: ${{ vars.COMMUNITY_AUTOMATION_MODE || 'apply' }}
       MIN_CONFIDENCE: ${{ vars.ISSUE_TRIAGE_MIN_CONFIDENCE || '0.80' }}
       DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
       DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
       ISSUE_TRIAGE_POLICY: ${{ secrets.ISSUE_TRIAGE_POLICY }}
+      NOTIFY_COMPONENT_OWNERS: ${{ github.repository_id == '1197072745' && 'false' || 'true' }}
 
     steps:
       - name: Check out workflow implementation
@@ -198,3 +203,37 @@ jobs:
               commentId: process.env.TRIAGE_COMMENT_ID,
               decisionId: process.env.DECISION_ID,
             });
+
+  sec-core-analysis:
+    name: Dispatch confirmed SecCore analysis
+    needs: triage
+    if: >-
+      !cancelled() &&
+      contains(fromJSON('["1197072745","1195873793"]'), github.repository_id) &&
+      needs.triage.outputs.routing_accepted == 'true' &&
+      needs.triage.outputs.component_label == 'component:sec-core' &&
+      vars.SECCORE_ISSUE_ANALYSIS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Dispatch with the Actions token after input deduplication
+        uses: actions/github-script@v7
+        env:
+          ANALYSIS_ROOT: ${{ runner.temp }}/sec-core-router-dispatch
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_TARGET_REF: ${{ github.event.repository.default_branch }}
+          INPUT_ROUTER_RUN_ID: ${{ github.run_id }}
+          INPUT_ROUTER_COMMENT_ID: ${{ needs.triage.outputs.triage_comment_id }}
+          INPUT_ROUTER_DECISION_ID: ${{ inputs.decision_id }}
+          PUBLISH_ALLOWED: ${{ vars.SECCORE_ISSUE_WRITEBACK_ENABLED == 'true' }}
+        with:
+          script: |
+            const analysis = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/sec-core-issue-analysis.js`);
+            const result = await analysis.dispatchFromRouter({ github, context, core, env: process.env });
+            core.info(JSON.stringify(result));

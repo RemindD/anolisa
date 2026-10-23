@@ -189,6 +189,7 @@ test('dry run performs no GitHub mutations', async () => {
   await triage.run({ ...harness, env: inputEnv({ INPUT_APPLY: 'false' }) });
   assert.deepEqual(harness.calls, []);
   assert.equal(harness.outputs.mutated, 'false');
+  assert.equal(harness.outputs.routing_accepted, 'false');
 });
 
 test('dry run and shadow mode do not retry a pending notification', async () => {
@@ -226,6 +227,7 @@ test('an existing manual component label takes precedence', async () => {
   await triage.run({ ...harness, env: inputEnv() });
   assert.deepEqual(harness.calls, []);
   assert.equal(harness.outputs.mutated, 'false');
+  assert.equal(harness.outputs.routing_accepted, 'false');
 });
 
 test('applies a label and comment without assigning an external reporter', async () => {
@@ -239,6 +241,15 @@ test('applies a label and comment without assigning an external reporter', async
   assert.equal(harness.outputs.mutated, 'true');
   assert.equal(harness.outputs.notification_required, 'true');
   assert.equal(harness.outputs.triage_comment_id, '9001');
+  assert.equal(harness.outputs.routing_accepted, 'true');
+});
+
+test('fork routing can confirm a component without notifying its upstream owners', async () => {
+  const harness = makeHarness();
+  await triage.run({ ...harness, env: inputEnv({ NOTIFY_COMPONENT_OWNERS: 'false' }) });
+  assert.equal(harness.outputs.routing_accepted, 'true');
+  assert.equal(harness.outputs.notification_required, 'false');
+  assert.doesNotMatch(harness.calls.find(([name]) => name === 'createComment')[1].body, /@chengshuyi|@jfeng18/);
 });
 
 test('assigns component owners for an allowlisted reporter', async () => {
@@ -295,6 +306,7 @@ test('does not apply a low-confidence decision', async () => {
   });
   assert.deepEqual(harness.calls, []);
   assert.equal(harness.outputs.mutated, 'false');
+  assert.equal(harness.outputs.routing_accepted, 'false');
 });
 
 test('ignores a forged decision marker from an untrusted commenter', async () => {
@@ -316,6 +328,7 @@ test('ignores a forged decision marker from an untrusted commenter', async () =>
 
 test('trusted decision marker retries an incomplete notification', async () => {
   const harness = makeHarness({
+    labels: ['component:sight'],
     assignees: ['chengshuyi'],
     comments: [
       {
@@ -331,6 +344,15 @@ test('trusted decision marker retries an incomplete notification', async () => {
   assert.equal(harness.outputs.notification_required, 'true');
   assert.equal(harness.outputs.triage_comment_id, '42');
   assert.equal(harness.outputs.assigned, 'chengshuyi');
+  assert.equal(harness.outputs.routing_accepted, 'true');
+});
+
+test('an old routing marker does not authorize analysis after the component label is removed', async () => {
+  const harness = makeHarness({ comments: [{ id: 42, user: { login: 'github-actions[bot]' },
+    body: '<!-- anolisa-ai-triage:anolisa-2262-v1 -->' }] });
+  await triage.run({ ...harness, env: inputEnv() });
+  assert.equal(harness.outputs.routing_accepted, 'false');
+  assert.equal(harness.outputs.mutated, 'false');
 });
 
 test('notification marker suppresses a duplicate notification', async () => {
