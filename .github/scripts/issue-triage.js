@@ -239,6 +239,7 @@ async function run({ github, context, core, env }) {
   );
   const component = selectComponent(metadata, decision.component);
   const owners = selectTriagers(metadata, component);
+  const notifyOwners = env.NOTIFY_COMPONENT_OWNERS !== 'false';
   const minimumConfidence = Number(env.MIN_CONFIDENCE || '0.80');
   if (!Number.isFinite(minimumConfidence) || minimumConfidence < 0 || minimumConfidence > 1) {
     throw new Error('ISSUE_TRIAGE_MIN_CONFIDENCE must be between 0 and 1');
@@ -267,6 +268,7 @@ async function run({ github, context, core, env }) {
   core.setOutput('mutated', 'false');
   core.setOutput('notification_required', 'false');
   core.setOutput('triage_comment_id', '');
+  core.setOutput('routing_accepted', 'false');
 
   const currentLabels = (issue.labels || []).map((label) =>
     typeof label === 'string' ? label : label.name
@@ -322,8 +324,9 @@ async function run({ github, context, core, env }) {
     const notificationRequired = !(triageComment.body || '').includes(
       notificationMarker
     );
-    core.setOutput('notification_required', String(notificationRequired));
+    core.setOutput('notification_required', String(notifyOwners && notificationRequired));
     core.setOutput('triage_comment_id', String(triageComment.id));
+    core.setOutput('routing_accepted', String(currentComponents.includes(component.label)));
     core.notice(`Decision ${decision.decisionId} was already applied.`);
     await writeSummary(core, [
       ['Status', 'already applied'],
@@ -358,7 +361,7 @@ async function run({ github, context, core, env }) {
     }
   }
 
-  const ownerMentions = owners.length
+  const ownerMentions = !notifyOwners ? 'Owner notifications disabled for this run.' : owners.length
     ? owners.map((login) => `@${login}`).join(' ')
     : 'No component owner is currently configured.';
   const assignmentText = assigned.length
@@ -390,8 +393,9 @@ async function run({ github, context, core, env }) {
 
   core.setOutput('assigned', assigned.join(','));
   core.setOutput('mutated', 'true');
-  core.setOutput('notification_required', 'true');
+  core.setOutput('notification_required', String(notifyOwners));
   core.setOutput('triage_comment_id', String(commentResponse.data.id));
+  core.setOutput('routing_accepted', 'true');
   await writeSummary(core, [
     ['Status', 'applied'],
     ['Issue', `#${decision.issueNumber}`],

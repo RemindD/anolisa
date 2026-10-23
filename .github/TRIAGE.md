@@ -115,3 +115,124 @@ behavior prevents a misspelled incident-response setting from enabling writes.
 `Issue Router` also accepts an `apply` input. Set it to `false` for a single
 dry run even when the repository mode is `apply`. The default repository mode
 is `apply`; set it to `shadow` for incident response or a non-mutating trial.
+
+## SecCore analysis after Issue Router
+
+`AI / SecCore Issue Analysis` analyzes one Issue in the verified
+`agentic-os-org/ANOLISA` repository or the `RemindD/anolisa` pilot fork.
+It recommends a priority, explains impact, and optionally runs an approved
+functional component PoC. Use synthetic or non-sensitive reports; cybersecurity
+testing and private vulnerability intake are outside this workflow.
+
+### Configuration and manual runs
+
+1. Put the workflow on the default branch and enable Issues in the fork.
+   Ensure `component:sec-core` and `priority:p0` through `priority:p3` exist,
+   with the current definitions from `.github/labels.json`.
+2. Add `QODER_PERSONAL_ACCESS_TOKEN` as an Actions repository secret using
+   [Qoder Integrations](https://qoder.com/account/integrations). No GitHub App
+   or developer login-cache copy is required.
+3. To enable Router-triggered analysis, set repository variable
+   `SECCORE_ISSUE_ANALYSIS_ENABLED=true`. Also set
+   `SECCORE_ISSUE_WRITEBACK_ENABLED=true` to authorize automatic publication.
+
+A repository writer can manually analyze an explicit Issue:
+
+```bash
+gh workflow run sec-core-issue-analysis.yml --repo RemindD/anolisa \
+  --ref main -f issue_number=12 -f target_ref=main -f publish=false
+```
+
+`--ref` selects the workflow; `target_ref` selects the source and resolves once
+to a full SHA. The default `publish=false` produces artifacts without writing
+to the Issue. Explicit `publish=true` authorizes publication for that manual run.
+
+### Router handoff
+
+Router dispatches analysis only after accepting `component:sec-core` with
+analysis enabled. Low confidence, dry runs, conflicts, and other components do
+not qualify. Accepted routing remains valid if owner notification fails; owner
+notifications are disabled in the pilot fork.
+
+The built-in `GITHUB_TOKEN` starts analysis as `github-actions[bot]`. Analysis
+and publication verify the same-repository default-branch Router run, its bot
+decision comment, and the current open SecCore Issue. External Issue authors
+are eligible. Creation, edit, comment, and label events do not start analysis
+independently; the external dispatcher still supplies the component decision.
+
+Router checks for a published result matching the source, rules, Issue, and
+discussion before dispatch. Analysis checks again before invoking the model.
+Notification bookkeeping does not change this fingerprint. Incomplete runs
+remain retryable, and manual dispatch permits explicit reanalysis. The workflow
+has no persistent queue, complete-query discovery, or automatic reconciliation.
+
+### Results and publication
+
+The comment shows priority and its reason, impact, and actual PoC status.
+Source and full-report links are folded into details. The report adds the
+supported and unverified effects and up to three key evidence links. A next
+step appears only for a review objection, blocked verification, or unresolved
+priority. Full snapshots, analysis, review, execution logs, writeback records, and
+file hashes remain in the seven-day artifact.
+
+Only captured Issue priority rules define grades. Missing or conflicting rules
+leave priority unresolved. Refuted claims receive an explanation without a
+priority; inactive or out-of-scope reports are not published. A review objection
+keeps the proposal visible but withholds its label. P0/P1 recommends human review.
+
+Publication uses a separate job without the model credential. It rechecks the
+Issue, discussion, rules, and authorization, then adds an absent priority and
+creates or updates this pipeline's comment. It preserves unrelated labels and
+comments, stops on conflicting priorities or changed inputs, skips identical
+published summaries, and reads back its writes. Failed publication does not
+invalidate the analysis; inspect `writeback-results.json` before retrying.
+
+### PoC and review
+
+The approved `sqlite_maintenance_gate` profile uses the real frozen
+`asc-sqlite-kernel` code with synthetic NaN and finite marker inputs. It runs the
+component baseline, selected case, and three controls. `poc.json` records actual
+execution, observations, logs, and cleanup. Other reports explain why no profile
+applies. Build failures remain blocked. Component results do not establish
+daemon/CLI integration, production impact, or a fix.
+
+Routine decisions use a self-check in the analysis call. P0/P1, a material
+self-check objection, ambiguous priority authority, failed PoC assertions, or a
+contradictory PoC result trigger a focused review. This uses the same agent;
+it is not independent review. One material revision is allowed. Source hashes,
+quotes, ranges, and rule references are checked deterministically for each result.
+
+### Runtime and debugging
+
+The model uses pinned Qoder CLI `1.1.77` with the `auto` model alias, Read/Grep/Glob,
+and Write restricted to its JSON result directory. Source and inputs are
+read-only; no GitHub credential, shell tool, repository agent configuration,
+or MCP server is available. The separate functional executor receives neither
+GitHub nor model credentials and disconnects external networking before tests.
+Resource limits live in the [analysis controller](scripts/sec-core-issue-analysis.js)
+and [PoC executor](scripts/sec-core-issue-poc.js).
+
+Model calls have no separate timeout by default (`AGENT_TIMEOUT_SECONDS=0`);
+the analysis job has a 180-minute deadline. Heartbeats appear every 60 seconds.
+Sanitized event traces retain tool timing without model text or tool arguments;
+execution records retain a redacted diagnostic tail and container cleanup status.
+Parsed results rejected by validation may be repaired once with its feedback. Interrupted
+or rejected candidates are diagnostic only and cannot be published.
+
+### Checking changes
+
+Run the existing credential-free checks; relevant pushes run them in Actions:
+
+```bash
+node --test .github/scripts/sec-core-issue-analysis.test.js .github/scripts/issue-triage.test.js .github/scripts/issue-claim.test.js
+```
+
+For a real-model check, freeze the source and rules, then use a synthetic NaN
+marker report and a false expired-finite-marker report with `publish=false`.
+Check the finding, priority reason, impact boundary, and truthful PoC status;
+wording need not match exactly. Verify that another component skips analysis
+and replaying the same Router decision does not duplicate analysis or comments.
+
+Unset `SECCORE_ISSUE_ANALYSIS_ENABLED` to stop automatic analysis, or unset
+`SECCORE_ISSUE_WRITEBACK_ENABLED` to stop automatic publication. Archive useful
+acceptance and failure artifacts before their seven-day retention expires.
