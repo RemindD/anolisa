@@ -91,6 +91,10 @@ currently executes only file-deletion block rules. Scopes save immutable Policy 
 own automatic Binding creation, reconciliation and cleanup. To authorize non-root Policy CLI callers, configure
 the daemon with `--policy-admin-uid <UID>`; default authorization remains root-only.
 
+**Breaking change:** `scope create --cgroup-id` has been removed because cgroup
+assignments were not supported. Update scripts to select the intended processes
+with `--pid`, `--process-name`, or `--executable`.
+
 V2 uses native OTel for local log correlation only; it exposes no OTLP exporter.
 Pass Agent attribution through the existing `--trace-context` JSON option, or an
 upstream W3C parent through `--otel-context` (version 1). `RUST_LOG=info` enables

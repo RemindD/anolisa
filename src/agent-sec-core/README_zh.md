@@ -80,6 +80,9 @@ PolicyTemplate 是包含通用规则的可复用策略；AgentSight Adapter 当�
 Scope 保存不可变策略快照，拥有自动 Binding 创建、下发和清理生命周期。
 可通过 daemon 的 `--policy-admin-uid <UID>` 授权非 root Policy CLI 调用者；默认仍只授权 root。
 
+**兼容性变更（Breaking change）**：移除 `scope create --cgroup-id`，此前不支持 cgroup
+assignment。请更新脚本，使用 `--pid`、`--process-name` 或 `--executable` 选择目标进程。
+
 V2 原生 OTel 目前仅用于本地日志关联，不提供公开 OTLP exporter。
 现有 `--trace-context` JSON 传入 Agent 归属；`--otel-context`（version 1）传入上游
 W3C 链路。`RUST_LOG=info` 开启 stderr 有界关联诊断，参阅
