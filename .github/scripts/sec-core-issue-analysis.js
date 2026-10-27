@@ -62,14 +62,10 @@ async function authorizeActor(github, context) {
   return actor.permission;
 }
 
-function priorityRules(configured, live) {
+function priorityRules(labels) {
   return PRIORITIES.map((label) => {
-    const committed = (configured.labels || []).find((item) => item.name === label);
-    const current = live.find((item) => item.name === label);
-    const definition = committed?.description || current?.description || '';
-    const conflict = Boolean(committed?.description && current?.description &&
-      committed.description.trim() !== current.description.trim());
-    const rule = { label, definition, committed: committed || null, live: current || null, conflict };
+    const definition = labels.find((item) => item.name === label)?.description;
+    const rule = { label, definition: typeof definition === 'string' ? definition.trim() : '' };
     return { rule_id: `priority:${sha256(JSON.stringify(rule))}`, ...rule };
   });
 }
@@ -122,16 +118,6 @@ async function prepare({ github, context, core, env }) {
     .filter((comment) => comment.user?.login === 'github-actions[bot]' &&
       comment.body?.startsWith(`<!-- sec-core-analysis:${issue.id}:`));
   const labels = await github.paginate(github.rest.issues.listLabelsForRepo, { ...context.repo, per_page: 100 });
-  let configured = { labels: [] };
-  try {
-    const { data: file } = await github.rest.repos.getContent({
-      ...context.repo, path: '.github/labels.json', ref: commit.sha,
-    });
-    check(file.type === 'file' && file.encoding === 'base64', 'Invalid committed label configuration');
-    configured = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8'));
-  } catch (error) {
-    if (error.status !== 404) throw error;
-  }
   const { data: latest } = await github.rest.issues.get(params);
   check(!latest.pull_request && issueRevision(latest) === issueRevision(issue),
     'Issue changed during collection; rerun to obtain a fresh snapshot');
@@ -144,8 +130,7 @@ async function prepare({ github, context, core, env }) {
     comments, labels,
     target: { requested_ref: requestedRef, source_commit_sha: commit.sha },
     scope: { architecture: 'SecCore V2', entrypoints: ENTRYPOINTS },
-    rules: priorityRules(configured, labels),
-    committed_label_configuration: configured,
+    rules: priorityRules(labels),
     captured_at_utc: capturedAt,
     discovery: {
       candidate_count: 1, issue_ids: [issue.id], selection: `explicit issue #${number}`,
@@ -160,7 +145,6 @@ async function prepare({ github, context, core, env }) {
   const agentSnapshot = { ...snapshot };
   delete agentSnapshot.comments;
   delete agentSnapshot.labels;
-  delete agentSnapshot.committed_label_configuration;
   writeJson(path.join(root, 'input/snapshot.json'), agentSnapshot);
   writeJson(path.join(root, 'input/agent-snapshot.json'), agentSnapshot);
   writeJson(path.join(root, 'output/agent-snapshot.json'), agentSnapshot);
@@ -329,8 +313,8 @@ function validateAnalysis(value, snapshot, sourceRoot, manifest) {
   if (value.priority.label !== null) {
     check(['in_scope', 'partially_in_scope'].includes(value.scope.status) && value.disposition === 'active',
       'Only active in-scope issues can receive a priority suggestion');
-    check(snapshot.rules.every((rule) => rule.definition && !rule.conflict),
-      'Missing or conflicting priority definitions require an unresolved priority');
+    check(snapshot.rules.every((rule) => rule.definition),
+      'Missing GitHub priority definitions require an unresolved priority');
     const rank = PRIORITIES.indexOf(value.priority.label);
     const adjacent = PRIORITIES.slice(Math.max(0, rank - 1), rank + 2);
     check(snapshot.rules.filter((rule) => adjacent.includes(rule.label))
@@ -790,8 +774,11 @@ async function publish({ github, context, core, env }) {
       return result;
     }
     const labels = await github.paginate(github.rest.issues.listLabelsForRepo, { ...context.repo, per_page: 100 });
-    check(JSON.stringify(priorityRules(snapshot.committed_label_configuration, labels)) === JSON.stringify(snapshot.rules),
-      'Priority rules changed during analysis; rerun before publication');
+    if (expectedPriority) {
+      check(labels.some((label) => label.name === expectedPriority), 'Suggested label does not exist');
+      check(JSON.stringify(priorityRules(labels)) === JSON.stringify(snapshot.rules),
+        'Priority definitions changed during analysis; rerun before publication');
+    }
     const { data: current } = await github.rest.issues.get(params);
     const names = current.labels.map((label) => label.name);
     const expectedOperations = [
@@ -817,7 +804,6 @@ async function publish({ github, context, core, env }) {
     const body = `${marker}\n${comment}`;
     check(body.length <= PUBLICATION_BUDGET, 'Summary exceeds the publication budget; use the artifact');
     if (expectedPriority && !names.includes(expectedPriority)) {
-      check(labels.some((label) => label.name === expectedPriority), 'Suggested label does not exist');
       await github.rest.issues.addLabels({ ...params, labels: [expectedPriority] });
       result.operations.push({ action: 'add_label', label: expectedPriority });
     }

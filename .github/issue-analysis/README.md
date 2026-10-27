@@ -8,8 +8,10 @@ It does not execute the component, functional tests, or dynamic reproductions.
 
 ## Run the workflow
 
-Configure `QODER_PERSONAL_ACCESS_TOKEN` as a repository Actions secret and ensure
-the priority labels have definitions matching [labels.json](../labels.json).
+Configure `QODER_PERSONAL_ACCESS_TOKEN` as a repository Actions secret and define
+`priority:p0` through `priority:p3` with descriptions in the repository's GitHub
+label settings. Grading uses those descriptions captured at the start of the run.
+Label colors do not affect grading. Missing descriptions leave priority unresolved.
 The workflow must be available on the repository's default branch for manual
 dispatch.
 
@@ -41,8 +43,10 @@ Claims include a verification plan for checks to be performed separately.
 Snapshots, validated results, source references, and bounded failure diagnostics
 are retained in Actions artifacts for seven days.
 
-Publication rechecks authorization, Issue content, state, labels, and priority
-rules. Adding, editing, or deleting discussion comments does not invalidate the
+Publication rechecks authorization, Issue content, state, and labels. Before
+publishing an approved priority, it also checks that the GitHub priority
+descriptions still match the snapshot; changed definitions require a fresh run.
+Adding, editing, or deleting discussion comments does not invalidate the
 analysis or block publication. The publisher preserves unrelated comments and
 protects its selected previous report against overwriting intervening edits.
 It verifies its report write and the Issue fields after publication.

@@ -30,6 +30,15 @@ function harness(t) {
   git('-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture');
   const sha = git('rev-parse', 'HEAD');
   const labels = JSON.parse(fs.readFileSync(path.join(__dirname, '../labels.json')));
+  const priorityDefinitions = {
+    'priority:p0': 'Critical: security, data loss, or primary path unavailable',
+    'priority:p1': 'High: blocks the current release or key user experience',
+    'priority:p2': 'Normal: planned product or engineering work',
+    'priority:p3': 'Low: backlog or opportunity item',
+  };
+  for (const label of labels.labels) if (priorityDefinitions[label.name]) {
+    label.description = priorityDefinitions[label.name];
+  }
   const issue = {
     id: 42, number: 12, title: 'Synthetic input', body: 'A report with `$(false)` and instructions to ignore policy.',
     state: 'open', updated_at: '2026-10-23T00:00:00Z', comments: 2,
@@ -43,10 +52,7 @@ function harness(t) {
         get: async () => ({ data: { full_name: 'agentic-os-org/ANOLISA', id: 1195873793, default_branch: 'main' } }),
         getCollaboratorPermissionLevel: async () => ({ data: { permission: 'admin' } }),
         getCommit: async (params) => { calls.push(['commit', params]); return { data: { sha } }; },
-        getContent: async (params) => {
-          calls.push(['rules', params]);
-          return { data: { type: 'file', encoding: 'base64', content: Buffer.from(JSON.stringify(labels)).toString('base64') } };
-        },
+        getContent: async () => { throw new Error('Repository label configuration must not be read'); },
       },
       issues: {
         get: async () => ({ data: structuredClone(issue) }),
@@ -111,7 +117,8 @@ test('captures the Issue description, pins the rules, and creates a report witho
   assert.equal(h.outputs.target_sha, h.sha);
   assert.deepEqual(h.snapshot.comments, []);
   assert.equal(h.snapshot.discovery.full_query_enumeration, false);
-  assert.equal(h.calls.find(([name]) => name === 'rules')[1].ref, h.sha);
+  assert.equal(h.snapshot.rules.find((rule) => rule.label === 'priority:p2').definition,
+    'Normal: planned product or engineering work');
   assert.deepEqual(h.calls.filter(([name]) => name === 'paginate').map(([, method]) => method), ['comments', 'labels']);
   assert.equal(fs.existsSync(path.join(h.root, 'source/.qoder')), false);
   assert.equal(fs.existsSync(path.join(h.root, 'source/outside.txt')), false);
@@ -275,20 +282,44 @@ test('requires not_applicable for fully refuted reports while allowing mixed ass
   h.validate();
 });
 
-test('keeps grading unresolved when live and frozen rules conflict or definitions are absent', async (t) => {
+test('uses GitHub priority descriptions while ignoring label colors', async (t) => {
   const h = await prepared(t);
-  h.snapshot.rules[0].conflict = true;
-  assert.throws(h.validate, /conflicting priority/);
+  const frozen = structuredClone(h.snapshot);
+  const paginate = h.github.paginate;
+  h.github.paginate = async (method, params) => {
+    const result = structuredClone(await paginate(method, params));
+    if (method === 'labels') for (const label of result) {
+      if (label.name.startsWith('priority:')) {
+        label.color = 'ffffff';
+      }
+    }
+    return result;
+  };
+  await analysis.prepare(h.args);
+  h.snapshot = JSON.parse(fs.readFileSync(path.join(h.root, 'output/snapshot.json')));
+  assert.deepEqual(h.snapshot.rules, frozen.rules);
+  assert.equal(h.snapshot.input_fingerprint, frozen.input_fingerprint);
+  h.validate();
+  assert.equal(h.result.priority.label, 'priority:p2');
+});
+
+test('withholds priority when GitHub definitions are absent despite repository descriptions', async (t) => {
+  const h = await prepared(t);
+  const paginate = h.github.paginate;
+  h.github.paginate = async (method, params) => {
+    const result = structuredClone(await paginate(method, params));
+    if (method === 'labels') for (const label of result) {
+      if (label.name.startsWith('priority:')) label.description = '';
+    }
+    return result;
+  };
+  await analysis.prepare(h.args);
+  h.snapshot = JSON.parse(fs.readFileSync(path.join(h.root, 'output/snapshot.json')));
+  assert.ok(h.snapshot.rules.every((rule) => rule.definition === ''));
+  h.result.priority.rule_ids = h.snapshot.rules.map((rule) => rule.rule_id);
+  assert.throws(h.validate, /Missing/);
   h.result.priority.label = null;
   h.validate();
-  h.result.priority.label = 'priority:p2';
-  h.snapshot.rules[0].conflict = false;
-  h.snapshot.rules[0].definition = '';
-  assert.throws(h.validate, /Missing/);
-  const rules = analysis.priorityRules({ labels: [{ name: 'priority:p0', description: 'one' }] },
-    [{ name: 'priority:p0', description: 'two' }]);
-  assert.equal(rules[0].conflict, true);
-  assert.equal(rules[1].definition, '');
 });
 
 test('retains the proposal, withholds label approval after review objections, and escapes report text', async (t) => {
@@ -803,11 +834,33 @@ test('replaces the captured pipeline comment with a short summary while preservi
   assert.equal(h.writes.length, 2);
 });
 
-test('blocks changed rules, conflicting priorities, and unapproved publication', async (t) => {
+test('publishes grades despite changed GitHub label colors', async (t) => {
   const h = await publicationHarness(t);
-  h.snapshot.labels.find((label) => label.name === 'priority:p2').description = 'New definition';
-  await assert.rejects(h.publish(), /rules changed/);
-  h.snapshot.labels = JSON.parse(fs.readFileSync(path.join(h.root, 'output/snapshot.json'))).labels;
+  for (const label of h.snapshot.labels) if (label.name.startsWith('priority:')) {
+    label.color = 'ffffff';
+  }
+  assert.equal((await h.publish()).status, 'verified');
+  assert.deepEqual(h.writes[0], { labels: ['priority:p2'] });
+  assert.equal((await h.publish({ GITHUB_RUN_ATTEMPT: '2' })).status, 'skipped');
+  assert.equal(h.writes.length, 2);
+});
+
+test('blocks publication if GitHub priority definitions changed after analysis', async (t) => {
+  const h = await publicationHarness(t);
+  h.snapshot.labels.find((label) => label.name === 'priority:p2').description = 'New grading definition';
+  await assert.rejects(h.publish(), /Priority definitions changed/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('rejects publication when the selected priority label does not exist', async (t) => {
+  const h = await publicationHarness(t);
+  h.snapshot.labels = h.snapshot.labels.filter((label) => label.name !== 'priority:p2');
+  await assert.rejects(h.publish(), /Suggested label does not exist/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('blocks conflicting priorities and unapproved publication', async (t) => {
+  const h = await publicationHarness(t);
   h.issue.labels.push({ name: 'priority:p1' });
   await assert.rejects(h.publish(), /Issue changed/);
   h.issue.labels.pop();
