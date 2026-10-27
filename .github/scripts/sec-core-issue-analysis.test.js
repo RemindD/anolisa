@@ -22,6 +22,9 @@ function harness(t) {
     fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(directory, 'Cargo.toml'), `[package]\nname = "${entry}"\n`);
   }
+  const legacy = path.join(checkout, 'src/agent-sec-core/agent-sec-cli/src/agent_sec_cli');
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, '__main__.py'), 'from agent_sec_cli.cli import main\nmain()\n');
   fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'Use the real product entrypoint.\n');
   fs.mkdirSync(path.join(checkout, '.qoder'));
   fs.writeFileSync(path.join(checkout, '.qoder/settings.json'), '{"hooks":"untrusted"}');
@@ -110,6 +113,26 @@ async function prepared(t) {
   h.result.self_review = { verdict: h.review.verdict, summary: h.review.summary, challenges: h.review.challenges, unresolved: h.review.unresolved };
   h.validate = () => analysis.validateAnalysis(h.result, h.snapshot, path.join(h.root, 'source'), h.manifest);
   return h;
+}
+
+function v1OnlyResult(h) {
+  return { ...h.result,
+    scope: { status: 'v1_only', reason: 'The reported entrypoint belongs only to the legacy Python CLI.' },
+    problem_type: 'not_applicable', claims: [],
+    summary: { conclusion: 'The report targets the legacy V1 CLI.',
+      impact: 'V1-only report; defect validity and impact were not assessed.',
+      priority_reason: 'P3 under the V1-only backlog policy.' },
+    evidence: [{ id: 'E01', kind: 'static',
+      path: 'src/agent-sec-core/agent-sec-cli/src/agent_sec_cli/__main__.py',
+      line_start: 1, line_end: 2, quote: 'from agent_sec_cli.cli import main',
+      supports: 'The reported Python entrypoint belongs to V1.',
+      does_not_establish: 'The reported defect or its impact; no V2 reachability established.' }],
+    priority: { ...h.result.priority, label: 'priority:p3',
+      rationale: 'Confirmed V1-only reports remain low-priority backlog work.',
+      upgrade_conditions: 'Source establishes that the reported path also affects V2.' },
+    self_review: { ...h.result.self_review,
+      summary: 'Checked the V1-only scope; P3 records backlog priority, not a verified defect.' },
+  };
 }
 
 test('captures the Issue description, pins the rules, and creates a report without writes', async (t) => {
@@ -279,6 +302,38 @@ test('requires not_applicable for fully refuted reports while allowing mixed ass
   h.validate();
   h.result.claims.push({ ...h.result.claims[0], id: 'C02', assessment: 'supported_by_source' });
   h.result.problem_type = 'mixed';
+  h.validate();
+});
+
+test('accepts V1-only backlog triage with scope evidence and only P3', async (t) => {
+  const h = await prepared(t);
+  const original = structuredClone(h.result);
+  const v1 = v1OnlyResult(h);
+  h.result = structuredClone(v1);
+  h.validate();
+  fs.writeFileSync(path.join(h.root, 'input/analysis.json'), JSON.stringify(h.result));
+  fs.writeFileSync(path.join(h.root, 'input/review.json'), JSON.stringify(analysis.inlineReview(h.result)));
+  assert.match(analysis.finish(h.root), /Suggested priority: priority:p3/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.root, 'output/writeback-plan.json'))).operations, []);
+  for (const priority of [null, 'priority:p0', 'priority:p1', 'priority:p2']) {
+    h.result = structuredClone(v1);
+    h.result.priority.label = priority;
+    assert.throws(h.validate, /V1-only.*priority:p3/);
+  }
+  for (const [mutate, expected] of [
+    [(value) => { value.problem_type = 'bug'; }, /V1-only triage/],
+    [(value) => { value.claims = original.claims; }, /V1-only triage/],
+    [(value) => { value.evidence = []; value.key_evidence_ids = []; }, /V1-only.*evidence/],
+    [(value) => { value.scope.status = 'scope_unresolved'; }, /Only active in-scope/],
+    [(value) => { value.scope.status = 'out_of_scope'; value.disposition = 'out_of_scope'; }, /Only active in-scope/],
+  ]) {
+    h.result = structuredClone(v1);
+    mutate(h.result);
+    assert.throws(h.validate, expected);
+  }
+  h.result = structuredClone(v1);
+  h.snapshot.rules = analysis.priorityRules(h.snapshot.labels.map((label) => ({ ...label, description: '' })));
+  h.result.priority.rule_ids = h.snapshot.rules.map((rule) => rule.rule_id);
   h.validate();
 });
 
@@ -887,6 +942,50 @@ test('publishes a refuted in-scope claim without assigning a priority', async (t
   assert.equal(h.writes.length, 1);
   assert.match(h.writes[0].body, /Priority: not applicable \(reported claim refuted\)/);
   assert.ok(!h.issue.labels.some((label) => label.name.startsWith('priority:')));
+});
+
+test('publishes and retries a V1-only P3 decision without claiming defect verification', async (t) => {
+  const h = await publicationHarness(t);
+  h.result = v1OnlyResult(h);
+  h.result.summary.impact += ` ${'<'.repeat(900)}`;
+  h.result.summary.priority_reason += ` ${'&'.repeat(900)}`;
+  h.validate();
+  h.review = analysis.inlineReview(h.result);
+  for (const directory of ['input', 'output']) {
+    fs.writeFileSync(path.join(h.root, directory, 'analysis.json'), JSON.stringify(h.result));
+    fs.writeFileSync(path.join(h.root, directory, 'review.json'), JSON.stringify(h.review));
+  }
+  fs.writeFileSync(path.join(h.root, 'output/review-execution.json'), JSON.stringify({
+    validation: 'passed', execution_kind: 'inline_self_review' }));
+  const report = analysis.finish(h.root);
+  assert.match(report, /Suggested priority: priority:p3/);
+  assert.match(report, /V1-only backlog triage; the reported problem was not verified/);
+  assert.equal((await h.publish()).status, 'verified');
+  assert.deepEqual(h.writes[0], { labels: ['priority:p3'] });
+  assert.match(h.writes[1].body, /Priority: priority:p3/);
+  assert.match(h.writes[1].body, /V1-only backlog triage; the reported problem was not verified/);
+  assert.ok(h.writes[1].body.length <= 1600);
+  assert.equal((await h.publish({ GITHUB_RUN_ATTEMPT: '2' })).status, 'skipped');
+  assert.equal(h.writes.length, 2);
+});
+
+test('keeps unknown scope unresolved and withholds publication', async (t) => {
+  const h = await publicationHarness(t);
+  h.result.scope.status = 'scope_unresolved';
+  h.result.disposition = 'scope_unresolved';
+  h.result.priority.label = null;
+  h.result.claims = [];
+  h.validate();
+  for (const directory of ['input', 'output']) {
+    fs.writeFileSync(path.join(h.root, directory, 'analysis.json'), JSON.stringify(h.result));
+  }
+  const report = analysis.finish(h.root);
+  assert.match(report, /Suggested priority: unresolved/);
+  const plan = JSON.parse(fs.readFileSync(path.join(h.root, 'output/writeback-plan.json')));
+  assert.equal(plan.approved_priority, null);
+  assert.deepEqual(plan.operations, []);
+  assert.equal((await h.publish()).status, 'skipped');
+  assert.deepEqual(h.writes, []);
 });
 
 test('shows a provisional grade, reason, review objection, and source-only scope without applying an unapproved label', async (t) => {

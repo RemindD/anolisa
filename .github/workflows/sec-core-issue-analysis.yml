@@ -17,6 +17,20 @@ on:
         required: true
         default: false
         type: boolean
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      target_ref:
+        default: main
+        type: string
+      publish:
+        default: false
+        type: boolean
+    secrets:
+      QODER_PERSONAL_ACCESS_TOKEN:
+        required: true
 
 permissions:
   contents: read

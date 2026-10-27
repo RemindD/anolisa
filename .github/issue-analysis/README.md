@@ -1,12 +1,12 @@
-# Manual SecCore Issue source analysis
+# SecCore Issue source analysis
 
 Repository writers can analyze one Issue's title and body in
-`agentic-os-org/ANOLISA` against a frozen SecCore V2 source snapshot.
+`agentic-os-org/ANOLISA` against a frozen source snapshot, focusing on SecCore V2.
 Discussion comments are excluded from analysis. The workflow checks source
 references and priority rules, performs same-agent review, and produces a report.
 It does not execute the component, functional tests, or dynamic reproductions.
 
-## Run the workflow
+## Run the workflow manually
 
 Configure `QODER_PERSONAL_ACCESS_TOKEN` as a repository Actions secret and define
 `priority:p0` through `priority:p3` with descriptions in the repository's GitHub
@@ -32,10 +32,26 @@ gh workflow run sec-core-issue-analysis.yml \
 `--ref` selects the workflow version; `target_ref` selects the source and is
 resolved once to a full SHA. An Issue with any existing `priority:*` label is
 skipped before source collection or model calls, for either value of `publish`.
-The skipped run records its reason in `run.json`. Issue Router and Issue events
-do not trigger analysis.
+The skipped run records its reason in `run.json`.
+
+## Automatic analysis after Issue Router
+
+Issue Router calls this workflow after applying a new `sec-core` routing
+decision, using the routed Issue number, `target_ref=main`, and `publish=true`.
+The original dispatcher must have repository write, maintain, or admin access.
+Dry runs, shadow mode, low confidence, conflicting manual component labels,
+and repeated decisions do not start analysis. Existing `priority:*` labels
+still skip analysis before model calls. A later owner notification failure
+does not block analysis of an applied route; cancelled runs do not start it.
+Use **Re-run failed jobs** to retry failed analysis or publication rather than
+dispatching the same routing decision again.
 
 ## Reports and publication
+
+Active Issues confirmed by source to affect only legacy V1 receive `priority:p3`
+and a comment explaining the V1-only backlog classification. This does not
+verify the reported defect or its impact. Unknown version scope remains
+unresolved and receives no priority; shared code affecting V2 is graded normally.
 
 Reports and comments state that the finding is based on source analysis only;
 no dynamic reproduction or functional tests were executed for that Issue.
