@@ -238,6 +238,11 @@ function parseCliResult(raw) {
   return packet;
 }
 
+function isPublishable(analysis) {
+  return analysis.disposition === 'active' &&
+    ['in_scope', 'partially_in_scope', 'v1_only'].includes(analysis.scope.status);
+}
+
 function validateAnalysis(value, snapshot, sourceRoot, manifest) {
   check(value.issue_number === snapshot.issue.number, 'Result refers to a different issue');
   check(value.source_commit_sha === snapshot.target.source_commit_sha, 'Result refers to a different commit');
@@ -248,7 +253,7 @@ function validateAnalysis(value, snapshot, sourceRoot, manifest) {
       `summary.${field} must omit internal IDs and stay within the 1000-character input limit`);
   }
   object(value.scope, 'scope');
-  choice(value.scope.status, ['in_scope', 'partially_in_scope', 'out_of_scope', 'scope_unresolved'], 'scope');
+  choice(value.scope.status, ['in_scope', 'partially_in_scope', 'v1_only', 'out_of_scope', 'scope_unresolved'], 'scope');
   text(value.scope.reason, 'scope.reason');
   choice(value.disposition, ['active', 'fixed', 'withdrawn', 'duplicate', 'out_of_scope', 'scope_unresolved'], 'disposition');
   text(value.disposition_reason, 'disposition_reason');
@@ -310,18 +315,28 @@ function validateAnalysis(value, snapshot, sourceRoot, manifest) {
   for (const field of ['rationale', 'not_higher', 'not_lower', 'upgrade_conditions', 'downgrade_conditions']) {
     text(value.priority[field], `priority.${field}`);
   }
+  const v1Only = value.scope.status === 'v1_only';
+  if (v1Only) {
+    check(value.problem_type === 'not_applicable' && value.claims.length === 0,
+      'V1-only triage must classify scope without claiming defect verification');
+    check(value.evidence.length > 0, 'V1-only triage requires source evidence for its scope');
+    if (value.disposition === 'active') check(value.priority.label === 'priority:p3',
+      'Active V1-only issues must receive priority:p3 backlog triage');
+  }
   if (value.priority.label !== null) {
-    check(['in_scope', 'partially_in_scope'].includes(value.scope.status) && value.disposition === 'active',
-      'Only active in-scope issues can receive a priority suggestion');
-    check(snapshot.rules.every((rule) => rule.definition),
-      'Missing GitHub priority definitions require an unresolved priority');
-    const rank = PRIORITIES.indexOf(value.priority.label);
-    const adjacent = PRIORITIES.slice(Math.max(0, rank - 1), rank + 2);
-    check(snapshot.rules.filter((rule) => adjacent.includes(rule.label))
-      .every((rule) => value.priority.rule_ids.includes(rule.rule_id)),
-    'Priority must cite its own and adjacent definitions');
-    check(value.claims.some((claim) => ['supported_by_source', 'partially_supported'].includes(claim.assessment)),
-      'Priority suggestion has no supported claim');
+    check(isPublishable(value),
+      'Only active in-scope or V1-only issues can receive a priority suggestion');
+    if (!v1Only) {
+      check(snapshot.rules.every((rule) => rule.definition),
+        'Missing GitHub priority definitions require an unresolved priority');
+      const rank = PRIORITIES.indexOf(value.priority.label);
+      const adjacent = PRIORITIES.slice(Math.max(0, rank - 1), rank + 2);
+      check(snapshot.rules.filter((rule) => adjacent.includes(rule.label))
+        .every((rule) => value.priority.rule_ids.includes(rule.rule_id)),
+      'Priority must cite its own and adjacent definitions');
+      check(value.claims.some((claim) => ['supported_by_source', 'partially_supported'].includes(claim.assessment)),
+        'Priority suggestion has no supported claim');
+    }
   }
   if (value.scope.status === 'out_of_scope') {
     check(value.disposition === 'out_of_scope' && value.problem_type === 'not_applicable',
@@ -631,6 +646,8 @@ function finish(root) {
   const run = readJson(path.join(root, 'output/run.json'));
   const refuted = analysis.claims.length > 0 && analysis.claims.every((claim) => claim.assessment === 'refuted');
   const grade = priority || (refuted ? 'not applicable (reported claim refuted)' : 'unresolved');
+  const verificationNotice = analysis.scope.status === 'v1_only' ?
+    `V1-only backlog triage; the reported problem was not verified. ${VERIFICATION_NOTICE}` : VERIFICATION_NOTICE;
   const reviewText = review.summary.replace(/\b[CE]\d{2}\b/g, '').replace(/\s+/g, ' ').trim();
   const reviewExcerpt = reviewText.length > 180 ? `${reviewText.slice(0, 177)}...` : reviewText;
   const keyEvidence = analysis.key_evidence_ids.slice(0, 3).map((id) => analysis.evidence.find((item) => item.id === id));
@@ -646,7 +663,7 @@ function finish(root) {
     `Source-supported: ${escape(analysis.impact.supported)}`, '',
     `Not established: ${escape(analysis.impact.potential)}`, '',
     '## Verification scope', '',
-    VERIFICATION_NOTICE, '',
+    verificationNotice, '',
     '## Key evidence', '',
     ...keyEvidence.map((item) =>
       `- [${escape(item.path.split('/').at(-1))}:${item.line_start}](https://github.com/${repository}/blob/${analysis.source_commit_sha}/${encodeURI(item.path)}#L${item.line_start}-L${item.line_end}) — ${escape(item.supports)}`), '',
@@ -661,7 +678,7 @@ function finish(root) {
     `**Priority: ${grade}${review.verdict === 'accept' ? '' : ' (provisional; review pending)'}**`,
     escape(analysis.summary.priority_reason, summaryLimit), '',
     `**Impact:** ${escape(analysis.summary.impact, summaryLimit)}`, '',
-    `**Verification:** ${VERIFICATION_NOTICE}`, '',
+    `**Verification:** ${verificationNotice}`, '',
     ...(review.verdict === 'accept' ? [] : [`**Next step:** ${escape(reviewText, 180)} No priority label will be changed.`, '']),
     '<details><summary>Source and report</summary>', '',
     `Source: \`${analysis.source_commit_sha.slice(0, 12)}\`.`,
@@ -674,8 +691,7 @@ function finish(root) {
   check(summaryLimit >= 3, 'Publication metadata exceeds the summary budget');
   const comment = renderComment(summaryLimit);
   fs.writeFileSync(path.join(root, 'output/comment.md'), comment);
-  if (authorized && ['in_scope', 'partially_in_scope'].includes(analysis.scope.status) &&
-      analysis.disposition === 'active') {
+  if (authorized && isPublishable(analysis)) {
     plan.operations = [
       ...(approvedPriority && !existing.includes(approvedPriority) ? [{ action: 'add_label', label: approvedPriority }] : []),
       commentOperation(snapshot, comment),
@@ -747,10 +763,9 @@ async function publish({ github, context, core, env }) {
       plan.approved_priority === expectedPriority && plan.repository.toLowerCase() === repository.full_name.toLowerCase(),
       'Publication plan does not match the reviewed decision');
     await authorizeActor(github, context);
-    if (!['in_scope', 'partially_in_scope'].includes(analysis.scope.status) ||
-        analysis.disposition !== 'active') {
+    if (!isPublishable(analysis)) {
       result.status = 'skipped';
-      result.reason = 'Only active, in-scope reports are published';
+      result.reason = 'Only active in-scope or V1-only reports are published';
       return result;
     }
     const params = { ...context.repo, issue_number: snapshot.issue.number };
