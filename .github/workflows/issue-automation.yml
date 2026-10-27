@@ -10,7 +10,7 @@
 # analysis workflow to review the Issue and publish its result.
 ###############################################################################
 
-name: Automation / Issue Router
+name: Automation / Issue Router (fork E2E)
 
 on:
   workflow_dispatch:
@@ -61,7 +61,7 @@ concurrency:
 jobs:
   triage:
     name: Validate and apply triage
-    runs-on: anolisa-k8s-general-ci-x64
+    runs-on: ubuntu-24.04
     outputs:
       mutated: ${{ steps.triage.outputs.mutated }}
       component_label: ${{ steps.triage.outputs.component_label }}
@@ -208,7 +208,7 @@ jobs:
     needs: triage
     if: >-
       !cancelled() &&
-      github.repository_id == '1195873793' &&
+      github.repository_id == '1197072745' &&
       needs.triage.outputs.mutated == 'true' &&
       needs.triage.outputs.component_label == 'component:sec-core'
     permissions:

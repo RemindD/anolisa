@@ -52,7 +52,7 @@ function harness(t) {
   const github = {
     rest: {
       repos: {
-        get: async () => ({ data: { full_name: 'agentic-os-org/ANOLISA', id: 1195873793, default_branch: 'main' } }),
+        get: async () => ({ data: { full_name: 'RemindD/anolisa', id: 1197072745, default_branch: 'main' } }),
         getCollaboratorPermissionLevel: async () => ({ data: { permission: 'admin' } }),
         getCommit: async (params) => { calls.push(['commit', params]); return { data: { sha } }; },
         getContent: async () => { throw new Error('Repository label configuration must not be read'); },
@@ -71,7 +71,7 @@ function harness(t) {
   return {
     checkout, root, sha, issue, comments, calls, github, git,
     args: {
-      github, context: { repo: { owner: 'agentic-os-org', repo: 'ANOLISA' }, actor: 'test-maintainer',
+      github, context: { repo: { owner: 'RemindD', repo: 'anolisa' }, actor: 'test-maintainer',
         payload: {}, runId: 1234, sha },
       core: { setOutput: (key, value) => { outputs[key] = value; }, notice: () => {} },
       env: { INPUT_ISSUE_NUMBER: '12', INPUT_TARGET_REF: 'main', ANALYSIS_ROOT: root },
@@ -190,19 +190,19 @@ test('skips any existing priority before fetching source or discussions, includi
 test('requires an explicit numeric issue_number for manual dispatch', async (t) => {
   const h = harness(t);
   h.args.context.payload.issue = { number: 12 };
-  for (const value of [undefined, '', '#12', 'https://github.com/agentic-os-org/ANOLISA/issues/12', '0', '-1', '12.5']) {
+  for (const value of [undefined, '', '#12', 'https://github.com/RemindD/anolisa/issues/12', '0', '-1', '12.5']) {
     h.args.env.INPUT_ISSUE_NUMBER = value;
     await assert.rejects(analysis.prepare(h.args), /issue_number must be a positive integer/);
   }
 });
 
 test('binds the upstream repository name to its ID and rejects read-only actors, PRs, and changing snapshots', async (t) => {
-  analysis.assertRepository({ full_name: 'agentic-os-org/ANOLISA', id: 1195873793 });
-  assert.throws(() => analysis.assertRepository({ full_name: 'other-owner/ANOLISA', id: 1195873793 }), /only accepts/);
+  analysis.assertRepository({ full_name: 'RemindD/anolisa', id: 1197072745 });
+  assert.throws(() => analysis.assertRepository({ full_name: 'other-owner/ANOLISA', id: 1197072745 }), /only accepts/);
   const h = harness(t);
-  h.github.rest.repos.get = async () => ({ data: { full_name: 'agentic-os-org/ANOLISA', id: 7 } });
+  h.github.rest.repos.get = async () => ({ data: { full_name: 'RemindD/anolisa', id: 7 } });
   await assert.rejects(analysis.prepare(h.args), /only accepts/);
-  h.github.rest.repos.get = async () => ({ data: { full_name: 'agentic-os-org/ANOLISA', id: 1195873793 } });
+  h.github.rest.repos.get = async () => ({ data: { full_name: 'RemindD/anolisa', id: 1197072745 } });
   h.issue.labels.push({ name: 'priority:p2' });
   h.github.rest.repos.getCollaboratorPermissionLevel = async () => ({ data: { permission: 'read' } });
   await assert.rejects(analysis.prepare(h.args), /repository writer/);
@@ -613,7 +613,7 @@ async function publicationHarness(t) {
     h.writes.push({ body });
     const comment = { id: 99, body, user: { login: 'github-actions[bot]' },
       updated_at: '2026-10-23T00:00:01Z',
-      html_url: 'https://github.com/agentic-os-org/ANOLISA/issues/12#issuecomment-99' };
+      html_url: 'https://github.com/RemindD/anolisa/issues/12#issuecomment-99' };
     h.comments.push(comment);
     return { data: comment };
   };
@@ -711,7 +711,7 @@ test('allows discussion changes during publication and before retries', async (t
         if (method === 'updateComment') {
           h.comments.push({ id: 98, user: { login: 'github-actions[bot]' },
             body: '<!-- sec-core-analysis:42:old:fingerprint -->\nPrevious report.',
-            html_url: 'https://github.com/agentic-os-org/ANOLISA/issues/12#issuecomment-98',
+            html_url: 'https://github.com/RemindD/anolisa/issues/12#issuecomment-98',
             updated_at: '2026-10-23T00:00:00Z' });
           h.snapshot.comments = structuredClone(h.comments);
           fs.writeFileSync(path.join(h.root, 'output/snapshot.json'), JSON.stringify(h.snapshot));
@@ -856,7 +856,7 @@ test('bounds rendered publication text while preserving full analysis and mandat
     assert.match(body, /^<!-- sec-core-analysis:42:/);
     assert.match(body, /Priority: priority:p2/);
     assert.match(body, /Source analysis only; no dynamic reproduction or functional tests were executed for this Issue/);
-    assert.ok(body.includes(`[Full report](https://github.com/agentic-os-org/ANOLISA/actions/runs/1234)`));
+    assert.ok(body.includes(`[Full report](https://github.com/RemindD/anolisa/actions/runs/1234)`));
     assert.match(body, /\.\.\./);
     assert.doesNotMatch(body, /&(?!amp;|lt;|gt;|#64;)|[\uD800-\uDFFF]/u);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.root, 'output/analysis.json'))), h.result);
@@ -875,7 +875,7 @@ test('replaces the captured pipeline comment with a short summary while preservi
   const h = await publicationHarness(t);
   const old = { id: 98, user: { login: 'github-actions[bot]' },
     body: '<!-- sec-core-analysis:42:old:fingerprint -->\nLong old report with C01 and E01.',
-    html_url: 'https://github.com/agentic-os-org/ANOLISA/issues/12#issuecomment-98' };
+    html_url: 'https://github.com/RemindD/anolisa/issues/12#issuecomment-98' };
   h.comments.push(old);
   h.snapshot.comments = structuredClone(h.comments);
   fs.writeFileSync(path.join(h.root, 'output/snapshot.json'), JSON.stringify(h.snapshot));

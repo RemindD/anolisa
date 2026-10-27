@@ -49,8 +49,8 @@ function readResultFile(directory, phase) {
 }
 
 function assertRepository(repository) {
-  check(repository.full_name.toLowerCase() === 'agentic-os-org/anolisa' && repository.id === 1195873793,
-    'Issue analysis only accepts the verified agentic-os-org/ANOLISA repository');
+  check(repository.full_name.toLowerCase() === 'remindd/anolisa' && repository.id === 1197072745,
+    'Issue analysis only accepts the verified RemindD/anolisa repository');
 }
 
 async function authorizeActor(github, context) {

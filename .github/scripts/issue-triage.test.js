@@ -212,7 +212,7 @@ test('calls SecCore analysis only for a newly applied SecCore route', async (t) 
     }), 2262, 'Dispatch inputs must reach workflow_call as numbers');
   }
   const outputExpressions = [...workflow.matchAll(/^      (\w+): \$\{\{ (steps\.triage\.outputs\.\w+) \}\}$/gm)];
-  const selected = (stepOutputs, { repositoryId = '1195873793', cancelled = false, result = 'success' } = {}) => {
+  const selected = (stepOutputs, { repositoryId = '1197072745', cancelled = false, result = 'success' } = {}) => {
     const outputs = Object.fromEntries(outputExpressions.map(([, name, expression]) =>
       [name, vm.runInNewContext(expression, { steps: { triage: { outputs: stepOutputs } } })]));
     return vm.runInNewContext(condition, {

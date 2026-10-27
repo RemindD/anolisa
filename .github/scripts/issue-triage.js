@@ -238,7 +238,7 @@ async function run({ github, context, core, env }) {
     '.github/components.json'
   );
   const component = selectComponent(metadata, decision.component);
-  const owners = selectTriagers(metadata, component);
+  const owners = component.id === 'sec-core' ? [] : selectTriagers(metadata, component);
   const minimumConfidence = Number(env.MIN_CONFIDENCE || '0.80');
   if (!Number.isFinite(minimumConfidence) || minimumConfidence < 0 || minimumConfidence > 1) {
     throw new Error('ISSUE_TRIAGE_MIN_CONFIDENCE must be between 0 and 1');
