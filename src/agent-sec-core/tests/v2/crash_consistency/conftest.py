@@ -326,7 +326,7 @@ def recovery(tmp_path, monkeypatch, start_daemon):
             # Enable daemon diagnostics without changing the CLI's stderr contract.
             with monkeypatch.context() as environment:
                 environment.setenv(
-                    "RUST_LOG", os.environ.get("ASC_CRASH_DAEMON_LOG", "warn")
+                    "RUST_LOG", os.environ.get("ASC_CRASH_DAEMON_LOG", "info")
                 )
                 return start_daemon(**kwargs)
 
