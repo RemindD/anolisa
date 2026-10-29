@@ -6,6 +6,7 @@ Application persistence and health endpoints are separate acceptance gates.
 import json
 import os
 import pwd
+import shutil
 import signal
 import socket
 import stat
@@ -115,6 +116,94 @@ def test_native_health_probe_accepts_real_root_daemon(daemon, health_probe):
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("peer_uid", [0, 1000])
+@pytest.mark.parametrize("client", ["cli", "health"])
+def test_dproc_uds_002_authenticates_uid_with_zero_peer_pid(
+    health_probe, peer_uid, client, monkeypatch
+):
+    unshare = shutil.which("unshare")
+    if unshare is None:
+        pytest.skip("unshare is required for the PID namespace fixture")
+    namespace = [
+        unshare,
+        "-Upf",
+        f"--map-user={peer_uid}",
+        f"--map-group={peer_uid}",
+        "--kill-child",
+    ]
+    available = subprocess.run(
+        namespace + ["true"], capture_output=True, text=True, timeout=5, check=False
+    )
+    if available.returncode:
+        pytest.skip(f"user/PID namespaces unavailable: {available.stderr.strip()}")
+    with (
+        tempfile.TemporaryDirectory(prefix="asc-peer-pid-") as directory,
+        socket.socket(socket.AF_UNIX) as listener,
+    ):
+        endpoint = str(Path(directory) / "daemon.sock")
+        command, method = [health_probe], "daemon.health"
+        if client == "cli":
+            command = [shutil.which("agent-sec-cli"), "policy", "list"]
+            method = "policy.templates.list"
+        monkeypatch.setenv("AGENT_SEC_DAEMON_SOCKET", endpoint)
+        monkeypatch.delenv("AGENT_SEC_TEST_SKIP_SERVER_UID_CHECK", raising=False)
+        listener.bind(endpoint)
+        listener.listen(2)
+        listener.settimeout(5)
+        # Keep the listener outside the client's PID namespace; map its owner
+        # to either UID without requiring host root.
+        process = subprocess.Popen(
+            namespace
+            + [
+                "/usr/bin/python3",
+                "-c",
+                """import os, socket, struct, sys
+with socket.socket(socket.AF_UNIX) as connection:
+    connection.connect(sys.argv[1])
+    credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    pid, uid, _ = struct.unpack("iII", credentials)
+    assert (pid, uid) == (0, int(sys.argv[2])), (pid, uid)
+os.execv(sys.argv[3], sys.argv[3:])
+""",
+                endpoint,
+                str(peer_uid),
+                *command,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                assert connection.recv(1) == b""  # Credential observation only.
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                with connection.makefile("rb") as reader:
+                    request = reader.readline()
+                if peer_uid == 0:
+                    assert json.loads(request)["method"] == method
+                    connection.sendall(
+                        b'{"requestId":"pid-zero","result":{"status":"ok"}}\n'
+                    )
+                else:
+                    assert request == b"", "untrusted server received request bytes"
+            stdout, stderr = process.communicate(timeout=5)
+            assert process.returncode == (0 if peer_uid == 0 else 1), stderr
+            if peer_uid == 0:
+                assert stderr == ""
+            else:
+                assert stdout == ""
+                assert "server identity verification failed; request not sent" in stderr
+                assert f"expected daemon UID 0, got {peer_uid}" in stderr
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="cross-UID UDS test requires root")
