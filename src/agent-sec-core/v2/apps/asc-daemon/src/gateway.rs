@@ -71,8 +71,16 @@ impl GatewayAdministration for GatewayAdapter {
         project(self.0.list_keys())
     }
 
-    fn credentials(&self, peer: PeerCredentials, scope_id: &str) -> Result<Value, GatewayFailure> {
-        project(self.0.credentials(peer.uid(), scope_id))
+    fn credentials(
+        &self,
+        peer: PeerCredentials,
+        scope_id: &str,
+        export_file: Option<&Path>,
+    ) -> Result<Value, GatewayFailure> {
+        project(
+            self.0
+                .credentials_to_file(peer.uid(), scope_id, export_file),
+        )
     }
 }
 

@@ -563,7 +563,10 @@ fn initialization_and_empty_recovery_are_pure_and_import_does_not_authorize_or_i
     );
     assert_eq!(
         serde_json::to_value(service.list_keys().unwrap()).unwrap(),
-        serde_json::json!({"credentials": ["github"]})
+        serde_json::json!({"credentials": ["github"],
+            "storeFile": fixture.config.store_dir.join("store.json"),
+            "details": [{"id":"github", "state":"active", "carriers":["header_token", "basic_password"], "importFile":null, "fakes":[]}]
+        })
     );
     assert_eq!(
         service.credentials(UID, "unprepared").err().unwrap().kind(),
@@ -838,6 +841,16 @@ fn preparation_is_durable_without_pid_or_proxy_and_credentials_require_ready_gen
             "scopes": [{"scopeId": "prepared", "bindings": []}]})
     );
     let grant = service.credentials(UID, "prepared").unwrap();
+    let export = fixture.root.path().join("fake-token");
+    assert_eq!(
+        service
+            .credentials_to_file(UID, "prepared", Some(&export))
+            .err()
+            .unwrap()
+            .kind(),
+        GatewayErrorKind::PermissionDenied
+    );
+    assert!(!export.exists());
     let grant_json = serde_json::to_value(&grant).unwrap();
     assert_eq!(
         grant_json,
@@ -2059,7 +2072,8 @@ fn conflicting_import_preserves_fake_and_real_and_reimport_never_restores_retire
     );
     assert_eq!(
         serde_json::to_value(service.list_keys().unwrap()).unwrap(),
-        serde_json::json!({"credentials": []})
+        serde_json::json!({"credentials": [],
+            "storeFile": fixture.config.store_dir.join("store.json"), "details":[]})
     );
     assert_eq!(
         service.credentials(UID, "import").err().unwrap().kind(),
@@ -2189,6 +2203,42 @@ fn root_import_enforces_private_files_and_preserves_ready_grants_on_conflict() {
     service.prepare_scope(&scope).unwrap();
     service.enable().unwrap();
     let grant = service.credentials(UID, "root-import").unwrap();
+    let export = fixture.root.path().join("fake-token");
+    service
+        .credentials_to_file(0, "root-import", Some(&export))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(&export).unwrap(),
+        grant.environment["GITHUB_TOKEN"]
+    );
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::uid(&fs::metadata(&export).unwrap()),
+        UID
+    );
+    assert_eq!(
+        fs::metadata(&export).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        service
+            .credentials_to_file(0, "root-import", Some(&export))
+            .is_err()
+    );
+    let inventory = serde_json::to_value(service.list_keys().unwrap()).unwrap();
+    assert_eq!(
+        inventory["details"][0]["importFile"],
+        path.to_str().unwrap()
+    );
+    assert_eq!(
+        inventory["details"][0]["fakes"][0]["exportFile"],
+        export.to_str().unwrap()
+    );
+    assert!(!inventory.to_string().contains(REAL));
+    assert!(
+        !inventory
+            .to_string()
+            .contains(&grant.environment["GITHUB_TOKEN"])
+    );
     let snapshot = fixture.secrets();
     fs::write(&path, OTHER_REAL).unwrap();
     let error = service.add_key(&request).unwrap_err();

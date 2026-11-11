@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ring::rand::SystemRandom;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub const MAX_FAKES_TOTAL: usize = 4096;
 
 const STORE_FILE_MODE: rustix::fs::RawMode = 0o600;
 const MAX_STORE_BYTES: u64 = 8 * 1024 * 1024;
-const STORE_VERSION: u32 = 1;
+const STORE_VERSION: u32 = 2;
 const FAKE_ATTEMPTS: usize = 8;
 
 /// Request location where a credential's fake may appear and be replaced.
@@ -64,6 +64,8 @@ pub struct CredentialSummary {
     pub state: CredentialState,
     /// Configured carriers.
     pub carriers: Vec<Carrier>,
+    /// Last successful import source; the store holds a copy, not a live file reference.
+    pub import_file: Option<PathBuf>,
     /// Issued fakes, abbreviated.
     pub fakes: Vec<FakeSummary>,
 }
@@ -78,6 +80,8 @@ pub struct FakeSummary {
     pub retired: bool,
     /// Last four characters of the fake.
     pub suffix: String,
+    /// Last successful export path; this is history, not a file-existence assertion.
+    pub export_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,12 +89,15 @@ pub struct FakeSummary {
 pub(crate) struct Fake {
     pub(crate) scope_id: ScopeId,
     pub(crate) value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) export_file: Option<PathBuf>,
 }
 
 pub(crate) struct Record {
     pub(crate) carriers: Vec<Carrier>,
     pub(crate) format: FakeFormat,
     pub(crate) real: Option<Secret>,
+    pub(crate) import_file: Option<PathBuf>,
     pub(crate) fakes: Vec<Fake>,
     pub(crate) retired_fakes: Vec<Fake>,
 }
@@ -101,6 +108,7 @@ impl Record {
             carriers: self.carriers.clone(),
             format: self.format.clone(),
             real: self.real.as_ref().map(Secret::duplicate),
+            import_file: self.import_file.clone(),
             fakes: self.fakes.clone(),
             retired_fakes: self.retired_fakes.clone(),
         }
@@ -172,6 +180,20 @@ impl CredentialStore {
     /// or spec, [`CredentialStoreError::DuplicateValue`] for a collision with
     /// another real value or any fake, and validation or persistence errors otherwise.
     pub fn put(&mut self, spec: CredentialSpec, real: Secret) -> Result<(), CredentialStoreError> {
+        self.put_from(spec, real, None)
+    }
+
+    /// Imports a value and its provenance in the same atomic store update.
+    /// The path is informational; it never authorizes a file read or credential use.
+    ///
+    /// # Errors
+    /// Returns the same validation, conflict and persistence errors as [`Self::put`].
+    pub fn put_from(
+        &mut self,
+        spec: CredentialSpec,
+        real: Secret,
+        import_file: Option<PathBuf>,
+    ) -> Result<(), CredentialStoreError> {
         let mut carriers = spec.carriers;
         carriers.sort_unstable();
         carriers.dedup();
@@ -182,6 +204,13 @@ impl CredentialStore {
                 && record.carriers == carriers
                 && record.format == spec.format
             {
+                if import_file.is_some() && record.import_file != import_file {
+                    let mut records = self.duplicate_records();
+                    if let Some(record) = records.get_mut(&spec.id) {
+                        record.import_file = import_file;
+                    }
+                    return self.commit(records);
+                }
                 return Ok(());
             }
             return Err(CredentialStoreError::Conflict(spec.id));
@@ -217,6 +246,7 @@ impl CredentialStore {
                         carriers,
                         format: spec.format,
                         real: Some(real),
+                        import_file,
                         fakes: Vec::new(),
                         retired_fakes: Vec::new(),
                     },
@@ -224,6 +254,7 @@ impl CredentialStore {
             }
             Some(record) => {
                 record.real = Some(real);
+                record.import_file = import_file;
                 record.carriers = carriers;
                 record.format = spec.format;
             }
@@ -274,6 +305,7 @@ impl CredentialStore {
             record.fakes.push(Fake {
                 scope_id: scope_id.clone(),
                 value: value.clone(),
+                export_file: None,
             });
         }
         self.commit(records)?;
@@ -288,6 +320,32 @@ impl CredentialStore {
             .iter()
             .find(|fake| fake.scope_id == *scope_id)
             .map(|fake| fake.value.as_str())
+    }
+
+    /// Records the path after the caller successfully exports an active Scope fake.
+    ///
+    /// # Errors
+    /// Rejects an unknown credential or inactive fake and reports persistence failures.
+    pub fn record_export(
+        &mut self,
+        credential: &CredentialId,
+        scope_id: &ScopeId,
+        path: PathBuf,
+    ) -> Result<(), CredentialStoreError> {
+        let mut records = self.duplicate_records();
+        let record = records
+            .get_mut(credential)
+            .ok_or_else(|| CredentialStoreError::UnknownCredential(credential.clone()))?;
+        let fake = record
+            .fakes
+            .iter_mut()
+            .find(|fake| fake.scope_id == *scope_id)
+            .ok_or(CredentialStoreError::Invalid {
+                field: "scopeId",
+                reason: "Scope has no active fake",
+            })?;
+        fake.export_file = Some(path);
+        self.commit(records)
     }
 
     /// Retires a credential: drops its real value and turns its fakes into tombstones.
@@ -355,6 +413,7 @@ impl CredentialStore {
                     CredentialState::Retired
                 },
                 carriers: record.carriers.clone(),
+                import_file: record.import_file.clone(),
                 fakes: record
                     .fakes
                     .iter()
@@ -364,6 +423,7 @@ impl CredentialStore {
                         scope_id: fake.scope_id.clone(),
                         retired,
                         suffix: suffix(&fake.value),
+                        export_file: fake.export_file.clone(),
                     })
                     .collect(),
             })
@@ -409,6 +469,11 @@ impl CredentialStore {
     fn commit(&mut self, records: Records) -> Result<(), CredentialStoreError> {
         validate(&records)?;
         let bytes = encode(&records)?;
+        if bytes.len() as u64 > MAX_STORE_BYTES {
+            return Err(CredentialStoreError::Capacity(
+                "credential store byte limit exceeded",
+            ));
+        }
         match self
             .directory
             .write_atomic(STORE_FILE_NAME, &bytes, STORE_FILE_MODE, None)
@@ -459,6 +524,8 @@ struct PersistedCredential {
     fake_prefixes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     real: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    import_file: Option<PathBuf>,
     fakes: Vec<Fake>,
     retired_fakes: Vec<Fake>,
 }
@@ -473,6 +540,7 @@ fn encode(records: &Records) -> Result<Vec<u8>, CredentialStoreError> {
                 carriers: record.carriers.clone(),
                 fake_prefixes: record.format.prefixes().to_vec(),
                 real: record.real.as_ref().map(|real| real.expose().to_owned()),
+                import_file: record.import_file.clone(),
                 fakes: record.fakes.clone(),
                 retired_fakes: record.retired_fakes.clone(),
             })
@@ -491,7 +559,7 @@ fn decode(bytes: &[u8]) -> Result<Records, CredentialStoreError> {
             error.column()
         ))
     })?;
-    if persisted.version != STORE_VERSION {
+    if !matches!(persisted.version, 1 | STORE_VERSION) {
         return Err(CredentialStoreError::Corrupt(format!(
             "unsupported store version {}",
             persisted.version
@@ -508,6 +576,7 @@ fn decode(bytes: &[u8]) -> Result<Records, CredentialStoreError> {
             carriers: credential.carriers,
             format: FakeFormat::with_prefixes(credential.fake_prefixes),
             real,
+            import_file: credential.import_file,
             fakes: credential.fakes,
             retired_fakes: credential.retired_fakes,
         };

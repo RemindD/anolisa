@@ -11,6 +11,36 @@ use crate::GatewayError;
 
 const TEMPORARY_PREFIX: &str = ".tmp-";
 
+/// Creates a fake-token file without following symlinks in any path component.
+/// The caller must authorize root and verify the active Scope before entering here.
+pub(crate) fn export_new(path: &Path, bytes: &[u8], uid: u32) -> Result<(), GatewayError> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags};
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(GatewayError::invalid(
+            "export path must be absolute without '..'",
+        ));
+    }
+    let fd = rustix::fs::openat2(
+        rustix::fs::CWD,
+        path,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+        ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|error| GatewayError::io("cannot create new fake file", path, &error.into()))?;
+    let mut file = File::from(fd);
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| GatewayError::io("cannot write fake file", path, &error))?;
+    rustix::fs::fchown(&file, Some(rustix::fs::Uid::from_raw(uid)), None)
+        .map_err(|error| GatewayError::io("cannot set fake file owner", path, &error.into()))?;
+    Ok(())
+}
+
 /// Owner applied to created files and directories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Owner {
@@ -219,4 +249,25 @@ mod libc_flags {
         .union(rustix::fs::OFlags::NONBLOCK)
         .bits()
         .cast_signed();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_refuses_existing_files_and_symlink_ancestors() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("token");
+        let uid = rustix::process::geteuid().as_raw();
+        export_new(&target, b"fake", uid).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"fake");
+        assert!(export_new(&target, b"replacement", uid).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"fake");
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(directory.path(), &alias).unwrap();
+        assert!(export_new(&alias.join("escape"), b"fake", uid).is_err());
+        assert!(!directory.path().join("escape").exists());
+        assert!(export_new(Path::new("relative"), b"fake", uid).is_err());
+    }
 }

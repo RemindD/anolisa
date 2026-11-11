@@ -655,6 +655,51 @@ fn scope_create_excludes_unsupported_cgroup_selector() {
 }
 
 #[test]
+fn scope_create_assigns_multiple_exact_revisions_without_changing_legacy_flags() {
+    let base = [
+        "agent-sec-cli",
+        "scope",
+        "create",
+        "--process-name",
+        "qodercli",
+    ];
+    let request = Cli::parse_from(base.into_iter().chain([
+        "--policy",
+        "files@2",
+        "--policy",
+        "credentials@1",
+        "--owner-uid",
+        "1001",
+    ]))
+    .unwrap()
+    .request()
+    .unwrap();
+    assert_eq!(
+        request.params["policyTemplates"],
+        json!([
+            {"policyId":"files", "policyRevision":2},
+            {"policyId":"credentials", "policyRevision":1},
+        ])
+    );
+    for flags in [
+        vec![],
+        vec!["--policy", "files"],
+        vec!["--policy", "files@0"],
+        vec![
+            "--policy",
+            "files@1",
+            "--policy-id",
+            "other",
+            "--policy-revision",
+            "2",
+        ],
+        vec!["--policy-revision", "1"],
+    ] {
+        assert!(Cli::parse_from(base.into_iter().chain(flags)).is_err());
+    }
+}
+
+#[test]
 fn scope_owner_uid_maps_to_rpc_and_rejects_root_or_pid_credential_selection() {
     let base = [
         "agent-sec-cli",
@@ -769,6 +814,7 @@ fn gateway_transport_and_invalid_secret_paths_fail_without_reading_credentials()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // Keep the gateway wire-contract cases beside their shared transport check.
 async fn gateway_cli_preserves_minimal_results_and_conflicts() {
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
@@ -799,6 +845,26 @@ async fn gateway_cli_preserves_minimal_results_and_conflicts() {
             json!({"credentials":["github"]}),
         ),
         (
+            &["key", "list"],
+            "gateway.key.list",
+            json!({}),
+            json!({
+                "credentials": ["github"],
+                "storeFile": "/var/lib/credentials/store.json",
+                "details": [{
+                    "id": "github",
+                    "state": "active",
+                    "importFile": "/root/token",
+                    "fakes": [{
+                        "scopeId": "scope-one",
+                        "exportFile": "/run/agent/keyfile",
+                        "retired": false,
+                        "suffix": "1234"
+                    }]
+                }]
+            }),
+        ),
+        (
             &["key", "add", "github", "--secret-file", "/root/a b"],
             "gateway.key.add",
             json!({"credential":"github","secretFile":"/root/a b"}),
@@ -821,6 +887,18 @@ async fn gateway_cli_preserves_minimal_results_and_conflicts() {
             "gateway.credentials",
             json!({"scopeId":"scope-1"}),
             json!({"scopeId":"scope-1","environment":{"GITHUB_TOKEN":"fake","GIT_SSL_CAINFO":"/run/agent-sec-gateway/ca-bundle.pem"}}),
+        ),
+        (
+            &[
+                "credentials",
+                "--scope",
+                "scope-1",
+                "--export-file",
+                "/run/agent/keyfile",
+            ],
+            "gateway.credentials",
+            json!({"scopeId":"scope-1", "exportFile":"/run/agent/keyfile"}),
+            json!({"scopeId":"scope-1", "environment":{"GITHUB_TOKEN":"fake"}}),
         ),
         (
             &["key", "add", "github", "--secret-file", "/root/new"],

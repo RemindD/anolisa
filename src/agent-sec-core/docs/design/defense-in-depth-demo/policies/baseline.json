@@ -1,0 +1,10 @@
+{
+  "language": "cedar",
+  "content": {
+    "schema": {
+      "schemaId": "seccore.system",
+      "revision": 1
+    },
+    "text": "permit(principal, action == SecCore::Action::\"process.spawn\", resource)\nwhen { resource.resolved_program == \"/opt/asc-demo/bin-native/qodercli\" };\npermit(principal, action == SecCore::Action::\"file.read\", resource)\nwhen { resource.path == \"/\" || resource.path like \"/*\" };\nforbid(principal, action == SecCore::Action::\"file.read\", resource)\nwhen { resource.path == \"/root\" || resource.path like \"/root/*\" };\npermit(principal, action == SecCore::Action::\"file.write\", resource)\nwhen { resource.path == \"/run/asc-demo/work\" ||\n       resource.path like \"/run/asc-demo/work/*\" };\npermit(principal, action == SecCore::Action::\"network.use\", resource);"
+  }
+}

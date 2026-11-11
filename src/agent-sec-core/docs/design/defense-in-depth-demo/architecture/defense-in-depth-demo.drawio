@@ -1,0 +1,186 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="drawio" version="31.1.5">
+  <diagram id="formal-demo-architecture" name="当前 Demo 架构">
+    <mxGraphModel dx="1880" dy="1230" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1900" pageHeight="1230" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="&lt;b&gt;Agent 纵深防护 Demo｜当前已跑通的架构&lt;/b&gt;" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=32;fontColor=#0f172a;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="10" width="1800" height="50" />
+        </mxCell>
+        <mxCell id="subtitle" value="formal-7jmaa8br · 同一 Qoder 会话 · 13 项实机验证 · 管理配置在 Host，业务操作由 Sandbox 内的 Agent 发起" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=18;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="60" width="1800" height="30" />
+        </mxCell>
+        <mxCell id="host" value="&lt;span style=&quot;font-size:20px&quot;&gt;&lt;b&gt;宿主机（Host）｜防护组件、真密钥与测试上游均位于 Sandbox 外&lt;/b&gt;&lt;/span&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=22;spacing=10;swimlane;startSize=40;container=1;pointerEvents=0;collapsible=0;align=left;spacingLeft=20;swimlaneFillColor=#fbfcfe;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="100" width="1480" height="950" />
+        </mxCell>
+        <mxCell id="admin" value="&lt;b&gt;Host 管理员 CLI&lt;/b&gt;&lt;br&gt;创建／完整查询策略&lt;br&gt;配置与启动环境" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=19;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="40" y="80" width="220" height="120" />
+        </mxCell>
+        <mxCell id="daemon" value="&lt;b&gt;SecCore daemon（root）&lt;/b&gt;&lt;br&gt;Sandbox 基线：Cedar · 启动授权&lt;br&gt;文件保护：Cedar&lt;br&gt;凭据用途：JSON" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=20;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="320" y="65" width="450" height="150" />
+        </mxCell>
+        <mxCell id="binding" value="&lt;b&gt;Scope → 发现进程 → 两个 Binding&lt;/b&gt;&lt;br&gt;processName=qodercli · ownerUid=1001&lt;br&gt;只引用文件策略和凭据策略&lt;br&gt;两项 READY 后，才发送第一条任务" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=19;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="880" y="65" width="490" height="150" />
+        </mxCell>
+        <mxCell id="pep" value="&lt;b&gt;启动入口 authorized_sandbox&lt;/b&gt;&lt;br&gt;调用 PDP 授权 → 安装 Sandbox → 启动 Qoder" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=19;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="320" y="260" width="450" height="110" />
+        </mxCell>
+        <mxCell id="sight" value="&lt;b&gt;② AgentSight（root）&lt;/b&gt;&lt;br&gt;在内核执行文件保护&lt;br&gt;覆盖 Qoder 及本次工具后代" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=18;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="880" y="270" width="300" height="105" />
+        </mxCell>
+        <mxCell id="secret" value="&lt;b&gt;业务真密钥&lt;/b&gt;&lt;br&gt;Host Credential Store&lt;br&gt;不放入 Sandbox" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=18;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="1210" y="270" width="230" height="105" />
+        </mxCell>
+        <mxCell id="sandbox" value="&lt;span style=&quot;font-size:20px&quot;&gt;&lt;b&gt;① Sandbox｜限制文件视图与可写范围 · 网络开启&lt;/b&gt;&lt;/span&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=20;spacing=10;swimlane;startSize=40;container=1;pointerEvents=0;collapsible=0;align=left;spacingLeft=16;swimlaneFillColor=#f5f9ff;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="40" y="450" width="760" height="480" />
+        </mxCell>
+        <mxCell id="qoder" value="&lt;b&gt;Qoder CLI · UID 1001&lt;/b&gt;&lt;br&gt;原生 prompt → 实际工具调用&lt;br&gt;环境变量中携带业务假密钥" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=19;spacing=10;" vertex="1" parent="sandbox">
+          <mxGeometry as="geometry" x="30" y="70" width="340" height="110" />
+        </mxCell>
+        <mxCell id="work" value="&lt;b&gt;普通工作数据 · 可读写&lt;/b&gt;&lt;br&gt;notes.txt：正常写入、读回&lt;br&gt;customers.json → 本地聚合&lt;br&gt;report.json：count=2，total=30" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#059669;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=17;spacing=10;" vertex="1" parent="sandbox">
+          <mxGeometry as="geometry" x="30" y="290" width="300" height="155" />
+        </mxCell>
+        <mxCell id="keyfile" value="&lt;b&gt;② 指定文件额外保护&lt;/b&gt;&lt;br&gt;keyfile + keyfile.alias&lt;br&gt;两个路径均列入 Cedar 策略&lt;br&gt;追加／删除 → EPERM（C03～C06）" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=17;spacing=10;" vertex="1" parent="sandbox">
+          <mxGeometry as="geometry" x="390" y="255" width="340" height="110" />
+        </mxCell>
+        <mxCell id="readonly" value="&lt;b&gt;① 只读挂载&lt;/b&gt;&lt;br&gt;sentinel：写入 → EROFS（C02）" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=18;spacing=10;" vertex="1" parent="sandbox">
+          <mxGeometry as="geometry" x="390" y="390" width="340" height="70" />
+        </mxCell>
+        <mxCell id="gateway" value="&lt;b&gt;③ Host Gateway · agent-sec-gw&lt;/b&gt;&lt;br&gt;业务凭据：核对域名、路径和请求方法&lt;br&gt;授权匹配后：假密钥 → 业务真密钥&lt;br&gt;业务非空正文：PII 完整通过才转发" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=20;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="900" y="510" width="460" height="180" />
+        </mxCell>
+        <mxCell id="pii" value="&lt;b&gt;SecCore PII 扫描&lt;/b&gt;&lt;br&gt;同一 daemon 的扫描接口&lt;br&gt;接收原文／JSON 解码文本&lt;br&gt;返回判定与命中类型、数量" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=17;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="890" y="780" width="290" height="130" />
+        </mxCell>
+        <mxCell id="report" value="&lt;b&gt;受控报告服务（同机）&lt;/b&gt;&lt;br&gt;report.demo.test:443&lt;br&gt;198.18.0.1&lt;br&gt;仅接受业务真密钥" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#059669;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=18;spacing=10;" vertex="1" parent="host">
+          <mxGeometry as="geometry" x="1220" y="780" width="240" height="130" />
+        </mxCell>
+        <mxCell id="model" value="&lt;b&gt;外部模型服务&lt;/b&gt;&lt;br&gt;api2.qoder.sh&lt;br&gt;仅指定 POST 模型接口&lt;br&gt;按精确白名单跳过 PII 扫描" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=18;spacing=10;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="610" width="290" height="170" />
+        </mxCell>
+        <mxCell id="configure" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="admin" target="daemon">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="select" value="文件＋凭据策略" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="daemon" target="binding">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="authorize" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.5;entryY=1;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;startArrow=block;startFill=1;" edge="1" parent="1" source="pep" target="daemon">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="launch" value="授权后安装并启动" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563eb;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#2563eb;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.664474;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="pep" target="sandbox">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="file-binding" value="文件 Binding" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=0.306122;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="binding" target="sight">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="gateway-binding" value="凭据 Binding／路由" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.978261;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="binding" target="gateway">
+          <mxGeometry as="geometry" relative="1" x="0.4">
+            <Array as="points">
+              <mxPoint x="1500" y="240" />
+              <mxPoint x="1500" y="530" />
+              <mxPoint x="1390" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="file-enforce" value="文件策略约束进程树" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=1;entryY=0.104167;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="sight" target="sandbox">
+          <mxGeometry as="geometry" relative="1" x="0.1">
+            <Array as="points">
+              <mxPoint x="1070" y="510" />
+              <mxPoint x="880" y="510" />
+              <mxPoint x="880" y="600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="secret-to-gateway" value="Host 提供真密钥" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.673913;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="secret" target="gateway">
+          <mxGeometry as="geometry" relative="1" x="0">
+            <Array as="points">
+              <mxPoint x="1365" y="560" />
+              <mxPoint x="1250" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="normal-files" value="本地处理" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#059669;labelBackgroundColor=#ffffff;exitX=0.441176;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="qoder" target="work">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="protected-files" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#dc2626;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#dc2626;labelBackgroundColor=#ffffff;exitX=1;exitY=0.636364;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="qoder" target="keyfile">
+          <mxGeometry as="geometry" relative="1" x="0">
+            <Array as="points">
+              <mxPoint x="640" y="690" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="readonly-write" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#dc2626;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#dc2626;labelBackgroundColor=#ffffff;exitX=0.970588;exitY=1;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="qoder" target="readonly">
+          <mxGeometry as="geometry" relative="1" x="0">
+            <Array as="points">
+              <mxPoint x="440" y="760" />
+              <mxPoint x="440" y="975" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="egress" value="HTTPS 经 Host 路由" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563eb;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#2563eb;labelBackgroundColor=#ffffff;exitX=1;exitY=0.272727;entryX=0;entryY=0.222222;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="qoder" target="gateway">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="pii-request" value="Host CLI → UDS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333ea;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#9333ea;labelBackgroundColor=#ffffff;exitX=0.293478;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;startArrow=block;startFill=1;" edge="1" parent="1" source="gateway" target="pii">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="forward-report" value="获准用途＋PII 通过" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#059669;labelBackgroundColor=#ffffff;exitX=0.869565;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gateway" target="report">
+          <mxGeometry as="geometry" relative="1" x="0">
+            <Array as="points">
+              <mxPoint x="1340" y="830" />
+              <mxPoint x="1380" y="830" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="model-api" value="精确模型接口" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748b;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#64748b;labelBackgroundColor=#ffffff;exitX=1;exitY=0.388889;entryX=0;entryY=0.411765;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gateway" target="model">
+          <mxGeometry as="geometry" relative="1" x="0" />
+        </mxCell>
+        <mxCell id="legend-title" value="&lt;b&gt;图例&lt;/b&gt;" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=19;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="830" width="290" height="35" />
+        </mxCell>
+        <mxCell id="legend-control" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=10;spacing=10;rounded=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="875" width="20" height="20" />
+        </mxCell>
+        <mxCell id="legend-label-control" value="Host 管理与防护" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=16;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1600" y="870" width="260" height="30" />
+        </mxCell>
+        <mxCell id="legend-agent" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=10;spacing=10;rounded=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="905" width="20" height="20" />
+        </mxCell>
+        <mxCell id="legend-label-agent" value="Sandbox / Agent" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=16;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1600" y="900" width="260" height="30" />
+        </mxCell>
+        <mxCell id="legend-gateway" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=10;spacing=10;rounded=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="935" width="20" height="20" />
+        </mxCell>
+        <mxCell id="legend-label-gateway" value="Host 外发网关" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=16;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1600" y="930" width="260" height="30" />
+        </mxCell>
+        <mxCell id="legend-data" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ecfdf5;strokeColor=#059669;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=10;spacing=10;rounded=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="965" width="20" height="20" />
+        </mxCell>
+        <mxCell id="legend-label-data" value="正常数据与报告服务" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=16;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1600" y="960" width="260" height="30" />
+        </mxCell>
+        <mxCell id="legend-external" value="" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;strokeWidth=2;fontColor=#172033;fontFamily=Noto Sans CJK SC;fontSize=10;spacing=10;rounded=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="995" width="20" height="20" />
+        </mxCell>
+        <mxCell id="legend-label-external" value="外部模型服务" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=16;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1600" y="990" width="260" height="30" />
+        </mxCell>
+        <mxCell id="lines" value="实线：调用／访问&lt;br&gt;虚线：配置／授权／防护&lt;br&gt;&lt;font color=&quot;#dc2626&quot;&gt;红线：实际操作被拒绝&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1570" y="1040" width="290" height="90" />
+        </mxCell>
+        <mxCell id="allow-rules" value="&lt;b&gt;凭据允许范围：&lt;/b&gt; GET https://report.demo.test/v1/ping　｜　POST https://report.demo.test/v1/reports" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=19;fontColor=#172033;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1070" width="1480" height="35" />
+        </mxCell>
+        <mxCell id="outcomes" value="&lt;b&gt;实际结果：&lt;/b&gt; /v1/admin → 403 credential_not_allowed；客户原文／转义样本 → 403 pii_blocked；聚合报告 → 200。" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=18;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1115" width="1480" height="35" />
+        </mxCell>
+        <mxCell id="bounds" value="&lt;b&gt;范围：&lt;/b&gt;Gateway 接管新建 IPv4 TCP 80/443 连接；模型精确接口 PII 豁免。Sandbox 启动授权与 Scope/Binding 持续部署是两条流程。" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Noto Sans CJK SC;fontSize=17;fontColor=#475569;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="1160" width="1820" height="35" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

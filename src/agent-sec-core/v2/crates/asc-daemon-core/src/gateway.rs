@@ -79,5 +79,6 @@ pub trait GatewayAdministration: Send + Sync {
         &self,
         peer: PeerCredentials,
         scope_id: &str,
+        export_file: Option<&std::path::Path>,
     ) -> Result<serde_json::Value, GatewayFailure>;
 }

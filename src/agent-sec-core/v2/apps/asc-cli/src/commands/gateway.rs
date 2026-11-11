@@ -38,7 +38,7 @@ pub(crate) enum KeyCommand {
     Add(KeyAdd),
     /// Globally retire a credential and revoke all referencing grants.
     Remove(KeyRemove),
-    /// List currently imported credential identifiers.
+    /// List imported credentials and storage/import/export locations without secret values.
     List,
 }
 
@@ -62,6 +62,9 @@ pub(crate) struct ScopeArgs {
     /// Canonical Scope identity returned by `scope create`.
     #[arg(long)]
     scope: String,
+    /// Export the GitHub fake to a new 0600 file owned by the Scope UID (root only).
+    #[arg(long)]
+    export_file: Option<PathBuf>,
 }
 
 impl GatewayCommand {
@@ -88,6 +91,16 @@ impl GatewayCommand {
                 GATEWAY_CREDENTIALS,
                 &GatewayScopeParams {
                     scope_id: args.scope.clone(),
+                    export_file: args
+                        .export_file
+                        .as_ref()
+                        .map(|path| {
+                            std::path::absolute(path)?
+                                .to_str()
+                                .map(str::to_owned)
+                                .ok_or_else(|| std::io::Error::other("--export-file must be UTF-8"))
+                        })
+                        .transpose()?,
                 },
             ),
             Self::Key(KeyCommand::List) => encode(GATEWAY_KEY_LIST, &empty),

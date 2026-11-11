@@ -94,6 +94,30 @@ fn create_uses_owner_only_modes_and_survives_reopen() {
 }
 
 #[test]
+fn import_and_export_provenance_survives_restart_without_exposing_values() {
+    let fixture = fixture();
+    let mut store = CredentialStore::create(&fixture.store_dir).unwrap();
+    store
+        .put_from(spec("github"), secret(REAL), Some("/root/token".into()))
+        .unwrap();
+    let fake = store.issue_fake(&id("github"), &scope("dev")).unwrap();
+    store
+        .record_export(&id("github"), &scope("dev"), "/run/agent/keyfile".into())
+        .unwrap();
+    drop(store);
+    let reopened = CredentialStore::open(&fixture.store_dir).unwrap();
+    let listed = serde_json::to_value(reopened.list()).unwrap();
+    assert_eq!(listed[0]["importFile"], "/root/token");
+    assert_eq!(listed[0]["fakes"][0]["exportFile"], "/run/agent/keyfile");
+    assert!(!listed.to_string().contains(REAL));
+    assert!(!listed.to_string().contains(&fake));
+    assert_eq!(
+        reopened.fake(&id("github"), &scope("dev")),
+        Some(fake.as_str())
+    );
+}
+
+#[test]
 fn fakes_are_reused_per_scope_and_isolated_between_scopes() {
     let fixture = fixture();
     let mut store = CredentialStore::create(&fixture.store_dir).unwrap();
@@ -319,7 +343,7 @@ fn values_never_leak_through_debug_list_or_errors() {
     drop(store);
     let path = fixture.store_dir.join(STORE_FILE_NAME);
     let broken =
-        store_text(&fixture).replace("\"version\": 1", &format!("\"version\": \"{REAL}\""));
+        store_text(&fixture).replace("\"version\": 2", &format!("\"version\": \"{REAL}\""));
     fs::write(&path, broken).unwrap();
     let error = CredentialStore::open(&fixture.store_dir).unwrap_err();
     assert!(matches!(error, CredentialStoreError::Corrupt(_)));

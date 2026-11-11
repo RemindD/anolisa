@@ -1,0 +1,60 @@
+{
+  "scope": "static bundle validation, local CLI tests and read-only installed runtime inspection; no new end-to-end run",
+  "checks": {
+    "json_files": 14,
+    "python_sources": 4,
+    "cedar_envelopes_match": true,
+    "authorization_permissions_match": true,
+    "synthetic_data_aggregate": {
+      "count": 2,
+      "total": 30
+    },
+    "gateway_matches_deployed_hash": true,
+    "shell_blocks_syntax_checked": 49,
+    "local_links_exist": true,
+    "no_machine_name": true,
+    "source_patch_reconstructs_files": 12,
+    "source_patch_base": "5dfaf4d4158c9b1d7254b2aac5f725137074ecc6",
+    "local_cli_help_verified": [
+      "policy get without credential location special case",
+      "scope create --policy ID@REVISION",
+      "gateway credentials --export-file",
+      "gateway key list"
+    ],
+    "fresh_certificate_chain_and_hostname_verified": true,
+    "local_links_checked": 31,
+    "local_link_anchors_checked": true,
+    "installer_shell_syntax_checked": true,
+    "standalone_readme_has_no_external_design_dependency": true,
+    "cli_command_tests": {
+      "passed": 22,
+      "command": "AGENT_SEC_TEST_SKIP_SERVER_UID_CHECK=1 cargo test --locked -p asc-cli --features asc-daemon-client/testing --test commands"
+    },
+    "cli_clippy_all_targets": "passed with -D warnings",
+    "rustfmt": "passed"
+  },
+  "installed_environment_check": {
+    "date": "2026-11-11",
+    "repository_head": "ca7dfc79b3203b41e376f5380e527f333d255629",
+    "demo_daemon_unit": "asc-demo-formal-agent-7jmaa8br.service",
+    "demo_daemon_active": true,
+    "gateway_unit_active": true,
+    "gateway_enabled": true,
+    "gateway_ready": true,
+    "binding_count": 0,
+    "agentsight_active": true,
+    "enforcer_active": true,
+    "mitmproxy_version": "12.2.3",
+    "formal_cli_and_daemon_match_recorded_sha256": true,
+    "gateway_addon_matches_manifest_sha256": true,
+    "installed_formal_cli_required_options_verified": true,
+    "patch_check_on_repository_head": "passed; patch not applied; not built or functionally tested on this HEAD",
+    "services_restarted_or_reconfigured": false,
+    "gateway_key_list_location_fields_verified": [
+      "storeFile",
+      "details[].importFile",
+      "details[].fakes[].exportFile",
+      "details[].fakes[].scopeId"
+    ]
+  }
+}

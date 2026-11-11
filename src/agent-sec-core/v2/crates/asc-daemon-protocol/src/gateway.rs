@@ -26,4 +26,7 @@ pub struct GatewayKeyRemoveParams {
 pub struct GatewayScopeParams {
     /// Canonical Scope identity.
     pub scope_id: String,
+    /// Optional root-only export of the managed GitHub fake to a new file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_file: Option<String>,
 }

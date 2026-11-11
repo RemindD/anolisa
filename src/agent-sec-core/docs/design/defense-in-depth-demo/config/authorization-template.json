@@ -1,0 +1,117 @@
+{
+  "baseline_policy": "REPLACE_WITH_POLICY_CREATE_RESULT",
+  "environment_permissions": {
+    "version": 1,
+    "filesystem": {
+      "default": "deny",
+      "rules": [
+        {
+          "effect": "allow",
+          "path": "/usr",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/bin",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/sbin",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/lib",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/lib64",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/etc",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/home/asc-pii-demo",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/opt/asc-demo/bin-native",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/opt/asc-demo/launcher",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/run/asc-demo",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/run/agent-sec-gateway/ca-bundle.pem",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/run/asc-demo/work",
+          "rights": [
+            "read",
+            "write"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/opt/asc-demo/agent-command.json",
+          "rights": [
+            "read"
+          ]
+        },
+        {
+          "effect": "allow",
+          "path": "/opt/asc-demo/live",
+          "rights": [
+            "read"
+          ]
+        }
+      ]
+    },
+    "execution": {
+      "deny_paths": []
+    },
+    "network": {
+      "mode": "full"
+    }
+  },
+  "ttl_seconds": 60
+}

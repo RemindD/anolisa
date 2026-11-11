@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use asc_credential_store::{
-    CredentialId, CredentialState, CredentialStore, MAX_SECRET_BYTES, ScopeId, Secret,
+    CredentialId, CredentialState, CredentialStore, CredentialSummary, MAX_SECRET_BYTES,
+    STORE_FILE_NAME, ScopeId, Secret,
 };
 use asc_gateway_plan::{
     Plan, compile_scope, credential_environment_variables, github_credential_spec,
@@ -112,6 +113,10 @@ pub struct KeyOutcome {
 pub struct KeyList {
     /// Currently imported credential identifiers.
     pub credentials: Vec<CredentialId>,
+    /// Root-only store containing the imported real values and Scope fakes.
+    pub store_file: PathBuf,
+    /// Value-free import and export history for active credentials.
+    pub details: Vec<CredentialSummary>,
 }
 /// Complete startup environment, returned only after generation and CA readiness.
 /// No Debug implementation because the environment contains usable fakes.
@@ -494,7 +499,8 @@ impl GatewayService {
         let secret = read_secret_file(&request.secret_file, 0)?;
         let mut inner = self.lock();
         let credential = spec.id.clone();
-        self.store(&mut inner, true)?.put(spec, secret)?;
+        self.store(&mut inner, true)?
+            .put_from(spec, secret, Some(request.secret_file.clone()))?;
         if inner.state.enabled {
             self.apply(&mut inner)
                 .map_err(|error| self.fail_closed(error))?;
@@ -522,17 +528,20 @@ impl GatewayService {
     /// Returns unreadable/corrupt store errors.
     pub fn list_keys(&self) -> Result<KeyList, GatewayError> {
         let mut inner = self.lock();
-        let credentials = if self.config.store_dir.exists() {
+        let details: Vec<_> = if self.config.store_dir.exists() {
             self.store(&mut inner, false)?
                 .list()
                 .into_iter()
                 .filter(|record| record.state == CredentialState::Active)
-                .map(|record| record.id)
                 .collect()
         } else {
             Vec::new()
         };
-        Ok(KeyList { credentials })
+        Ok(KeyList {
+            credentials: details.iter().map(|record| record.id.clone()).collect(),
+            store_file: self.config.store_dir.join(STORE_FILE_NAME),
+            details,
+        })
     }
     /// Returns a ready environment for an exact active canonical Scope.
     /// # Errors
@@ -542,6 +551,26 @@ impl GatewayService {
         caller_uid: u32,
         scope_id: &str,
     ) -> Result<CredentialGrant, GatewayError> {
+        self.credentials_to_file(caller_uid, scope_id, None)
+    }
+
+    /// Returns the ready environment and optionally exports the GitHub fake to a new file.
+    /// Export is root-only and records provenance after writing; existing files are never replaced.
+    ///
+    /// # Errors
+    /// Returns grant/readiness errors, unsafe export paths, write or metadata persistence errors.
+    pub fn credentials_to_file(
+        &self,
+        caller_uid: u32,
+        scope_id: &str,
+        export_file: Option<&Path>,
+    ) -> Result<CredentialGrant, GatewayError> {
+        if export_file.is_some() && caller_uid != 0 {
+            return Err(GatewayError::new(
+                GatewayErrorKind::PermissionDenied,
+                "only root can export credential files",
+            ));
+        }
         let mut inner = self.lock();
         let id = ResourceId::new(scope_id)
             .map_err(|_| GatewayError::invalid("invalid Scope identity"))?;
@@ -595,6 +624,22 @@ impl GatewayService {
             environment.insert(variable.to_owned(), bundle.display().to_string());
         }
         self.canonical(&scope)?;
+        if let Some(path) = export_file {
+            let fake = environment
+                .get("GITHUB_TOKEN")
+                .ok_or_else(|| GatewayError::invalid("Scope has no GitHub credential"))?;
+            let uid = scope
+                .owner_uid
+                .ok_or_else(|| GatewayError::invalid("Scope has no owner UID"))?;
+            crate::files::export_new(path, fake.as_bytes(), uid)?;
+            self.store(&mut inner, false)?
+                .record_export(&CredentialId::new("github")?, &id, path.to_path_buf())
+                .map_err(|error| {
+                    GatewayError::internal(format!(
+                        "fake file was exported but its location could not be recorded: {error}"
+                    ))
+                })?;
+        }
         Ok(CredentialGrant {
             scope_id: id,
             environment,

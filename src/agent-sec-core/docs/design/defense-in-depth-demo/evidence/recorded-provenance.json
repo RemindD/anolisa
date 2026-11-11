@@ -1,0 +1,12 @@
+{
+  "binaries": {
+    "/opt/asc-demo/bin-formal/agent-sec-cli": "89c8122b810ccf83b65d78c6784d39ef244aafbb47e89cbf15778b53e3fb0751",
+    "/opt/asc-demo/bin-formal/agent-sec-daemon": "91a42b6d960f13fdba0ac5f4ffffa0bdc83b7b7d9d3c4d96b453395e3b0da3db",
+    "/opt/asc-demo/bin-native/qodercli": "4366a89a88a9878c672dff34e5c9e9b0fb9ab1b8cb0009dac4dbf85644eb07b3",
+    "/opt/asc-demo/bin-native/authorized_sandbox": "77c50bc5a331f531288beb4ffdbe0e69b4344e880cd03a51134fa6f9dd6c20e0",
+    "/opt/asc-demo/bin-native/linux-sandbox-static": "cfbb02209b4898ea1bc94fcf8b3b63b733680560228c33c19d0a2ca304506ea0"
+  },
+  "work_uid": 1001,
+  "source": "sight 5dfaf4d4158c9b1d7254b2aac5f725137074ecc6 plus current uncommitted CLI/credential metadata changes",
+  "isolation": "new data directory; existing dedicated Host AgentSight and Gateway services"
+}

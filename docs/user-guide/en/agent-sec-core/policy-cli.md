@@ -365,7 +365,15 @@ Scope has no revision and cannot be updated. Its `policySnapshots` contain the
 complete selected Policies. If a concurrent Policy update or deletion wins before
 Scope admission, creation fails with `not_found`; it never selects another revision
 silently. Once admitted, the saved snapshot also applies to future matching instances.
-The CLI assigns one Policy; the RPC accepts 1–32 distinct Policies per Scope.
+CLI and RPC accept 1–32 distinct Policies per Scope. Use repeated
+`--policy ID@REVISION` for multiple Policies; the existing single-Policy
+`--policy-id` / `--policy-revision` pair remains supported. The two forms cannot
+be mixed.
+
+```bash
+agent-sec-cli --socket "$SOCKET" scope create --process-name qodercli --owner-uid 1001 \
+  --policy "${FILE_POLICY_ID}@1" --policy "${CREDENTIAL_POLICY_ID}@1"
+```
 
 To replace an assignment, create a new Scope, inspect its Bindings until the required
 instances are `READY`, then delete the old Scope. This is not an atomic switch.
@@ -432,3 +440,35 @@ The timeout covers daemon communication, including waiting for daemon processing
 file reading, request encoding, response decoding and output. The CLI never retries automatically.
 A timeout or invalid/missing response after sending does not prove the request was not executed;
 inspect current state before submitting another change.
+
+## Gateway credential inventory and file locations
+
+`policy get` returns the authored Policy, including its credential references.
+Use `gateway key list` to query the Gateway's runtime credential inventory. The
+V2 source build includes `credentials`, `storeFile`, and `details`; each detail
+contains the credential `id`, `importFile`, and per-Scope `fakes[].exportFile`.
+Historical paths that were not recorded are `null`, never inferred from filenames.
+This root-only query returns no real or complete fake values. An older daemon may
+return only `credentials`; upgrade it if location metadata is required.
+
+```bash
+agent-sec-cli --socket "$SOCKET" gateway key add github --secret-file /root/github.token
+agent-sec-cli --socket "$SOCKET" gateway credentials --scope "$SCOPE_ID" \
+  --export-file /run/my-agent/keyfile
+agent-sec-cli --socket "$SOCKET" gateway key list
+```
+
+`importFile` records the last successful import source. The Gateway uses the
+imported copy in `storeFile`; changing the source file does not rotate the key.
+After Scope preparation and Gateway readiness, root may export its GitHub fake
+with `--export-file`. The daemon creates a new 0600 file owned by the Scope UID,
+rejects existing files and symlinks in every path component, and records the path
+after writing. Create the parent directory first. Existing fake issuance,
+readiness checks, owner-scoped environment queries, and authorization rules are
+unchanged. An export error may leave a newly created file; inspect it before a
+retry. Export records describe the last write, not current file existence or
+protection. Scope deletion revokes the fake but does not delete exported files.
+
+Credential storage reads format 1 and 2 and writes format 2 with location
+metadata. Back up the store before upgrading; an older daemon cannot read format
+2. For rollback, restore the matching pre-upgrade store and binaries together.

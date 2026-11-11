@@ -31,10 +31,13 @@ pub(crate) struct CreateScope {
     #[command(flatten)]
     selector: Selector,
     /// Exact Policy ID to snapshot into the assignment.
-    #[arg(long, value_parser = resource_id, requires = "policy_revision")]
-    policy_id: ResourceId,
+    #[arg(long, value_parser = resource_id, requires = "policy_revision", required_unless_present = "policy", conflicts_with = "policy")]
+    policy_id: Option<ResourceId>,
     #[arg(long, value_parser = revision, requires = "policy_id")]
-    policy_revision: Revision,
+    policy_revision: Option<Revision>,
+    /// Exact Policy reference as ID@REVISION; repeat to assign several Policies.
+    #[arg(long, value_name = "ID@REVISION", value_parser = policy_reference, conflicts_with_all = ["policy_id", "policy_revision"])]
+    policy: Vec<PolicyReference>,
     /// Non-root process owner UID (required by credential policies).
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..), conflicts_with = "pid")]
     owner_uid: Option<u32>,
@@ -68,10 +71,13 @@ impl ScopeCommand {
                 &CreateScopeParams {
                     selector: input.selector.value(),
                     owner_uid: input.owner_uid,
-                    policy_templates: vec![PolicyReference {
-                        policy_id: input.policy_id.clone(),
-                        policy_revision: input.policy_revision,
-                    }],
+                    policy_templates: match (&input.policy_id, input.policy_revision) {
+                        (Some(id), Some(revision)) => vec![PolicyReference {
+                            policy_id: id.clone(),
+                            policy_revision: revision,
+                        }],
+                        _ => input.policy.clone(),
+                    },
                 },
             ),
             Self::Get(input) => encode(
@@ -95,6 +101,16 @@ impl ScopeCommand {
             Self::List(page) => encode(POLICY_SCOPES_LIST, &page.params()),
         }
     }
+}
+
+fn policy_reference(value: &str) -> Result<PolicyReference, String> {
+    let (id, version) = value
+        .rsplit_once('@')
+        .ok_or("expected Policy reference ID@REVISION")?;
+    Ok(PolicyReference {
+        policy_id: resource_id(id)?,
+        policy_revision: revision(version)?,
+    })
 }
 
 impl Selector {

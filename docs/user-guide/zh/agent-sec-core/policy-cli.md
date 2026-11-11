@@ -298,8 +298,14 @@ agent-sec-cli --socket "$SOCKET" scope retry --scope-id "$SCOPE_ID"
 
 Scope 没有 revision，不可 update；`policySnapshots` 保存所选 Policy 的完整内容。
 若并发 Policy 更新/删除先于 Scope 准入提交，创建返回 `not_found`，不会静默替换版本。
-准入成功后，后续匹配的新实例也使用该快照。CLI 每次分配一个 Policy，RPC 支持每个
-Scope 1–32 个不同 Policy。
+准入成功后，后续匹配的新实例也使用该快照。CLI 和 RPC 均支持每个 Scope 1–32 个不同 Policy。
+多份 Policy 使用可重复的 `--policy ID@REVISION`；原有单份 Policy 的
+`--policy-id` / `--policy-revision` 参数保持兼容，两种形式不能混用。
+
+```bash
+agent-sec-cli --socket "$SOCKET" scope create --process-name qodercli --owner-uid 1001 \
+  --policy "${FILE_POLICY_ID}@1" --policy "${CREDENTIAL_POLICY_ID}@1"
+```
 
 替换分配时，先创建新 Scope，查询所需实例的 Binding 达到 `READY` 后再删除旧 Scope；
 这不是原子切换。
@@ -359,3 +365,28 @@ offset 按实际返回条数推进；达到 3 MiB 编码条目预算时可能提
 超时预算覆盖 daemon 通信，包括等待 daemon 处理请求；不包含文件读取、请求编码、
 响应解码和结果输出。CLI 不自动重试。发送后超时、响应缺失或非法，不代表请求没有
 执行；再次提交变更前应先查询当前状态。
+
+## 查询 Gateway 凭据及文件位置
+
+`policy get` 返回用户创建的 Policy，包括其中的凭据引用。Gateway 的运行时凭据清单
+通过 `gateway key list` 查询。V2 源码构建返回 `credentials`、`storeFile` 和 `details`；
+每条 detail 包含凭据 `id`、`importFile` 及各 Scope 的 `fakes[].exportFile`。
+未登记的历史路径返回 `null`，不根据文件名推测。该查询需要 root 凭据管理权限，
+不返回真值或完整假值。旧 daemon 可能只返回 `credentials`；需要位置元数据时须升级。
+
+```bash
+agent-sec-cli --socket "$SOCKET" gateway key add github --secret-file /root/github.token
+agent-sec-cli --socket "$SOCKET" gateway credentials --scope "$SCOPE_ID" \
+  --export-file /run/my-agent/keyfile
+agent-sec-cli --socket "$SOCKET" gateway key list
+```
+
+`importFile` 记录最后成功导入的来源。Gateway 使用 `storeFile` 中的副本，修改源文件不会
+轮换密钥。Scope 准备且 Gateway 就绪后，root 可通过 `--export-file` 导出其 GitHub 假值。
+daemon 创建归 Scope UID 所有的全新 0600 文件，拒绝覆盖已有文件或跟随任一路径组件的
+符号链接，写入后才登记路径；父目录须预先存在。假值签发、就绪检查、owner 环境查询和授权
+规则不变。导出失败可能留下新建文件，重试前须检查。导出记录仅说明最后一次写入，不能证明
+文件当前存在或受保护。删除 Scope 会撤销假值，但不会删除导出文件。
+
+Credential Store 可读取格式 1、2，写入带位置元数据的格式 2。升级前备份；旧 daemon
+无法读取格式 2。回滚时须一起恢复升级前的 store 和二进制。

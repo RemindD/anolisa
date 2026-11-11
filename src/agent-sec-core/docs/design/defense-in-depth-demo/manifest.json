@@ -1,0 +1,36 @@
+{
+  "source_base": "5dfaf4d4158c9b1d7254b2aac5f725137074ecc6",
+  "recorded_run": "formal-7jmaa8br",
+  "packaged_at": "2026-11-11",
+  "gateway_pii_base": "2279310909fd9ec10a1912214ebbb883a8ca2317",
+  "gateway_deployed_sha256": "c5c3391633481ef37e933cb911bf1df076ed063d9c68c184295afe7137025e99",
+  "versions": {
+    "seccore": "1.2.0 with bundled CLI/credential metadata patch",
+    "qodercli": "1.1.85",
+    "agentsight": "0.15.3 in recorded environment",
+    "mitmproxy": "12.2.3",
+    "kernel": "6.6.102-7.alnx4.x86_64"
+  },
+  "validation_scope": "Historical C01-C13 evidence plus local bundle checks; this packaging task does not rerun the live demo.",
+  "excluded": [
+    "account authentication",
+    "real account tokens",
+    "TLS private keys",
+    "runtime credential store",
+    "installed binaries"
+  ],
+  "component_roles": {
+    "daemon": "root",
+    "agentsight": "root",
+    "gateway": "agent-sec-gw",
+    "agent": "asc-pii-demo"
+  },
+  "enforcer_profile": "agent-file-guard",
+  "material_changes": [
+    "Replaced historical baseline Policy ID with a required runtime placeholder.",
+    "Packaged a harmless initial report; the final aggregate is produced by Qoder.",
+    "Added a fresh-host self-signed test certificate recipe; certificates and credentials are not copied.",
+    "Commands instantiate a new data directory and new Policy/Scope IDs.",
+    "Credential locations are queried through gateway key list; policy get remains generic. Historical installed binaries and recorded evidence are unchanged."
+  ]
+}

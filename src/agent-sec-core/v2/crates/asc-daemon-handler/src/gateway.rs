@@ -64,8 +64,13 @@ impl GatewayHandler {
             }),
             GatewayMethod::KeyRemove => decode::<GatewayKeyRemoveParams>(params)
                 .and_then(|params| application.remove_key(&params.credential)),
-            GatewayMethod::Credentials => decode::<GatewayScopeParams>(params)
-                .and_then(|params| application.credentials(peer, &params.scope_id)),
+            GatewayMethod::Credentials => decode::<GatewayScopeParams>(params).and_then(|params| {
+                application.credentials(
+                    peer,
+                    &params.scope_id,
+                    params.export_file.as_deref().map(std::path::Path::new),
+                )
+            }),
         };
         match result {
             Ok(value) => DaemonResponse::success(request_id, value),
@@ -164,6 +169,7 @@ mod tests {
             &self,
             peer: PeerCredentials,
             scope_id: &str,
+            _export_file: Option<&std::path::Path>,
         ) -> Result<Value, GatewayFailure> {
             Ok(self.record(
                 format!(

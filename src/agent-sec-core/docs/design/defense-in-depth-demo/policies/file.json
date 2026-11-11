@@ -1,0 +1,10 @@
+{
+  "language": "cedar",
+  "content": {
+    "schema": {
+      "schemaId": "seccore.system",
+      "revision": 1
+    },
+    "text": "forbid(principal, action == SecCore::Action::\"file.write\", resource)\nwhen {\n  [\"/run/asc-demo/work/keyfile\",\n   \"/run/asc-demo/work/keyfile.alias\"].contains(resource.path) &&\n  [SecCore::WriteOperation::\"write\",\n   SecCore::WriteOperation::\"delete\"].contains(context.input.operation)\n};"
+  }
+}

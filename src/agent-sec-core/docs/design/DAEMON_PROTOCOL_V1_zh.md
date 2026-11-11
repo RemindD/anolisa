@@ -1069,8 +1069,10 @@ obs 查询采用 LocalUser access policy 和服务端 QueryScope，不改变本�
 | `gateway.key.add` | UID 0 | `{credential, secretFile}` | `KeyOutcome` |
 | `gateway.key.remove` | UID 0 | `{credential}` | `KeyOutcome` |
 | `gateway.key.list` | UID 0 | 无 | `KeyList` |
-| `gateway.credentials` | LocalUser，owner UID 隔离 | `{scopeId}` | `CredentialGrant` |
+| `gateway.credentials` | LocalUser，owner UID 隔离 | `{scopeId, exportFile?}` | `CredentialGrant` |
 
+- `gateway.key.list` 保留 `credentials`，增加 `storeFile` 和 `details`。后者为不含凭据值的导入记录，含 `importFile`、各 fake 的 `scopeId/retired/suffix/exportFile`。旧记录没有路径时返回 `null`。
+- `gateway.credentials` 的可选 `exportFile` 要求 UID 0；仅在原有 Scope/就绪检查通过后将 GitHub fake 写入新建的 0600 文件，owner 为 Scope UID。拒绝已有文件和符号链接路径；写入成功后登记最后导出路径，不改变授权规则。返回的 `CredentialGrant` 形状不变。
 - 无参数方法只接受省略、`null` 或 `{}`；有参数方法拒绝未知字段。
 - 管理方法要求内核认证的 UDS peer UID 0，非 root PolicyAdministrator 不获得管理权。
   `scopeId` 只选择既有 Scope，不能选择调用者 UID；ownerUid 是 assignment 的目标身份约束，
@@ -1102,7 +1104,7 @@ obs 查询采用 LocalUser access policy 和服务端 QueryScope，不改变本�
 - `ScopeStatusView`：`{scopeId, bindings}`。bindings 为绑定责任 ID 数组；空数组不代表 Scope
   无授权，其 fake/plan 可先于进程准备。
 - `KeyOutcome`：`{credential}`，例如 `{"credential":"github"}`，用于 add/remove 成功结果。
-- `KeyList`：`{credentials: string[]}`，只列 active 凭据 ID，例如 `{"credentials":["github"]}`。
+- `KeyList`：`{credentials: string[], storeFile, details}`，只列 active 凭据；details 保存导入源与各 Scope fake 的导出历史，不含真值或完整假值。
 - `CredentialGrant`：`{scopeId, environment}`。包含 Scope fake 与 ready CA bundle 路径，供 Agent
   自身配置加载；查询重新检查 cgroup v2，无 active fake 或 readiness 未达成时不返回部分 grant。
 
